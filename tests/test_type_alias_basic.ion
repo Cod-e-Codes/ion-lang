@@ -1,0 +1,7 @@
+type MyInt = int;
+
+fn main() -> int {
+    let x: MyInt = 42;
+    return x;
+}
+

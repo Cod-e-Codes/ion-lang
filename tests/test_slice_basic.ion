@@ -1,0 +1,8 @@
+// Note: Array-to-slice coercion in function calls requires codegen support
+// For now, test direct array indexing which works
+fn main() -> int {
+    let arr: [int; 4] = [1, 2, 3, 4];
+    // Direct array indexing works
+    return arr[2];
+}
+

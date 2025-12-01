@@ -1,0 +1,13 @@
+fn main() -> int {
+    let x: bool = true;
+    let y: bool = false;
+    
+    // Test boolean logical operations: &&, ||, !
+    if x && !y {
+        if x || y {
+            return 0;
+        }
+    }
+    return 1;
+}
+

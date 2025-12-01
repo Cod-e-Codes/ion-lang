@@ -1,0 +1,19 @@
+// Hello World Example
+// A simple Ion program demonstrating basic language features
+
+// FFI declaration - must be at top level
+// Using write() syscall to avoid type conflicts with standard library functions
+extern "C" {
+    fn write(fd: int, buf: *u8, count: int) -> int;
+}
+
+fn main() -> int {
+    unsafe {
+        // Write to stdout (fd = 1)
+        // String literals are automatically converted to *u8 when passed to extern functions
+        let _result: int = write(1, "Hello, World!\n", 14);  // 14 = length of "Hello, World!\n"
+    }
+    
+    return 0;
+}
+

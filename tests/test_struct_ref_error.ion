@@ -1,0 +1,9 @@
+struct Bad {
+    r: &int;
+}
+
+fn main() -> int {
+    return 0;
+}
+
+

@@ -1,0 +1,36 @@
+// Test Vec::push() and Vec::pop()
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 10);
+    Vec::push(&mut v, 20);
+    Vec::push(&mut v, 30);
+    
+    let len = Vec::len(&v);
+    if len != 3 {
+        return 1;
+    }
+    
+    match Vec::pop(&mut v) {
+        Option::Some(value) => {
+            if value != 30 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+    
+    let len2 = Vec::len(&v);
+    if len2 != 2 {
+        return 4;
+    }
+    
+    return 0;
+}
+

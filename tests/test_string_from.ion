@@ -1,0 +1,16 @@
+// Test String::from() and string literal conversion
+fn main() -> int {
+    let s1: String = "hello";
+    let len1 = String::len(&s1);
+    if len1 != 5 {
+        return 1;
+    }
+    
+    let s2: String = String::from("world");
+    let len2 = String::len(&s2);
+    if len2 != 5 {
+        return 2;
+    }
+    
+    return 0;
+}

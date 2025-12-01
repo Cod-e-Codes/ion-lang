@@ -1,0 +1,14 @@
+fn main() -> int {
+    let x = 10;
+    let r = &x;
+
+    // Channel element type cannot be a reference (not Send)
+    let ch: channel<&int>;
+
+    // This should be rejected by the type checker because channel elements
+    // must be Send and &int is not Send.
+    send(ch, r);
+
+    return 0;
+}
+

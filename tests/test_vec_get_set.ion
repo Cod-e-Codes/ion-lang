@@ -1,0 +1,49 @@
+// Test Vec::get() and Vec::set()
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 10);
+    Vec::push(&mut v, 20);
+    
+    match Vec::get(&v, 0) {
+        Option::Some(value) => {
+            if value != 10 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    
+    match Vec::get(&v, 1) {
+        Option::Some(value) => {
+            if value != 20 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    };
+    
+    Vec::set(&mut v, 0, 100);
+    
+    match Vec::get(&v, 0) {
+        Option::Some(value) => {
+            if value != 100 {
+                return 5;
+            }
+        }
+        Option::None => {
+            return 6;
+        }
+    };
+    
+    return 0;
+}
+

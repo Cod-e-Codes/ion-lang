@@ -1,0 +1,16 @@
+// Test Vec::with_capacity() and Vec::capacity()
+fn main() -> int {
+    let v: Vec<int> = Vec::with_capacity(10);
+    let cap = Vec::capacity(&v);
+    if cap < 10 {
+        return 1;
+    }
+    
+    let len = Vec::len(&v);
+    if len != 0 {
+        return 2;
+    }
+    
+    return 0;
+}
+

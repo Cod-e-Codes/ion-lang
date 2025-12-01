@@ -1,0 +1,13 @@
+// Use write instead of printf to avoid conflict with stdio.h
+extern "C" {
+    fn write(fd: int, buf: *u8, count: int) -> int;
+}
+
+fn main() -> int {
+    unsafe {
+        // Write "Hello from unsafe block\n" to stdout (fd 1)
+        let _result: int = write(1, "Hello from unsafe block\n", 25);
+    }
+    return 0;
+}
+

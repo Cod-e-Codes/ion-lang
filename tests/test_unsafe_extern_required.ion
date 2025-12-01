@@ -1,0 +1,10 @@
+extern "C" {
+    fn printf(format: *u8, ...) -> int;
+}
+
+fn main() -> int {
+    // This should fail - extern calls require unsafe block
+    printf("This should fail\n");
+    return 0;
+}
+

@@ -1,0 +1,354 @@
+// Ion Language Showcase - Demonstrating Phase 1 Features
+
+// ============================================
+// 1. STRUCTS - Custom data types
+// ============================================
+struct Point {
+    x: int;
+    y: int;
+}
+
+// Generic struct
+struct Pair<T> {
+    first: T;
+    second: T;
+}
+
+// ============================================
+// 2. ENUMS - Tagged unions with pattern matching
+// ============================================
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum Result<T, E> {
+    Ok(T);
+    Err(E);
+}
+
+// ============================================
+// 3. FUNCTIONS - Multiple arguments and returns
+// ============================================
+fn add(x: int, y: int) -> int {
+    return x + y;
+}
+
+fn multiply(x: int, y: int) -> int {
+    return x * y;
+}
+
+fn create_point(x: int, y: int) -> Point {
+    return Point { x: x, y: y };
+}
+
+// Generic function example (field access on generics not yet fully supported)
+// fn get_first<T>(pair: Pair<T>) -> T {
+//     return pair.first;
+// }
+
+// ============================================
+// 4. HEAP ALLOCATION - Box<T>
+// ============================================
+fn box_example() -> int {
+    let value: int = 42;
+    let boxed: Box<int> = Box::new(value);
+    let unwrapped: int = Box::unwrap(boxed);
+    return unwrapped;
+}
+
+// ============================================
+// 5. DYNAMIC ARRAYS - Vec<T>
+// ============================================
+fn vec_example() -> int {
+    let mut numbers: Vec<int> = Vec::new();
+    
+    // Push some values (using method call syntax)
+    numbers.push(10);
+    numbers.push(20);
+    numbers.push(30);
+    
+    // Get length (using method call syntax)
+    let len: int = numbers.len();
+    if len != 3 {
+        return 1;
+    }
+    
+    // Access elements (using method call syntax)
+    match numbers.get(0) {
+        Option::Some(value) => {
+            if value != 10 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+    
+    // Modify elements (using method call syntax)
+    numbers.set(1, 25);
+    
+    // Pop elements (using method call syntax)
+    match numbers.pop() {
+        Option::Some(value) => {
+            if value != 30 {
+                return 4;
+            }
+        }
+        Option::None => {
+            return 5;
+        }
+    };
+    
+    return 0;
+}
+
+// ============================================
+// 6. STRINGS - Heap-allocated UTF-8 strings
+// ============================================
+fn string_example() -> int {
+    let mut greeting: String = String::new();
+    greeting.push_str("Hello");
+    greeting.push_str(", ");
+    greeting.push_str("Ion!");
+    
+    let len: int = greeting.len();
+    if len != 11 {
+        return 1;
+    }
+    
+    // String from literal
+    let message: String = "Welcome to Ion";
+    let msg_len: int = message.len();
+    if msg_len != 14 {
+        return 2;
+    }
+    
+    return 0;
+}
+
+// ============================================
+// 7. CONTROL FLOW - if/else and while loops
+// ============================================
+fn if_example() -> int {
+    let cap: int = 10;
+    
+    // If/else branching - matching pattern from working tests
+    if cap < 10 {
+        return 1;
+    }
+    
+    let len: int = 5;
+    if len == 0 {
+        return 2;
+    }
+    
+    return 0;
+}
+
+fn while_example() -> int {
+    let x: int = 0;
+    
+    // While loop with condition
+    while x < 0 {
+        let _: int = x + 1;
+    }
+    
+    return 0;
+}
+
+fn control_flow_example() -> int {
+    if if_example() != 0 {
+        return 1;
+    }
+    if while_example() != 0 {
+        return 2;
+    }
+    return 0;
+}
+
+// ============================================
+// 8. PATTERN MATCHING - Exhaustive enum matching
+// ============================================
+fn pattern_matching_example() -> int {
+    let opt: Option<int> = Option::Some(42);
+    
+    match opt {
+        Option::Some(value) => {
+            if value != 42 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    
+    let result: Result<int, int> = Result::Ok(100);
+    match result {
+        Result::Ok(value) => {
+            if value != 100 {
+                return 3;
+            }
+        }
+        Result::Err(_) => {
+            return 4;
+        }
+    };
+    
+    return 0;
+}
+
+// ============================================
+// 9. REFERENCES - No-escape borrowing
+// ============================================
+fn reference_example() -> int {
+    let mut x: int = 10;
+    let y: int = 20;
+    
+    // Immutable reference (can be passed to functions)
+    let ref_y: &int = &y;
+    
+    // Mutable reference (can be passed to functions)
+    let ref_x: &mut int = &mut x;
+    
+    // References are used implicitly when passed to functions
+    // For example: Vec::len(&v) takes a reference
+    
+    return 0;
+}
+
+// ============================================
+// 10. GENERICS - Type parameterization
+// ============================================
+fn generic_example() -> int {
+    // Generic struct - can be instantiated with different types
+    let int_pair: Pair<int> = Pair { first: 10, second: 20 };
+    // Note: Field access on generic types in functions needs type resolution
+    
+    // Generic enum
+    let opt_int: Option<int> = Option::Some(42);
+    
+    match opt_int {
+        Option::Some(_) => {}
+        Option::None => {
+            return 2;
+        }
+    };
+    
+    // Generic Vec (using method call syntax)
+    let mut vec: Vec<int> = Vec::new();
+    vec.push(1);
+    vec.push(2);
+    
+    let vec_len: int = vec.len();
+    if vec_len != 2 {
+        return 3;
+    }
+    
+    return 0;
+}
+
+// ============================================
+// 11. COMPLEX EXAMPLE - Combining features
+// ============================================
+fn complex_example() -> int {
+    // Create a vector of integers (Vec::new defaults to Vec<int>)
+    let mut numbers: Vec<int> = Vec::new();
+    
+    numbers.push(1);
+    numbers.push(3);
+    numbers.push(5);
+    
+    // Access elements from vector (using method call syntax)
+    let len: int = numbers.len();
+    if len != 3 {
+        return 1;
+    }
+    
+    // Get first element (using method call syntax)
+    match numbers.get(0) {
+        Option::Some(value) => {
+            if value != 1 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+    
+    // Get second element (using method call syntax)
+    match numbers.get(1) {
+        Option::Some(value) => {
+            if value != 3 {
+                return 4;
+            }
+        }
+        Option::None => {
+            return 5;
+        }
+    };
+    
+    // Work with strings (using method call syntax)
+    let mut description: String = "Numbers: ";
+    description.push_str("(");
+    
+    let desc_len: int = description.len();
+    if desc_len < 8 {
+        return 6;
+    }
+    
+    return 0;
+}
+
+// ============================================
+// MAIN - Run all examples
+// ============================================
+fn main() -> int {
+    // Basic arithmetic (from minimal.ion)
+    let x: int = 10;
+    let y: int = 20;
+    let z: int = x + y;
+    if z != 30 {
+        return 100;
+    }
+    
+    // Test all features
+    if box_example() != 42 {
+        return 1;
+    }
+    
+    if vec_example() != 0 {
+        return 2;
+    }
+    
+    if string_example() != 0 {
+        return 3;
+    }
+    
+    if control_flow_example() != 0 {
+        return 4;
+    }
+    
+    if pattern_matching_example() != 0 {
+        return 5;
+    }
+    
+    if reference_example() != 0 {
+        return 6;
+    }
+    
+    if generic_example() != 0 {
+        return 7;
+    }
+    
+    if complex_example() != 0 {
+        return 8;
+    }
+    
+    // All tests passed!
+    return 0;
+}
+

@@ -1,0 +1,89 @@
+fn main() -> int {
+    // Test <= operator with integers
+    let a: int = 5;
+    let b: int = 10;
+    let c: int = 5;
+    
+    if !(a <= b) {
+        return 1; // 5 <= 10 should be true
+    }
+    
+    if !(a <= c) {
+        return 2; // 5 <= 5 should be true
+    }
+    
+    if b <= a {
+        return 3; // 10 <= 5 should be false
+    }
+    
+    // Test >= operator with integers
+    if !(b >= a) {
+        return 4; // 10 >= 5 should be true
+    }
+    
+    if !(a >= c) {
+        return 5; // 5 >= 5 should be true
+    }
+    
+    if a >= b {
+        return 6; // 5 >= 10 should be false
+    }
+    
+    // Test <= with floats
+    let x: f64 = 3.14;
+    let y: f64 = 2.71;
+    let z: f64 = 3.14;
+    
+    if !(y <= x) {
+        return 7; // 2.71 <= 3.14 should be true
+    }
+    
+    if !(x <= z) {
+        return 8; // 3.14 <= 3.14 should be true
+    }
+    
+    if x <= y {
+        return 9; // 3.14 <= 2.71 should be false
+    }
+    
+    // Test >= with floats
+    if !(x >= y) {
+        return 10; // 3.14 >= 2.71 should be true
+    }
+    
+    if !(x >= z) {
+        return 11; // 3.14 >= 3.14 should be true
+    }
+    
+    if y >= x {
+        return 12; // 2.71 >= 3.14 should be false
+    }
+    
+    // Test with different integer types
+    let i8_val: i8 = 10;
+    let i32_val: i32 = 20;
+    
+    if !(i8_val <= i32_val) {
+        return 13; // i8 can be compared with i32
+    }
+    
+    if !(i32_val >= i8_val) {
+        return 14; // i32 can be compared with i8
+    }
+    
+    // Test edge cases - boundary conditions
+    let zero: int = 0;
+    let one: int = 1;
+    
+    if !(zero <= one) {
+        return 15; // 0 <= 1 should be true
+    }
+    
+    if !(one >= zero) {
+        return 16; // 1 >= 0 should be true
+    }
+    
+    // All tests passed
+    return 0;
+}
+

@@ -1,0 +1,6 @@
+fn main() -> int {
+    defer 0;
+    return 7;
+}
+
+

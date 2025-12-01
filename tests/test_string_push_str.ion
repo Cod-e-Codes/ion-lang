@@ -1,0 +1,13 @@
+// Test String::push_str()
+fn main() -> int {
+    let mut s: String = "hello";
+    String::push_str(&mut s, " world");
+    
+    let len = String::len(&s);
+    if len != 11 {
+        return 1;
+    }
+    
+    return 0;
+}
+

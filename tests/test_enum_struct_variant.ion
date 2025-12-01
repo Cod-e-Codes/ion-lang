@@ -1,0 +1,21 @@
+// Test Phase 6: Struct-style enum variants
+enum Result {
+    Ok { value: int };
+    Err { message: String };
+}
+
+fn main() -> int {
+    // Create enum variant with named fields
+    let result: Result = Result::Ok { value: 42 };
+    
+    // Pattern match with named fields
+    match result {
+        Result::Ok { value: v } => {
+            return v;
+        }
+        Result::Err { message: _m } => {
+            return 0;
+        }
+    };
+}
+

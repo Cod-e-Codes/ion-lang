@@ -1,0 +1,86 @@
+fn main() -> int {
+    // Basic bitwise operations
+    // Note: Hex literals (0x...) not yet supported, using decimal instead
+    let a: u8 = 170;  // 0b1010_1010 = 0xAA
+    let b: u8 = 240;   // 0b1111_0000 = 0xF0
+    
+    // Bitwise AND
+    let and_result: u8 = a & b;  // 0b1010_0000 = 160
+    if and_result != 160 {
+        return 1;
+    }
+    
+    // Bitwise OR
+    let or_result: u8 = a | b;  // 0b1111_1010 = 250
+    if or_result != 250 {
+        return 2;
+    }
+    
+    // Bitwise XOR
+    let xor_result: u8 = a ^ b;  // 0b0101_1010 = 90
+    if xor_result != 90 {
+        return 3;
+    }
+    
+    // Left shift
+    // Note: Shift amount must be unsigned integer
+    // Since integer literals default to int, we use u16 variables for shift amounts
+    // Use smaller value to avoid u16 overflow (max u16 = 65535)
+    let x: u16 = 4660;  // 0x1234
+    let shift_amount: u16 = 4;  // Shift amount must be unsigned
+    let left: u16 = x << shift_amount;  // 74560 (0x12340) - but this overflows u16!
+    // 4660 << 4 = 74560, but u16 max is 65535, so we get 9000 (74560 % 65536)
+    // Use a smaller shift to test within u16 range
+    let x2: u16 = 4096;  // 0x1000
+    let shift2: u16 = 3;  // Shift by 3
+    let left2: u16 = x2 << shift2;  // 32768 (0x8000) - fits in u16
+    if left2 != 32768 {
+        return 4;
+    }
+    
+    // Right shift
+    let right: u16 = x >> shift_amount;  // 291 (0x0123)
+    if right != 291 {
+        return 5;
+    }
+    
+    // Network byte order extraction (like HTTP server needs)
+    // Note: 'as' casting not yet implemented, so we test with u16 results
+    let port: u16 = 8080;  // 0x1F90 in network byte order
+    let shift8: u16 = 8;  // Shift amount must be unsigned
+    let high_byte: u16 = port >> shift8;   // 31 (0x001F)
+    let mask: u16 = 255;  // 0xFF mask for low byte
+    let low_byte: u16 = port & mask;  // 144 (0x0090) - using 255 instead of 0xFF
+    
+    if high_byte != 31 {
+        return 6;
+    }
+    if low_byte != 144 {
+        return 7;
+    }
+    
+    // Test operator precedence: shifts before bitwise AND
+    let test1: u16 = 4660;  // 0x1234
+    let shift4: u16 = 4;
+    let test2: u16 = (test1 >> shift4) & 255;  // Should be 35 (0x0023)
+    if test2 != 35 {
+        return 8;
+    }
+    
+    // Test with different integer types
+    let i32_val: i32 = 305419896;  // 0x12345678
+    let shift8_2: u16 = 8;  // Shift amount must be unsigned (renamed to avoid duplicate)
+    let shifted: i32 = i32_val << shift8_2;  // Should compile
+    
+    // Test bitwise operations with u32
+    let u32_a: u32 = 4294967295;  // 0xFFFFFFFF
+    let u32_b: u32 = 65535;  // 0x0000FFFF
+    let u32_and: u32 = u32_a & u32_b;  // Should be 65535 (0x0000FFFF)
+    if u32_and != 65535 {
+        return 9;
+    }
+    
+    // All tests passed
+    return 0;
+}
+

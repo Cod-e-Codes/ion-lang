@@ -1,0 +1,11 @@
+fn main() -> int {
+    let x: f64 = 3.14;
+    let y: f64 = 1e9;
+    let z: f64 = 1.5e-3;
+    let w: f64 = .5;
+    let v: f64 = 3.;
+    
+    // Just verify they compile
+    return 0;
+}
+

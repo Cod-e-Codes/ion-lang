@@ -1,0 +1,30 @@
+# Rust
+target/
+Cargo.lock
+
+# Binaries
+*.exe
+*.out
+*.o
+*.a
+
+# Ignore compiled binaries in examples (extensionless)
+examples/hello_world
+examples/http_server
+examples/minimal
+examples/showcase
+
+# Do NOT ignore .c or .ion source files in examples
+!examples/*.c
+!examples/*.ion
+
+# Ion-generated C (optional, if you want to ignore temporary C files)
+# examples/*.c
+# examples/*.o
+
+# Editor / OS files
+*.swp
+*~
+.vscode/
+.idea/
+.DS_Store

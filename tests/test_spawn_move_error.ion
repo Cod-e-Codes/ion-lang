@@ -1,0 +1,12 @@
+fn main() -> int {
+    let x: int = 10;
+
+    spawn {
+        let y: int = x;
+    };
+
+    // Using x after it has been moved into spawn should be a UseAfterMove error.
+    return x;
+}
+
+

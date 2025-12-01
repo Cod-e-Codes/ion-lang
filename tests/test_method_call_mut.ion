@@ -1,0 +1,46 @@
+// Test method calls with mutable receivers
+
+fn main() -> int {
+    // Test mutable Vec methods
+    let mut vec: Vec<int> = Vec::new();
+    vec.push(1);
+    vec.push(2);
+    vec.push(3);
+    
+    // Pop requires mutable receiver
+    match vec.pop() {
+        Option::Some(value) => {
+            if value != 3 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    
+    // Set requires mutable receiver
+    vec.set(0, 10);
+    
+    match vec.get(0) {
+        Option::Some(value) => {
+            if value != 10 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    };
+    
+    // Test mutable String methods
+    let mut s: String = "test";
+    s.push_str("ing");
+    let len: int = s.len();
+    if len != 7 {
+        return 5;
+    }
+    
+    return 0;
+}
+

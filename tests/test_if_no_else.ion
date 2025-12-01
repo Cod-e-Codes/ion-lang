@@ -1,0 +1,12 @@
+fn main() -> int {
+    let x: int = 0;
+
+    if x != 0 {
+        // x is 0, so this branch should not run
+        return 1;
+    }
+
+    return 2;
+}
+
+

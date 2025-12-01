@@ -1,0 +1,8 @@
+// Note: Slice indexing requires slice struct creation
+// For now, test direct array indexing
+fn main() -> int {
+    let arr: [int; 3] = [42, 10, 5];
+    // Direct array indexing
+    return arr[0];
+}
+

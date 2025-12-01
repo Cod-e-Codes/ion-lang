@@ -1,0 +1,7 @@
+fn main() -> int {
+    let arr: [int; 5] = [10, 20, 30, 40, 50];
+    // Test array indexing - assignment not yet supported in Ion
+    // Just return the sum of indexed elements directly
+    return arr[0] + arr[1] + arr[2] + arr[3] + arr[4];
+}
+

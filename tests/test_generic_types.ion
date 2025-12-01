@@ -1,0 +1,9 @@
+// Test generic type declarations (Vec, Box)
+fn main() -> int {
+    // Test that generic types can be declared
+    // Generic type operations require parser improvements for associated functions
+    let _v: Vec<int>;
+    let _b: Box<int>;
+    return 0;
+}
+

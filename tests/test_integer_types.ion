@@ -1,0 +1,14 @@
+fn main() -> int {
+    let a: i8 = 10;
+    let b: i16 = 20;
+    let c: i32 = 30;
+    let d: i64 = 40;
+    let e: u16 = 50;
+    let f: u32 = 60;
+    let g: u64 = 70;
+    let h: uint = 80;
+    
+    // Verify all types can be declared
+    return 0;
+}
+

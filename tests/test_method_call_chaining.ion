@@ -1,0 +1,37 @@
+// Test chained method calls
+
+fn main() -> int {
+    let mut vec: Vec<int> = Vec::new();
+    
+    // Chain push operations (each returns void, so we can't chain the return values,
+    // but we can chain by calling methods on the same receiver)
+    vec.push(1);
+    vec.push(2);
+    vec.push(3);
+    
+    // Test that we can call methods in sequence
+    let len1: int = vec.len();
+    vec.push(4);
+    let len2: int = vec.len();
+    
+    if len1 != 3 {
+        return 1;
+    }
+    if len2 != 4 {
+        return 2;
+    }
+    
+    // Test String chaining
+    let mut s: String = String::new();
+    s.push_str("a");
+    s.push_str("b");
+    s.push_str("c");
+    
+    let s_len: int = s.len();
+    if s_len != 3 {
+        return 3;
+    }
+    
+    return 0;
+}
+

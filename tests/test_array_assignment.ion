@@ -1,0 +1,95 @@
+fn main() -> int {
+    // Test basic array element assignment
+    let mut arr: [int; 5] = [0; 5];
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    
+    if arr[0] != 10 {
+        return 1;
+    }
+    if arr[1] != 20 {
+        return 2;
+    }
+    if arr[2] != 30 {
+        return 3;
+    }
+    
+    // Test multiple assignments
+    arr[3] = 40;
+    arr[4] = 50;
+    
+    if arr[3] != 40 {
+        return 4;
+    }
+    if arr[4] != 50 {
+        return 5;
+    }
+    
+    // Test with different array types
+    let mut u8_arr: [u8; 3] = [0; 3];
+    u8_arr[0] = 100;
+    u8_arr[1] = 200;
+    u8_arr[2] = 255;
+    
+    if u8_arr[0] != 100 {
+        return 6;
+    }
+    if u8_arr[1] != 200 {
+        return 7;
+    }
+    if u8_arr[2] != 255 {
+        return 8;
+    }
+    
+    // Test assignment with expressions
+    let mut arr2: [int; 3] = [0; 3];
+    let idx: int = 1;
+    arr2[idx] = 42;
+    arr2[0] = 10 + 5;
+    arr2[2] = arr2[0] * 2;
+    
+    if arr2[0] != 15 {
+        return 9;
+    }
+    if arr2[1] != 42 {
+        return 10;
+    }
+    if arr2[2] != 30 {
+        return 11;
+    }
+    
+    // Test reassignment
+    arr2[1] = 100;
+    if arr2[1] != 100 {
+        return 12;
+    }
+    
+    // Test with i32 array
+    let mut i32_arr: [i32; 2] = [0; 2];
+    i32_arr[0] = -100;
+    i32_arr[1] = 200;
+    
+    if i32_arr[0] != -100 {
+        return 13;
+    }
+    if i32_arr[1] != 200 {
+        return 14;
+    }
+    
+    // Test with f64 array
+    let mut f64_arr: [f64; 2] = [0.0; 2];
+    f64_arr[0] = 3.14;
+    f64_arr[1] = 2.71;
+    
+    if f64_arr[0] < 3.13 || f64_arr[0] > 3.15 {
+        return 15;
+    }
+    if f64_arr[1] < 2.70 || f64_arr[1] > 2.72 {
+        return 16;
+    }
+    
+    // All tests passed
+    return 0;
+}
+

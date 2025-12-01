@@ -1,0 +1,50 @@
+// Struct must be declared outside function
+struct Buffer {
+    data: [u8; 8];
+}
+
+// Function must be declared outside main
+fn make_zeros() -> [int; 4] {
+    return [0; 4];
+}
+
+fn main() -> int {
+    // Basic array initialization with [value; count]
+    let arr1: [int; 5] = [0; 5];
+    // Verify first element is 0
+    if arr1[0] != 0 {
+        return 1;
+    }
+    
+    // Non-zero initialization
+    let arr2: [int; 10] = [42; 10];
+    // Verify elements are 42
+    if arr2[0] != 42 || arr2[9] != 42 {
+        return 2;
+    }
+    
+    // Different types
+    let arr3: [u8; 3] = [255; 3];
+    if arr3[0] != 255 {
+        return 3;
+    }
+    
+    let arr4: [bool; 2] = [true; 2];
+    // Note: bool comparison not fully supported, but should compile
+    
+    // Nested in struct
+    let buf: Buffer = Buffer { data: [0; 8] };
+    if buf.data[0] != 0 {
+        return 4;
+    }
+    
+    // In function return
+    let zeros = make_zeros();
+    if zeros[0] != 0 || zeros[3] != 0 {
+        return 5;
+    }
+    
+    // All tests passed
+    return 0;
+}
+

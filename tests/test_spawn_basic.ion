@@ -1,0 +1,13 @@
+fn main() -> int {
+    let x: int = 10;
+
+    spawn {
+        // x is moved into the spawned block
+        let y: int = x;
+    };
+
+    // x is now moved and cannot be used here; we just return 0.
+    return 0;
+}
+
+

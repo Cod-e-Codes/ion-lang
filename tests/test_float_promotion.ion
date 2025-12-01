@@ -1,0 +1,14 @@
+fn main() -> int {
+    let x: f32 = 3.14;
+    let y: f64 = 2.0;
+    // f32 + f64 should promote to f64
+    let z: f64 = x + y;
+    
+    let a: int = 5;
+    let b: f32 = 2.0;
+    // int + f32 should promote to f32
+    let c: f32 = a + b;
+    
+    return 0;
+}
+

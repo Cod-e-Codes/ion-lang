@@ -1,0 +1,6 @@
+fn main() -> int {
+    let x = 10;
+    let r = &x;  // Valid: borrow within function
+    return 0;
+}
+

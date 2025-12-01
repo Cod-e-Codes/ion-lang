@@ -1,0 +1,82 @@
+fn main() -> int {
+    // Test basic casts: u8 to int
+    let u8_val: u8 = 42;
+    let int_val: int = u8_val as int;
+    if int_val != 42 {
+        return 1;
+    }
+    
+    // Test int to u8
+    let int_val2: int = 100;
+    let u8_val2: u8 = int_val2 as u8;
+    if u8_val2 != 100 {
+        return 2;
+    }
+    
+    // Test f32 to f64
+    let f32_val: f32 = 3.14;
+    let f64_val: f64 = f32_val as f64;
+    if f64_val < 3.13 || f64_val > 3.15 {
+        return 3;
+    }
+    
+    // Test int to f64
+    let int_val3: int = 42;
+    let f64_val2: f64 = int_val3 as f64;
+    if f64_val2 != 42.0 {
+        return 4;
+    }
+    
+    // Test signed/unsigned conversions
+    let i32_val: i32 = -100;
+    let u32_val: u32 = i32_val as u32;
+    // -100 as u32 wraps around, so we expect a large positive number
+    // This is expected behavior for C-style casts
+    
+    // Test u16 to i32
+    let u16_val: u16 = 1000;
+    let i32_val2: i32 = u16_val as i32;
+    if i32_val2 != 1000 {
+        return 5;
+    }
+    
+    // Test i8 to i64
+    let i8_val: i8 = -50;
+    let i64_val: i64 = i8_val as i64;
+    if i64_val != -50 {
+        return 6;
+    }
+    
+    // Test u32 to u64
+    let u32_val2: u32 = 4294967295; // Max u32
+    let u64_val: u64 = u32_val2 as u64;
+    if u64_val != 4294967295 {
+        return 7;
+    }
+    
+    // Test i16 to u16 (signed to unsigned)
+    let i16_val: i16 = 200;
+    let u16_val2: u16 = i16_val as u16;
+    if u16_val2 != 200 {
+        return 8;
+    }
+    
+    // Test f64 to int (truncation)
+    let f64_val3: f64 = 42.7;
+    let int_val4: int = f64_val3 as int;
+    if int_val4 != 42 {
+        return 9;
+    }
+    
+    // Test multiple casts in chain
+    let start: i8 = 10;
+    let intermediate: int = start as int;
+    let final_val: u32 = intermediate as u32;
+    if final_val != 10 {
+        return 10;
+    }
+    
+    // All tests passed
+    return 0;
+}
+

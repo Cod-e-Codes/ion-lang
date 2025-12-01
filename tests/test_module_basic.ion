@@ -1,0 +1,7 @@
+import "math.ion" as math;
+
+fn main() -> int {
+    let result: int = math::add(10, 20);
+    return result;
+}
+

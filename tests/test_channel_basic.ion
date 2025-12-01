@@ -1,0 +1,7 @@
+fn main() -> int {
+    // Basic check that `channel<int>` parses, type-checks, and lowers to C.
+    let ch: channel<int>;
+    return 0;
+}
+
+

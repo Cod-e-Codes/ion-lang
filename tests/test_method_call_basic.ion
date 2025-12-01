@@ -1,0 +1,24 @@
+// Test basic method call syntax
+
+fn main() -> int {
+    // Test Vec methods
+    let mut vec: Vec<int> = Vec::new();
+    vec.push(10);
+    vec.push(20);
+    
+    let len: int = vec.len();
+    if len != 2 {
+        return 1;
+    }
+    
+    // Test String methods
+    let mut s: String = String::new();
+    s.push_str("hello");
+    let s_len: int = s.len();
+    if s_len != 5 {
+        return 2;
+    }
+    
+    return 0;
+}
+

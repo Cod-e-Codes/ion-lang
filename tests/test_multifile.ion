@@ -1,0 +1,9 @@
+import "utils.ion" as utils;
+
+fn main() -> int {
+    // Test calling a public function from another module
+    let result1: int = utils::add(5, 10);
+    let result2: int = utils::multiply(3, 4);
+    return result1 + result2; // 15 + 12 = 27
+}
+

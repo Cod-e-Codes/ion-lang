@@ -1,0 +1,6 @@
+fn main() -> int {
+    // Test that int is Send (this is valid, but we can't test spawn yet)
+    let x: int = 10;
+    return x;
+}
+

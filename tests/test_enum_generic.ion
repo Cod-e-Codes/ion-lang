@@ -1,0 +1,11 @@
+// Test enum with generic type parameter
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let x: Option<int> = Option::Some(42);
+    return 0;
+}
+

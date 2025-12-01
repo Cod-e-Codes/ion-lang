@@ -1,0 +1,15 @@
+fn main() -> int {
+    // Test escape sequences in string literals
+    // String literals can be assigned to String type
+    let cr: String = "\r";
+    let tab: String = "\t";
+    let newline: String = "\n";
+    let null: String = "\0";
+    let http_line: String = "\r\n";
+    let combined: String = "Hello\tWorld\r\n\0";
+    
+    // All should compile successfully
+    // The main test is that escape sequences \r, \t, \0 are recognized by the lexer
+    return 0;
+}
+

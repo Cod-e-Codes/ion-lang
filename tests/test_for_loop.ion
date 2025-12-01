@@ -1,0 +1,18 @@
+// Test Phase 6: for...in loops
+fn main() -> int {
+    // Test that for loop syntax parses correctly
+    // Note: Full implementation may require runtime support for Vec::get and Option unwrapping
+    // For now, just test that the syntax is accepted
+    
+    let mut vec: Vec<int> = Vec::new();
+    Vec::push(&mut vec, 42);
+    
+    // Basic for loop syntax - desugars to while loop
+    for x in vec {
+        // Body will be checked during desugaring
+        let _y = x;
+    }
+    
+    return 0;
+}
+

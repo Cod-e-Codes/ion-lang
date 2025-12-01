@@ -1,0 +1,19 @@
+// Test Phase 6: Split Channel API (Sender<T> / Receiver<T>)
+// Test tuple destructuring, send, and recv with split channels
+fn main() -> int {
+    // Test tuple destructuring with channel()
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    
+    // Test sending (send expects &Sender<T>)
+    send(&tx, 42);
+    
+    // Test receiving (recv expects &mut Receiver<T>)
+    let mut rx_mut: Receiver<int> = rx;
+    let value = recv(&mut rx_mut);
+    
+    if value == 42 {
+        return 0;
+    } else {
+        return 1;
+    }
+}

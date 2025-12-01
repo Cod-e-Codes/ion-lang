@@ -1,0 +1,9 @@
+fn add(x: int, y: int) -> int {
+    return x + y;
+}
+
+fn main() -> int {
+    let result: int = add(10, 20);
+    return result;
+}
+

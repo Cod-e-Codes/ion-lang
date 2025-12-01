@@ -1,0 +1,15 @@
+extern "C" {
+    fn write(fd: int, buf: *u8, count: int) -> int;
+}
+
+fn main() -> int {
+    // Call write with a string literal (write is a POSIX function, not in stdio.h)
+    // String literals are automatically converted to *u8 for extern functions
+    // Write "Hello" (5 chars) to stdout (fd 1)
+    // Extern calls require unsafe blocks
+    unsafe {
+        let _result: int = write(1, "Hello", 5);
+    }
+    return 0;
+}
+

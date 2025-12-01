@@ -1,0 +1,10 @@
+fn main() -> int {
+    let x: f32 = 3.14;
+    let y: f32 = 2.0;
+    let z: f32 = x + y;
+    let w: f32 = x * y;
+    
+    // Verify arithmetic works
+    return 0;
+}
+

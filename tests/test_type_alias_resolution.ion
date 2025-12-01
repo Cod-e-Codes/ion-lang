@@ -1,0 +1,14 @@
+type MyInt = int;
+type MyFloat = f64;
+
+fn add(a: MyInt, b: MyFloat) -> MyFloat {
+    return a + b;
+}
+
+fn main() -> int {
+    let x: MyInt = 5;
+    let y: MyFloat = 3.14;
+    let z: MyFloat = add(x, y);
+    return 0;
+}
+

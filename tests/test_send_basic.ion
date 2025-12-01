@@ -1,0 +1,6 @@
+fn main() -> int {
+    // Test that int values are Send (valid to use)
+    let x: int = 42;
+    return x;
+}
+

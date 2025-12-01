@@ -1,0 +1,8 @@
+// Test Vec<T> type declaration
+fn main() -> int {
+    // Test that Vec<int> type can be declared
+    // Vec operations (Vec::new) require parser improvements for associated functions
+    let _v: Vec<int>;
+    return 0;
+}
+

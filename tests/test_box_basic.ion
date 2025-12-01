@@ -1,0 +1,8 @@
+// Test Box<T> type declaration
+fn main() -> int {
+    // Test that Box<int> type can be declared
+    // Box operations (Box::new) require parser improvements for associated functions
+    let _b: Box<int>;
+    return 0;
+}
+

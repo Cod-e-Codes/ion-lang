@@ -1,0 +1,17 @@
+enum Result {
+    Ok(int);
+    Err(int);
+}
+
+fn main() -> int {
+    let r: Result = Result::Ok(10);
+    match r {
+        Result::Ok(x) => {
+            return x;
+        },
+        Result::Err(e) => {
+            return e;
+        },
+    };
+}
+

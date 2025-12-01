@@ -1,0 +1,10 @@
+// Test String::new()
+fn main() -> int {
+    let s: String = String::new();
+    let len = String::len(&s);
+    if len != 0 {
+        return 1;
+    }
+    return 0;
+}
+

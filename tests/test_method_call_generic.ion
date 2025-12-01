@@ -1,0 +1,37 @@
+// Test method calls on generic types
+
+fn main() -> int {
+    // Test Vec<int> methods
+    let mut int_vec: Vec<int> = Vec::new();
+    int_vec.push(42);
+    let int_len: int = int_vec.len();
+    if int_len != 1 {
+        return 1;
+    }
+    
+    // Test Vec with different type parameters would require
+    // generic type support, but we can test the basic pattern
+    // with built-in Vec<int>
+    
+    // Test that generic methods work
+    match int_vec.get(0) {
+        Option::Some(value) => {
+            if value != 42 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+    
+    // Test Box methods
+    let boxed: Box<int> = Box::new(100);
+    let unboxed: int = Box::unwrap(boxed);
+    if unboxed != 100 {
+        return 4;
+    }
+    
+    return 0;
+}
+

@@ -1,0 +1,10 @@
+// Test that enum variant payloads cannot contain references (no-escape rule)
+// This should fail: enum variants cannot have reference payloads
+enum BadEnum {
+    Bad(&int);  // Error: reference cannot escape
+}
+
+fn main() -> int {
+    return 0;
+}
+

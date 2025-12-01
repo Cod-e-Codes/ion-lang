@@ -1,0 +1,205 @@
+// HTTP Server Example - Demonstrating FFI, Phase 7, and Phase 8 Features
+// This example creates a simple HTTP server that listens on port 8080
+// and responds to GET requests with a simple HTML page.
+//
+// Phase 7 Features Demonstrated:
+// - Array initialization syntax: [0; 128] for buffer initialization
+// - Bitwise operations: port >> 8 and port & 0xFF for byte extraction
+// - Escape sequences: \r\n for proper HTTP line endings
+//
+// Phase 8 Features Demonstrated:
+// - Type casting: (port_net >> 8) as u8 for byte extraction
+// - Array element assignment: buffer[0] = value (used in recv/send operations)
+//
+// Note: This is a simplified example. A production server would:
+// - Handle multiple concurrent connections using spawn
+// - Parse HTTP requests properly
+// - Handle errors more gracefully
+// - Support different routes and methods
+//
+// IMPORTANT: Since 'recv' and 'send' are keywords in Ion, we use 'recv_sys' and 'send_sys'.
+// After compiling to C, you'll need to add these lines to the generated .c file before linking:
+//   #define recv_sys recv
+//   #define send_sys send
+// Or compile with: gcc -Drecv_sys=recv -Dsend_sys=send ...
+
+// ============================================
+// FFI Declarations - POSIX Socket Functions
+// ============================================
+extern "C" {
+    // Socket creation and configuration
+    fn socket(domain: int, sock_type: int, protocol: int) -> int;
+    // Using &int for file descriptors to avoid move semantics
+    // Note: The C codegen will need to dereference &int to int when calling POSIX functions
+    // Using &u8 instead of *u8 - both compile to uint8_t* in C
+    // Using &mut int instead of *int - both compile to int* in C
+    fn bind(sockfd: &int, addr: &u8, addrlen: int) -> int;
+    fn listen(sockfd: &int, backlog: int) -> int;
+    fn accept(sockfd: &int, addr: &mut u8, addrlen: &mut int) -> int;
+    
+    // Socket I/O
+    // Note: recv and send are keywords in Ion, so we use recv_sys and send_sys.
+    // The generated C code needs #defines to map these to the actual POSIX functions:
+    //   #define recv_sys recv
+    //   #define send_sys send
+    // Using &mut u8 instead of *u8 - both compile to uint8_t* in C
+    // Using &int for file descriptors to avoid move semantics
+    fn recv_sys(sockfd: &int, buf: &mut u8, len: int, flags: int) -> int;
+    fn send_sys(sockfd: &int, buf: *u8, len: int, flags: int) -> int;
+    fn close(fd: &int) -> int;
+    
+    // Network byte order conversion
+    fn htons(hostshort: u16) -> u16;
+    
+    // Note: memset is a standard C library function, no need to declare it here
+    // It will be available automatically when linking with the standard library
+}
+
+// Socket constants (POSIX)
+// AF_INET = 2, SOCK_STREAM = 1, IPPROTO_TCP = 0
+
+// ============================================
+// Helper Functions
+// ============================================
+
+// Struct wrapper for the array to allow C-compatible return-by-value
+struct SockAddrInBytes {
+    data: [u8; 16];
+}
+
+// Create a socket address structure for IPv4 (sockaddr_in)
+// Uses a fixed-size array since we know it's exactly 16 bytes
+// Now uses bitwise operations to extract port bytes dynamically
+// Returns a struct wrapper to allow C-compatible return-by-value
+fn create_sockaddr_in(port: u16) -> SockAddrInBytes {
+    // struct sockaddr_in layout:
+    //   [0-1]:   sin_family (AF_INET = 2)
+    //   [2-3]:   sin_port (network byte order)
+    //   [4-7]:   sin_addr (INADDR_ANY = 0)
+    //   [8-15]:  sin_zero (padding, zeros)
+    
+    unsafe {
+        // Convert port to network byte order
+        let port_net: u16 = htons(port);
+        
+        // Extract bytes using bitwise operations with type casting (Phase 8)
+        // High byte: (port_net >> 8) as u8
+        // Low byte: (port_net & 255) as u8  // 255 = 0xFF
+        let shift8: u16 = 8;  // Shift amount must be unsigned
+        let port_high: u8 = (port_net >> shift8) as u8;
+        let mask_255: u16 = 255;  // 0xFF mask for low byte
+        let port_low: u8 = (port_net & mask_255) as u8;
+        
+        // Create address structure
+        // sin_family = AF_INET = 2
+        // sin_port (network byte order) - dynamically extracted from port_net
+        // All values must be u8, so cast integer literals
+        let addr: [u8; 16] = [
+            2 as u8, 0 as u8,           // sin_family = AF_INET
+            port_high, port_low,  // sin_port (network byte order)
+            0 as u8, 0 as u8, 0 as u8, 0 as u8,     // sin_addr = INADDR_ANY
+            0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8  // sin_zero (padding)
+        ];
+        
+        // Return the struct wrapper for C compatibility
+        return SockAddrInBytes { data: addr };
+    }
+}
+
+// Handle a client connection
+fn handle_client(client_fd: int) -> int {
+    // Request buffer (128 bytes should be enough for simple HTTP requests)
+    // Now using array initialization syntax: [0; 128]
+    let mut buffer: [u8; 128] = [0; 128];
+    
+    unsafe {
+        // Receive request
+        // Pass &mut buffer[0] directly - FFI signature accepts &mut u8 (compiles to *u8 in C)
+        // Use &client_fd to avoid move semantics - we can reuse the reference
+        let received: int = recv_sys(&client_fd, &mut buffer[0], 128, 0);
+        
+        if received < 1 {
+            close(&client_fd);
+            return 0;
+        }
+        
+        // Send HTTP response (using string literals which convert to *u8)
+        // HTTP/1.1 200 OK
+        // Content-Type: text/html
+        // Content-Length: 89
+        // Connection: close
+        // 
+        // <html>...</html>
+        // Now using proper HTTP line endings: \r\n
+        // We can reuse &client_fd since references don't move the value
+        let _sent1: int = send_sys(&client_fd, "HTTP/1.1 200 OK\r\n", 17, 0);
+        let _sent2: int = send_sys(&client_fd, "Content-Type: text/html\r\n", 25, 0);
+        let _sent3: int = send_sys(&client_fd, "Content-Length: 89\r\n", 20, 0);
+        let _sent4: int = send_sys(&client_fd, "Connection: close\r\n", 19, 0);
+        let _sent5: int = send_sys(&client_fd, "\r\n", 2, 0);
+        let _sent6: int = send_sys(&client_fd, "<html><head><title>Ion HTTP Server</title></head><body><h1>Hello from Ion!</h1><p>This is a simple HTTP server written in Ion.</p></body></html>", 89, 0);
+        
+        close(&client_fd);
+    }
+    
+    return 0;
+}
+
+// ============================================
+// Main Server Function
+// ============================================
+fn main() -> int {
+    unsafe {
+        // Create socket
+        let server_fd: int = socket(2, 1, 0);  // AF_INET, SOCK_STREAM, IPPROTO_TCP
+        if server_fd < 0 {
+            return 1;  // Socket creation failed
+        }
+        
+        // Create address structure
+        let sockaddr: SockAddrInBytes = create_sockaddr_in(8080);
+        
+        // Bind socket
+        // Access the internal array using .data
+        // Use &server_fd to avoid move semantics - we can reuse the reference
+        let bind_result: int = bind(&server_fd, &sockaddr.data[0], 16);
+        if bind_result < 0 {
+            close(&server_fd);
+            return 2;  // Bind failed
+        }
+        
+        // Listen for connections
+        let listen_result: int = listen(&server_fd, 10);  // backlog = 10
+        if listen_result < 0 {
+            close(&server_fd);
+            return 3;  // Listen failed
+        }
+        
+        // Enter an infinite loop to continuously accept connections
+        // In a production server, you'd use spawn to handle each connection concurrently:
+        //   while true {
+        //       let client_fd = accept(...);
+        //       spawn { handle_client(client_fd); };
+        //   }
+        while true {
+            // Re-initialize client address structure inside the loop
+            // Now using array initialization syntax: [0; 16]
+            let mut client_addr: [u8; 16] = [0; 16];
+            let mut addrlen: int = 16;
+            
+            // This call blocks until a client connects
+            let client_fd: int = accept(&server_fd, &mut client_addr[0], &mut addrlen);
+            
+            // Handle the client connection synchronously
+            // Note: If accept failed (returned -1), handle_client will detect the error
+            // when trying to recv and will close the invalid fd
+            let _result: int = handle_client(client_fd);
+        }
+        
+        // Note: close(&server_fd) is now unreachable since the loop is infinite
+        // In a real server, you'd add signal handling to gracefully shut down
+    }
+    
+    return 0;
+}
+

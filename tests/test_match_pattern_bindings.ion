@@ -1,0 +1,17 @@
+enum Option {
+    Some(int);
+    None;
+}
+
+fn main() -> int {
+    let x: Option = Option::Some(42);
+    match x {
+        Option::Some(value) => {
+            return value;
+        },
+        Option::None => {
+            return 0;
+        },
+    };
+}
+

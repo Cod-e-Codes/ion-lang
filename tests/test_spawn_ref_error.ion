@@ -1,0 +1,13 @@
+fn main() -> int {
+    let x = 10;
+    let r = &x;
+
+    // Capturing a reference into spawn is not allowed (references are not Send).
+    spawn {
+        let y = r;
+    };
+
+    return 0;
+}
+
+

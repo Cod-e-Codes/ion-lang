@@ -1,0 +1,10 @@
+enum Option {
+    Some(int);
+    None;
+}
+
+fn main() -> int {
+    let x: Option = Option::Some(42);
+    return 0;
+}
+

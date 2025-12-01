@@ -1,0 +1,9 @@
+fn main() -> int {
+    let a: i32 = 10;
+    let b: u32 = 20;
+    // i32 + u32 should promote to i64 (signed wider type)
+    let c: i64 = a + b;
+    
+    return 0;
+}
+
