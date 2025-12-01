@@ -1,0 +1,61 @@
+{
+    "name": "ion-language",
+    "displayName": "Ion Language",
+    "description": "Language support for Ion",
+    "version": "0.1.0",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "activationEvents": [
+        "onLanguage:ion"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "languages": [
+            {
+                "id": "ion",
+                "aliases": [
+                    "Ion",
+                    "ion"
+                ],
+                "extensions": [
+                    ".ion"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "ion",
+                "scopeName": "source.ion",
+                "path": "./syntaxes/ion.tmLanguage.json"
+            }
+        ],
+        "configuration": {
+            "title": "Ion",
+            "properties": {
+                "ion.lspPath": {
+                    "type": "string",
+                    "default": "ion-lsp",
+                    "description": "Path to the Ion LSP server executable"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "compile": "tsc -p .",
+        "watch": "tsc -watch -p .",
+        "package": "vsce package"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.0"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.75.0",
+        "@types/node": "^16.11.7",
+        "typescript": "^5.0.0"
+    }
+}

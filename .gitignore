@@ -1,31 +1,52 @@
-# Rust
+# ------------------------------------
+# 1. VS Code Extension (TypeScript/JS)
+# ------------------------------------
+node_modules/
+out/
+*.vsix
+package-lock.json
+# yarn.lock # Uncomment if you use Yarn
+
+# ------------------------------------
+# 2. Rust/Cargo
+# ------------------------------------
 target/
 Cargo.lock
 
-# Binaries
+# ------------------------------------
+# 3. Compiled Binaries (General)
+# ------------------------------------
 *.exe
 *.out
 *.o
 *.a
 
-# Ignore compiled binaries in examples (extensionless)
+# ------------------------------------
+# 4. Ion-Specific Generated Files
+# ------------------------------------
+# Ignore compiled binaries in examples
 examples/hello_world
 examples/hello_world_safe
 examples/http_server
 examples/minimal
 examples/showcase
 
+# Ion-generated C and object files (Uncomment if you generate these files in your project root)
+# *.c
+# *.o
+
 # Do NOT ignore .c or .ion source files in examples
 !examples/*.c
 !examples/*.ion
 
-# Ion-generated C (optional, if you want to ignore temporary C files)
-# examples/*.c
-# examples/*.o
-
-# Editor / OS files
+# ------------------------------------
+# 5. Editor / OS Files
+# ------------------------------------
+# Visual Studio Code
+.vscode/
+# IDEs
+.idea/
+# General OS files
+.DS_Store
 *.swp
 *~
-.vscode/
-.idea/
-.DS_Store

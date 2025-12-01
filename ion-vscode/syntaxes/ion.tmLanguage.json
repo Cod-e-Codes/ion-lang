@@ -1,0 +1,103 @@
+{
+    "name": "Ion",
+    "scopeName": "source.ion",
+    "fileTypes": [
+        "ion"
+    ],
+    "patterns": [
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#modifiers"
+        },
+        {
+            "include": "#literals"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#numbers"
+        },
+        {
+            "include": "#types"
+        }
+    ],
+    "repository": {
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.ion",
+                    "match": "\\b(fn|let|mut|struct|enum|type|if|else|while|for|match|return|defer|spawn|unsafe|pub|extern|as|in)\\b"
+                }
+            ]
+        },
+        "modifiers": {
+            "patterns": [
+                {
+                    "name": "storage.modifier.reference.ion",
+                    "match": "(&mut|&)"
+                },
+                {
+                    "name": "storage.modifier.pointer.ion",
+                    "match": "\\*"
+                }
+            ]
+        },
+        "literals": {
+            "patterns": [
+                {
+                    "name": "constant.language.boolean.ion",
+                    "match": "\\b(true|false)\\b"
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.ion",
+                    "begin": "\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.ion",
+                            "match": "\\\\(r|n|t|0|\\\\|\"|')"
+                        }
+                    ]
+                }
+            ]
+        },
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.ion",
+                    "match": "//.*$"
+                }
+            ]
+        },
+        "types": {
+            "patterns": [
+                {
+                    "name": "storage.type.primitive.ion",
+                    "match": "\\b(int|i8|i16|i32|i64|u8|u16|u32|u64|uint|f32|f64|bool|void)\\b"
+                },
+                {
+                    "name": "storage.type.standard-library.ion",
+                    "match": "\\b(String|Box|Vec|channel|Sender|Receiver)\\b"
+                }
+            ]
+        },
+        "numbers": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.ion",
+                    "match": "\\b\\d+(\\.\\d+)?([eE][+-]?\\d+)?\\b"
+                }
+            ]
+        }
+    }
+}

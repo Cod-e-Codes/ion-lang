@@ -462,3 +462,14 @@ impl Span {
         }
     }
 }
+
+impl Default for Span {
+    fn default() -> Self {
+        Self {
+            start: 0,
+            end: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+}

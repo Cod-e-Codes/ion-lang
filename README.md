@@ -25,6 +25,30 @@ cargo build --release
 
 The binary will be at `target/release/ion-compiler` (or `target/release/ion-compiler.exe` on Windows).
 
+## IDE Support
+
+### VS Code Extension
+
+Ion has a VS Code extension that provides:
+- Syntax highlighting
+- Real-time diagnostics (syntax and type errors)
+
+**Installation:**
+
+1. Build the LSP server:
+   ```bash
+   cargo build --release --bin ion-lsp
+   ```
+
+2. Install the extension from the `ion-vscode` directory:
+   ```bash
+   cd ion-vscode
+   npm install
+   npm run compile
+   npx vsce package
+   code --install-extension ion-language-0.1.0.vsix
+   ```
+
 ## Usage
 
 ### Single-File Mode (Default)
