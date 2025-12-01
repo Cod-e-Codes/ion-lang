@@ -1,12 +1,16 @@
 use crate::lexer;
 use crate::parser;
 use crate::tc::{self, TypeCheckError};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 pub struct IonLanguageServer {
     pub client: Client,
+    // Cache of LSP info per file
+    pub file_cache: Arc<Mutex<HashMap<Url, tc::LspInfo>>>,
 }
 
 #[tower_lsp::async_trait]
@@ -49,9 +53,57 @@ impl LanguageServer for IonLanguageServer {
 
     async fn goto_definition(
         &self,
-        _params: GotoDefinitionParams,
+        params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        // TODO: Implement using symbol table
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        // Get LSP info for this file
+        let lsp_info = {
+            if let Ok(cache) = self.file_cache.lock() {
+                cache.get(&uri).cloned()
+            } else {
+                None
+            }
+        };
+
+        if let Some(info) = lsp_info {
+            // Find the symbol at the requested position
+            // LSP positions are 0-indexed, but our Spans are 1-indexed
+            let target_line = (position.line + 1) as usize;
+            let target_column = (position.character + 1) as usize;
+
+            // Search through references to find one at this position
+            for (reference_span, definition_span) in &info.references {
+                // Check if the position is within this reference span
+                if reference_span.line == target_line
+                    && target_column >= reference_span.column
+                    && target_column
+                        < reference_span.column + (reference_span.end - reference_span.start)
+                {
+                    // Found it! Return the definition location
+                    let location = Location {
+                        uri,
+                        range: Range {
+                            start: Position {
+                                line: (definition_span.line.saturating_sub(1)) as u32,
+                                character: (definition_span.column.saturating_sub(1)) as u32,
+                            },
+                            end: Position {
+                                line: (definition_span.line.saturating_sub(1)) as u32,
+                                character: (definition_span
+                                    .end
+                                    .saturating_sub(definition_span.start)
+                                    + definition_span.column.saturating_sub(1))
+                                    as u32,
+                            },
+                        },
+                    };
+                    return Ok(Some(GotoDefinitionResponse::Scalar(location)));
+                }
+            }
+        }
+
         Ok(None)
     }
 
@@ -95,7 +147,11 @@ impl IonLanguageServer {
                 // Type Check
                 let mut checker = tc::TypeChecker::new();
                 match checker.check_program(&ast) {
-                    Ok(_) => {
+                    Ok(result) => {
+                        // Store LSP info for goto_definition
+                        if let Ok(mut cache) = self.file_cache.lock() {
+                            cache.insert(uri.clone(), result.lsp_info);
+                        }
                         // Clear diagnostics
                         self.client.publish_diagnostics(uri, vec![], None).await;
                     }

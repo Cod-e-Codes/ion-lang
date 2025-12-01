@@ -435,7 +435,7 @@ pub enum UnOp {
     Neg, // - (unary minus)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

@@ -43,6 +43,13 @@ pub enum OwnershipState {
 struct VariableInfo {
     ty: Type,
     state: OwnershipState,
+    definition_span: Span,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LspInfo {
+    pub references: HashMap<Span, Span>,
+    pub types: HashMap<Span, Type>,
 }
 
 #[derive(Debug)]
@@ -67,6 +74,11 @@ pub enum TypeCheckError {
     Message(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct TypeCheckResult {
+    pub lsp_info: LspInfo,
+}
+
 pub struct TypeChecker {
     variables: HashMap<String, VariableInfo>,
     structs: HashMap<String, StructDecl>,
@@ -80,6 +92,8 @@ pub struct TypeChecker {
     unsafe_context_depth: usize,
     // Current function's resolved return type (for return statement checking)
     current_return_type: Option<Type>,
+    // LSP information collected during type checking
+    pub lsp_info: LspInfo,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +123,7 @@ impl TypeChecker {
             module_imports: HashMap::new(),
             unsafe_context_depth: 0,
             current_return_type: None,
+            lsp_info: LspInfo::default(),
         }
     }
 
@@ -508,7 +523,7 @@ impl TypeChecker {
         Ok(None)
     }
 
-    pub fn check_program(&mut self, program: &Program) -> Result<(), TypeCheckError> {
+    pub fn check_program(&mut self, program: &Program) -> Result<TypeCheckResult, TypeCheckError> {
         // Record struct declarations
         self.structs.clear();
         for s in &program.structs {
@@ -581,7 +596,11 @@ impl TypeChecker {
         for function in &program.functions {
             self.check_function(function)?;
         }
-        Ok(())
+
+        // Return the collected LSP information
+        Ok(TypeCheckResult {
+            lsp_info: self.lsp_info.clone(),
+        })
     }
 
     /// Resolve a type name - if it's Type::Struct(name) but name is actually an enum, convert to Type::Enum(name)
@@ -931,6 +950,7 @@ impl TypeChecker {
                 VariableInfo {
                     ty: resolved_param_ty,
                     state: OwnershipState::Valid,
+                    definition_span: function.span, // Params defined at function declaration
                 },
             );
         }
@@ -1027,6 +1047,7 @@ impl TypeChecker {
                                             VariableInfo {
                                                 ty: sender_ty,
                                                 state: OwnershipState::Valid,
+                                                definition_span: let_stmt.span,
                                             },
                                         );
                                     }
@@ -1046,6 +1067,7 @@ impl TypeChecker {
                                             VariableInfo {
                                                 ty: receiver_ty,
                                                 state: OwnershipState::Valid,
+                                                definition_span: let_stmt.span,
                                             },
                                         );
                                     }
@@ -1181,6 +1203,7 @@ impl TypeChecker {
                         VariableInfo {
                             ty: var_type,
                             state: OwnershipState::Valid,
+                            definition_span: let_stmt.span,
                         },
                     );
                 } else if let Some(ref type_ann) = let_stmt.type_ann {
@@ -1203,6 +1226,7 @@ impl TypeChecker {
                         VariableInfo {
                             ty: resolved_type,
                             state: OwnershipState::Valid,
+                            definition_span: let_stmt.span,
                         },
                     );
                 } else {
@@ -1379,9 +1403,11 @@ impl TypeChecker {
                         VariableInfo {
                             ty,
                             state: OwnershipState::Valid,
+                            definition_span: spawn_stmt.span, // Captured vars defined at spawn
                         },
                     );
                 }
+                // Check the body of the spawn block
                 for inner in &spawn_stmt.body.statements {
                     self.check_stmt(inner)?;
                 }
@@ -1711,6 +1737,14 @@ impl TypeChecker {
                             span: var_expr.span,
                         });
                     }
+
+                    // Track this reference for LSP (goto definition)
+                    self.lsp_info
+                        .references
+                        .insert(var_expr.span, var_info.definition_span);
+                    self.lsp_info
+                        .types
+                        .insert(var_expr.span, var_info.ty.clone());
 
                     Ok(var_info.ty.clone())
                 }
@@ -2390,8 +2424,7 @@ impl TypeChecker {
                     let module_name = parts[0];
                     let func_name = parts[1];
 
-                    // Look up module in imports
-                    // If not found, check if it's actually an enum literal that was mis-parsed
+                    // Look up module in imports or check if it's actually an enum literal that was mis-parsed
                     let module_exports = match self.module_imports.get(module_name) {
                         Some(exports) => exports,
                         None => {
@@ -3611,7 +3644,7 @@ impl TypeChecker {
                 variant,
                 sub_patterns,
                 named_fields,
-                span: _,
+                span,
             } => {
                 // Find the variant and add bindings for its payloads
                 if let Some(variant_decl) = enum_decl.variants.iter().find(|v| v.name == *variant) {
@@ -3649,6 +3682,7 @@ impl TypeChecker {
                                                 VariableInfo {
                                                     ty: concrete_field_ty,
                                                     state: OwnershipState::Valid,
+                                                    definition_span: *span,
                                                 },
                                             );
                                         }
@@ -3691,6 +3725,7 @@ impl TypeChecker {
                                             VariableInfo {
                                                 ty: concrete_payload_ty,
                                                 state: OwnershipState::Valid,
+                                                definition_span: *span,
                                             },
                                         );
                                     }
@@ -3708,13 +3743,14 @@ impl TypeChecker {
                 }
                 Ok(())
             }
-            Pattern::Binding { name, .. } => {
+            Pattern::Binding { name, span } => {
                 // Binding pattern binds the entire matched value
                 self.variables.insert(
                     name.clone(),
                     VariableInfo {
                         ty: expr_ty.clone(),
                         state: OwnershipState::Valid,
+                        definition_span: *span,
                     },
                 );
                 Ok(())
