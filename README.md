@@ -146,7 +146,7 @@ The `--output` flag specifies the name of the final executable (defaults to the 
 
 ### Operators
 
-- **Arithmetic**: `+`, `-`, `*`, `/`, `%`
+- **Arithmetic**: `+`, `-`, `*`, `/`, `%` (modulo, Phase 8)
 - **Comparison**: `==`, `!=`, `<`, `>`, `<=`, `>=` (Phase 8)
 - **Logical**: `&&`, `||`, `!`
 - **Bitwise** (Phase 7): `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
@@ -203,6 +203,19 @@ match vec.pop() {
   - `String::from("...")` - create from string literal
   - `s.push_str("...")` - append string (method syntax) or `String::push_str(&mut s, "...")`
   - `s.len()` - get byte length (method syntax) or `String::len(&s)`
+  - String has `data` (*u8) and `len` (int) fields accessible via `.` syntax
+
+#### Standard Library
+
+Ion includes a safe standard library for common operations:
+
+- **I/O Module** (`stdlib/io.ion`):
+  - `io::print(s: String)` - Print string to stdout
+  - `io::println(s: String)` - Print string with newline to stdout
+  - `io::print_str(s: *u8, len: int)` - Print raw string with length validation
+  - `io::print_int(n: int)` - Print integer (TODO: complete implementation)
+  - All I/O functions use safe wrappers around POSIX `write()` syscall
+  - Example: `import "stdlib/io.ion" as io; io::println(String::from("Hello!"));`
 
 #### Arrays and Slices
 - Fixed-size arrays: `[T; N]` syntax (e.g., `[int; 5]`)
@@ -211,10 +224,15 @@ match vec.pop() {
 - **Array initialization**: `[value; count]` syntax for repeated values (Phase 7)
   - Example: `let buffer: [u8; 128] = [0; 128];`
   - Works in variable declarations, struct fields, and function returns
-- Indexing: `arr[i]` returns the element value
+- **Array bounds checking** (Safety Enhancement):
+  - Indexing `arr[i]` performs runtime bounds checking by default
+  - If `i < 0` or `i >= array_length`, the program panics with "Array index out of bounds"
+  - Bounds checking can be disabled in `unsafe` blocks for performance-critical code
+  - Example: `unsafe { let x = arr[i]; }` skips bounds checking
 - **Array element assignment** (Phase 8): `arr[i] = value` syntax for mutating array elements
   - Example: `let mut arr: [int; 5] = [0; 5]; arr[0] = 10;`
   - Requires mutable array variables (`let mut`)
+  - Subject to bounds checking (panics on out-of-bounds access)
 - Implicit array-to-slice coercion: `&[T; N]` automatically coerces to `&[]T` in function calls
 
 ### Modules and Visibility
@@ -242,11 +260,14 @@ match vec.pop() {
   - Undefined variables, use-after-move
   - No-escape for references (including struct fields)
   - Structural `Send` for channels and `spawn`
+  - **Array bounds checking**: Runtime checks on array indexing by default
 - **Explicit Unsafe Blocks**: `unsafe { ... }` blocks for low-level operations
   - Raw pointer dereferencing (`*ptr`) only allowed in unsafe blocks
   - Raw pointer arithmetic (`ptr + offset`) only allowed in unsafe blocks
   - Extern function calls require unsafe context
+  - **Array bounds checking disabled**: `arr[i]` skips runtime checks in unsafe blocks
   - Core safety (no-escape, Send checking) still enforced even in unsafe
+- **Runtime Panic**: Out-of-bounds array access triggers `ion_panic()` which prints an error message and aborts the program
 
 ### Concurrency
 

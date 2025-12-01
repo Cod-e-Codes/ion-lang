@@ -113,6 +113,7 @@ pub enum IREexpr {
     FieldAccess {
         base: Box<IREexpr>,
         field: String,
+        is_pointer: bool,
     },
     EnumLit {
         enum_name: String,
@@ -139,6 +140,7 @@ pub enum IREexpr {
     Index {
         target: Box<IREexpr>,
         index: Box<IREexpr>,
+        target_type: Option<Type>, // Type of target for bounds checking
     },
     Assign {
         target: String,
@@ -621,6 +623,7 @@ fn build_expr(expr: &Expr) -> IREexpr {
         Expr::FieldAccess(acc) => IREexpr::FieldAccess {
             base: Box::new(build_expr(&acc.base)),
             field: acc.field.clone(),
+            is_pointer: false, // Default to false as we don't have type info here
         },
         Expr::EnumLit(enum_lit) => IREexpr::EnumLit {
             enum_name: enum_lit.enum_name.clone(),
@@ -774,6 +777,7 @@ fn build_expr(expr: &Expr) -> IREexpr {
         Expr::Index(index_expr) => IREexpr::Index {
             target: Box::new(build_expr(&index_expr.target)),
             index: Box::new(build_expr(&index_expr.index)),
+            target_type: None, // TODO: Get from type checker
         },
         Expr::Cast(cast_expr) => IREexpr::Cast {
             expr: Box::new(build_expr(&cast_expr.expr)),

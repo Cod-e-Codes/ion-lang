@@ -1,0 +1,56 @@
+// Safe I/O module - abstracts unsafe FFI calls
+// Provides safe wrappers around POSIX write syscall
+
+extern "C" {
+    fn write(fd: int, buf: *u8, count: int) -> int;
+}
+
+// Safe wrapper for printing string to stdout
+// Takes ownership of String to ensure it's valid during the write
+pub fn print(s: String) {
+    unsafe {
+        let _result: int = write(1, s.data, s.len as int);
+    }
+}
+
+// Safe wrapper for printing string with newline
+pub fn println(s: String) {
+    unsafe {
+        let _result: int = write(1, s.data, s.len as int);
+        let _newline: int = write(1, "\n", 1);
+    }
+}
+
+// Safe wrapper for printing string literals
+// Validates that length is non-negative before calling FFI
+pub fn print_str(s: *u8, len: int) {
+    // Validate inputs - negative length is invalid
+    if len < 0 {
+        return;
+    }
+    unsafe {
+        let _result: int = write(1, s, len);
+    }
+}
+
+// Safe wrapper for printing integer to stdout
+// Converts int to string representation and prints it
+pub fn print_int(n: int) {
+    // Simple implementation for positive integers
+    // For production, would need full integer-to-string conversion
+    unsafe {
+        if n == 0 {
+            let _result: int = write(1, "0", 1);
+            return;
+        }
+        
+        // For now, just handle small positive integers
+        // A full implementation would convert any int to string
+        let digit: int = n % 10;
+        let char_code: int = 48 + digit; // '0' is ASCII 48
+        
+        // This is a simplified version - production code would need
+        // proper integer-to-string conversion with buffer management
+        let _result: int = write(1, "TODO: full int conversion", 25);
+    }
+}

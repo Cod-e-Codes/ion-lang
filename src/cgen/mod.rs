@@ -16,6 +16,9 @@ pub struct Codegen {
     extern_functions: HashMap<String, Vec<Type>>, // Map extern function names to their parameter types
     current_return_type: Option<Type>, // Current function's return type (for array return handling)
     function_return_types: HashMap<String, Option<Type>>, // Map function names to their return types
+    in_unsafe_block: bool,                                // Track if we're in an unsafe block
+    temp_var_counter: usize, // Counter for unique temporary variable names
+    current_function_params: HashMap<String, Type>, // Track current function parameter types for field access
 }
 
 impl Default for Codegen {
@@ -290,7 +293,7 @@ fn type_to_c_impl(ty: &Type) -> String {
 
 impl Codegen {
     pub fn new() -> Self {
-        Self {
+        Codegen {
             output: String::new(),
             indent_level: 0,
             enum_map: HashMap::new(),
@@ -302,6 +305,9 @@ impl Codegen {
             extern_functions: HashMap::new(),
             current_return_type: None,
             function_return_types: HashMap::new(),
+            in_unsafe_block: false,
+            temp_var_counter: 0,
+            current_function_params: HashMap::new(),
         }
     }
 
@@ -596,6 +602,37 @@ impl Codegen {
         // Generate extern function prototypes
         for extern_block in &program.extern_blocks {
             self.generate_extern_block(extern_block);
+        }
+
+        // Generate function prototypes (forward declarations) for ALL functions
+        // This is required for single-file mode where functions may be called before definition
+        for func in &program.functions {
+            let return_type = func
+                .return_type
+                .as_ref()
+                .map(|t| self.type_to_c(t))
+                .unwrap_or_else(|| "void".to_string());
+            self.write(&format!("{} {}(", return_type, func.name));
+            if func.params.is_empty() {
+                self.write("void");
+            } else {
+                for (i, param) in func.params.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    // Special handling for array types: C syntax is "int arr[3]" not "int[3] arr"
+                    match &param.ty {
+                        Type::Array { inner, size } => {
+                            let base_type = self.type_to_c(inner);
+                            self.write(&format!("{} {}[{}]", base_type, param.name, size));
+                        }
+                        _ => {
+                            self.write(&format!("{} {}", self.type_to_c(&param.ty), param.name));
+                        }
+                    }
+                }
+            }
+            self.writeln(");");
         }
 
         // Generate each function
@@ -1000,6 +1037,13 @@ impl Codegen {
     fn generate_function(&mut self, function: &IRFunction) {
         // Store current return type for use in return statements
         self.current_return_type = function.return_type.clone();
+
+        // Store parameter types for field access resolution
+        self.current_function_params.clear();
+        for param in &function.params {
+            self.current_function_params
+                .insert(param.name.clone(), param.ty.clone());
+        }
 
         // Generate return type
         // Special handling: C doesn't allow returning arrays directly, so convert to pointer
@@ -1547,6 +1591,10 @@ impl Codegen {
             }
             IRStmt::UnsafeBlock(unsafe_block) => {
                 // Unsafe blocks lower to regular C blocks (no special syntax)
+                // Track unsafe context to disable bounds checking
+                let prev_unsafe = self.in_unsafe_block;
+                self.in_unsafe_block = true;
+
                 self.write_indent();
                 self.writeln("{");
                 self.indent_level += 1;
@@ -1554,6 +1602,8 @@ impl Codegen {
                 self.indent_level -= 1;
                 self.write_indent();
                 self.writeln("}");
+
+                self.in_unsafe_block = prev_unsafe;
             }
         }
     }
@@ -1754,9 +1804,54 @@ impl Codegen {
                     self.write("}");
                 }
             }
-            IREexpr::FieldAccess { base, field } => {
-                self.generate_expr(base);
-                self.write(&format!(".{}", field));
+            IREexpr::FieldAccess {
+                base,
+                field,
+                is_pointer,
+            } => {
+                // Special handling for String literal field access
+                if let IREexpr::Var(ref var_name) = **base {
+                    // Check if this variable is a function parameter of type String
+                    let should_use_pointer =
+                        if let Some(param_ty) = self.current_function_params.get(var_name) {
+                            matches!(param_ty, Type::String)
+                        } else {
+                            *is_pointer
+                        };
+
+                    self.generate_expr(base);
+                    if should_use_pointer {
+                        self.write("->");
+                    } else {
+                        self.write(".");
+                    }
+                    self.write(field);
+                } else if let IREexpr::StringLit(ref s) = **base {
+                    match field.as_str() {
+                        "data" => {
+                            // "string".data -> just the string literal
+                            self.generate_expr(base);
+                        }
+                        "len" => {
+                            // "string".len -> length of the string
+                            self.write(&s.len().to_string());
+                        }
+                        _ => {
+                            // Should not happen if type checker is correct
+                            self.generate_expr(base);
+                            self.write(".");
+                            self.write(field);
+                        }
+                    }
+                } else {
+                    self.generate_expr(base);
+                    if *is_pointer {
+                        self.write("->");
+                    } else {
+                        self.write(".");
+                    }
+                    self.write(field);
+                }
             }
             IREexpr::EnumLit {
                 enum_name,
@@ -2036,12 +2131,57 @@ impl Codegen {
                     self.write("}");
                 }
             }
-            IREexpr::Index { target, index } => {
-                // Indexing: arr[i] -> arr[i] (direct C array indexing)
-                self.generate_expr(target);
-                self.write("[");
-                self.generate_expr(index);
-                self.write("]");
+            IREexpr::Index {
+                target,
+                index,
+                target_type,
+            } => {
+                if self.in_unsafe_block {
+                    // Unchecked indexing for unsafe blocks - direct C array access
+                    self.generate_expr(target);
+                    self.write("[");
+                    self.generate_expr(index);
+                    self.write("]");
+                } else {
+                    // Bounds-checked indexing using statement expression
+                    // Generate: ({ int __idx = index; (__idx >= 0 && __idx < len) ? arr[__idx] : (ion_panic("..."), arr[0]); })
+
+                    // Extract array length if we have type information
+                    let array_len = if let Some(Type::Array { size, .. }) = target_type {
+                        Some(*size)
+                    } else {
+                        None
+                    };
+
+                    if let Some(len) = array_len {
+                        // We know the array length at compile time - generate bounds check
+                        let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
+                        self.temp_var_counter += 1;
+
+                        self.write("({ int ");
+                        self.write(&temp_var);
+                        self.write(" = ");
+                        self.generate_expr(index);
+                        self.write("; (");
+                        self.write(&temp_var);
+                        self.write(" >= 0 && ");
+                        self.write(&temp_var);
+                        self.write(&format!(" < {}) ? ", len));
+                        self.generate_expr(target);
+                        self.write("[");
+                        self.write(&temp_var);
+                        self.write("] : (ion_panic(\"Array index out of bounds\"), ");
+                        self.generate_expr(target);
+                        self.write("[0]); })");
+                    } else {
+                        // No type information - fall back to unchecked (for now)
+                        // TODO: Track array types through IR for complete bounds checking
+                        self.generate_expr(target);
+                        self.write("[");
+                        self.generate_expr(index);
+                        self.write("]");
+                    }
+                }
             }
             IREexpr::Cast { expr, target_type } => {
                 // Cast: (target_type)expr
@@ -2484,6 +2624,7 @@ impl Codegen {
             BinOp::Sub => "-".to_string(),
             BinOp::Mul => "*".to_string(),
             BinOp::Div => "/".to_string(),
+            BinOp::Rem => "%".to_string(),
             BinOp::Lt => "<".to_string(),
             BinOp::Gt => ">".to_string(),
             BinOp::Le => "<=".to_string(),
@@ -3369,7 +3510,11 @@ fn collect_slice_types_from_expr(
                 collect_slice_types_from_expr(value_expr, slice_types);
             }
         }
-        IREexpr::Index { target, index } => {
+        IREexpr::Index {
+            target,
+            index,
+            target_type: _,
+        } => {
             collect_slice_types_from_expr(target, slice_types);
             collect_slice_types_from_expr(index, slice_types);
         }
@@ -3551,7 +3696,11 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
                 collect_vec_types_from_expr(value_expr, vec_types);
             }
         }
-        IREexpr::Index { target, index } => {
+        IREexpr::Index {
+            target,
+            index,
+            target_type: _,
+        } => {
             collect_vec_types_from_expr(target, vec_types);
             collect_vec_types_from_expr(index, vec_types);
         }
@@ -4016,7 +4165,11 @@ fn collect_generic_from_expr(
                 collect_generic_from_expr(value_expr, instantiations);
             }
         }
-        IREexpr::Index { target, index } => {
+        IREexpr::Index {
+            target,
+            index,
+            target_type: _,
+        } => {
             collect_generic_from_expr(target, instantiations);
             collect_generic_from_expr(index, instantiations);
         }

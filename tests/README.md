@@ -72,6 +72,8 @@ Each test is an Ion source file (`.ion`) that should:
 - `test_array_basic.ion` - Fixed-size arrays
 - `test_array_literal.ion` - Array literals
 - `test_array_indexing.ion` - Array indexing operations
+- `test_array_bounds_safe.ion` - Array bounds checking with valid indices (Safety Enhancement)
+- `test_unsafe_array_indexing.ion` - Unsafe array indexing without bounds checking (Safety Enhancement)
 - `test_slice_basic.ion` - Dynamically sized slices
 - `test_slice_indexing.ion` - Slice indexing operations
 - `test_array_to_slice_coercion.ion` - Array-to-slice coercion
@@ -115,6 +117,9 @@ Each test is an Ion source file (`.ion`) that should:
 - `test_comparison_operators.ion` - Full comparison operators (`<=`, `>=`)
 - `test_type_cast.ion` - Type casting with `as` keyword
 - `test_array_assignment.ion` - Array element assignment (`arr[i] = value`)
+- `test_io_print_str.ion` - Safe I/O library: `print_str()` function
+- `test_io_print.ion` - Safe I/O library: `print()` function for String
+- `test_io_println.ion` - Safe I/O library: `println()` function for String
 
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors

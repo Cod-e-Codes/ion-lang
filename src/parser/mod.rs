@@ -2036,13 +2036,17 @@ impl Parser {
         loop {
             let op_idx = self.current;
             if self.is_at_end()
-                || !matches!(self.tokens[op_idx].kind, TokenKind::Star | TokenKind::Slash)
+                || !matches!(
+                    self.tokens[op_idx].kind,
+                    TokenKind::Star | TokenKind::Slash | TokenKind::Percent
+                )
             {
                 break;
             }
             let op = match self.tokens[op_idx].kind {
                 TokenKind::Star => BinOp::Mul,
                 TokenKind::Slash => BinOp::Div,
+                TokenKind::Percent => BinOp::Rem,
                 _ => unreachable!(),
             };
             self.current += 1; // consume operator

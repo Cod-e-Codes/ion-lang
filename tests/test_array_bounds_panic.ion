@@ -1,0 +1,5 @@
+fn main() -> int {
+    let arr: [int; 3] = [1, 2, 3];
+    // This should panic at runtime with "Array index out of bounds"
+    return arr[10];
+}

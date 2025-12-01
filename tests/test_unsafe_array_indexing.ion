@@ -1,0 +1,7 @@
+fn main() -> int {
+    let arr: [int; 3] = [1, 2, 3];
+    unsafe {
+        // No bounds check in unsafe block - just returns the value
+        return arr[0];
+    }
+}

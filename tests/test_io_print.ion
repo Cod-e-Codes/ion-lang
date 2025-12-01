@@ -1,0 +1,9 @@
+// Test safe I/O library - print function with String
+import "../stdlib/io.ion" as io;
+
+fn main() -> int {
+    // Test print with String type
+    let s: String = String::from("Hello from String");
+    io::print(s);
+    return 0;
+}

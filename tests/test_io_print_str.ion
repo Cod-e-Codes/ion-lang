@@ -1,0 +1,8 @@
+// Test safe I/O library - print_str function
+import "../stdlib/io.ion" as io;
+
+fn main() -> int {
+    // Test print_str with valid input
+    io::print_str("Test output\n".data, 12);
+    return 0;
+}

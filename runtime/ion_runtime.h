@@ -9,6 +9,19 @@ extern "C" {
 #endif
 
 // ============================================================================
+// Safety and Error Handling
+// ============================================================================
+
+/**
+ * Panics the program with an error message.
+ * Prints message to stderr and aborts the process.
+ * Used for safety violations like array bounds checking failures.
+ *
+ * @param message Error message to display
+ */
+void ion_panic(const char *message);
+
+// ============================================================================
 // Threading
 // ============================================================================
 

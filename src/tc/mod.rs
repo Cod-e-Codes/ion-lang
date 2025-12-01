@@ -1868,6 +1868,17 @@ impl TypeChecker {
                             })?;
                         Ok(field.ty.clone())
                     }
+                    Type::String => match acc.field.as_str() {
+                        "data" => Ok(Type::RawPtr {
+                            inner: Box::new(Type::U8),
+                        }),
+                        "len" => Ok(Type::Int),
+                        _ => Err(TypeCheckError::TypeMismatch {
+                            expected: "field 'data' or 'len' on String".to_string(),
+                            got: acc.field.clone(),
+                            span: acc.span,
+                        }),
+                    },
                     other => Err(TypeCheckError::TypeMismatch {
                         expected: "struct value for field access".to_string(),
                         got: type_to_string(&other),
@@ -1880,7 +1891,7 @@ impl TypeChecker {
                 let right_type = self.check_expr(&bin_op_expr.right)?;
 
                 match bin_op_expr.op {
-                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
                         // Arithmetic operations
                         self.check_arithmetic_op(&left_type, &right_type, &bin_op_expr.span)
                     }

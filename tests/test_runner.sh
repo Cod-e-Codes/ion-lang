@@ -329,6 +329,31 @@ if [ -f "test_array_to_slice_coercion.ion" ]; then
     test_file "test_array_to_slice_coercion.ion" 10 || true
 fi
 
+# Array bounds checking tests (Safety Enhancement)
+if [ -f "test_array_bounds_safe.ion" ]; then
+    test_file "test_array_bounds_safe.ion" 150 || true
+fi
+
+if [ -f "test_unsafe_array_indexing.ion" ]; then
+    test_file "test_unsafe_array_indexing.ion" 1 || true
+fi
+
+# Note: test_array_bounds_panic.ion should panic and abort - we'll skip automated testing
+# To manually test: compile and run, should see "Ion panic: Array index out of bounds"
+
+# Safe I/O library tests
+if [ -f "test_io_print_str.ion" ]; then
+    test_file "test_io_print_str.ion" 0 || true
+fi
+
+if [ -f "test_io_print.ion" ]; then
+    test_file "test_io_print.ion" 0 || true
+fi
+
+if [ -f "test_io_println.ion" ]; then
+    test_file "test_io_println.ion" 0 || true
+fi
+
 # Phase 3 tests - Unsafe Blocks
 if [ -f "test_unsafe_basic.ion" ]; then
     test_file "test_unsafe_basic.ion" 0 || true

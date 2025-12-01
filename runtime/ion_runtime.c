@@ -1,7 +1,17 @@
 #include "ion_runtime.h"
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// ============================================================================
+// Safety and Error Handling
+// ============================================================================
+
+void ion_panic(const char *message) {
+  fprintf(stderr, "Ion panic: %s\n", message);
+  abort();
+}
 
 // ============================================================================
 // Heap Allocation

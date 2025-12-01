@@ -107,6 +107,59 @@ Note: The `as` keyword is used both for module aliases (`import "file.ion" as na
 
 This list is intentionally small; future additions must justify their complexity.
 
+#### 2.3 Unsafe Blocks and Safety Boundaries
+
+The `unsafe` keyword marks code blocks where Ion's safety guarantees are suspended:
+
+- **Array bounds checking** is disabled for array indexing within `unsafe` blocks
+- **Raw pointer dereferencing** is only permitted within `unsafe` blocks  
+- **FFI calls** to `extern "C"` functions must be wrapped in `unsafe` blocks
+
+##### Unsafe Contract
+
+Code within `unsafe` blocks must manually uphold the following invariants:
+
+1. **No out-of-bounds array access**: All array indices must be valid
+2. **No null pointer dereference**: All pointer dereferences must be to valid memory
+3. **No data races**: Concurrent access to shared mutable state is prohibited
+
+Violating these invariants results in **undefined behavior**.
+
+##### Standard Library Safety Boundary
+
+The Ion standard library provides safe wrappers around unsafe FFI operations. User code should:
+
+- Use standard library functions (e.g., `io::print_str`) instead of direct FFI calls
+- Only use `unsafe` blocks for performance-critical code with proven correctness
+- Document all `unsafe` blocks with safety justifications
+
+**Example: Safe I/O**
+
+```ion
+// Safe wrapper (recommended)
+import "stdlib/io.ion" as io;
+
+fn main() -> int {
+    io::print_str("Hello, World!\n", 14);
+    return 0;
+}
+```
+
+```ion
+// Direct FFI (requires unsafe)
+extern "C" {
+    fn write(fd: int, buf: *u8, count: int) -> int;
+}
+
+fn main() -> int {
+    unsafe {
+        let _result: int = write(1, "Hello, World!\n", 14);
+    }
+    return 0;
+}
+```
+
+
 ##### 2.2.3 Literals
 
 Ion supports:
@@ -420,6 +473,38 @@ Additional built-in generic types:
 - `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::push_str()`, `String::len()`)
 - `[T; N]` – fixed-size array of `N` elements of type `T` (Phase 3)
 - `[]T` – dynamically sized slice (fat pointer) of type `T` (Phase 3)
+
+#### 4.1.1 Array Safety
+
+Fixed-size arrays `[T; N]` have the following safety properties:
+
+- **Bounds checking**: Array indexing `arr[i]` performs runtime bounds checking by default
+  - If `i < 0` or `i >= N`, the program panics with an error message via `ion_panic()`
+  - The panic prints "Array index out of bounds" to stderr and aborts the program
+  - Bounds checking can be disabled in `unsafe` blocks for performance-critical code
+- **Compile-time size**: Array size `N` must be a compile-time constant
+- **Stack allocation**: Arrays are allocated on the stack by default
+
+**Safe array access:**
+```ion
+let arr: [int; 5] = [1, 2, 3, 4, 5];
+let x = arr[2]; // OK: bounds checked at runtime
+```
+
+**Unsafe array access (no bounds checking):**
+```ion
+let arr: [int; 5] = [1, 2, 3, 4, 5];
+unsafe {
+    let x = arr[2]; // No bounds check - faster but unsafe
+}
+```
+
+**Out-of-bounds access (panics):**
+```ion
+let arr: [int; 3] = [1, 2, 3];
+let x = arr[10]; // Runtime panic: "Array index out of bounds"
+```
+
 
 **Standard library enums (user-defined in Phase 1):**
 - `Option<T>` – optional value (`Some(T)` or `None`) – can be defined as a generic enum
@@ -1355,12 +1440,22 @@ Phase 3 extends Phase 2 with arrays, slices, explicit unsafe blocks, and multi-f
 - **String Literals**: `"..."` string literals with automatic conversion to `String` type
 
 #### 12.4 Not Yet Implemented
-- Pattern matching guards
-- Trait bounds on generic parameters
-- Additional `Vec<T>` operations (indexing syntax, iterators)
-- Array-to-slice coercion in function calls (type checker allows it, but codegen needs enhancement to create slice structs)
+- Advanced iterator pipelines and zero-cost abstractions beyond the basics.
 
-### 16. Future Work (Non-Normative)
+### 16. Phase 8 Implementation Status
+
+Phase 8 extends Phase 7 with type casting, array element assignment, complete comparison operators, and a safe standard library. **Phase 8 is complete** with all features implemented and tested.
+
+#### 13.1 Implemented in Phase 8 (Complete)
+- **Comparison Operators**: Full support for `<=`, `>=` (in addition to `==`, `!=`, `<`, `>`)
+- **Modulo Operator**: `%` for integer types
+- **Type Casting**: `as` keyword for numeric conversions (e.g., `float as int`)
+- **Array Element Assignment**: `arr[i] = value` syntax for mutable arrays
+- **Standard Library**: Safe I/O module (`stdlib/io.ion`)
+  - `io::print`, `io::println` for safe string output
+  - `String` field access (`.data`, `.len`) for low-level manipulation
+
+### 17. Future Work (Non-Normative)
 
 The following features are deliberately **out of scope** for Phase 2:
 
@@ -1373,8 +1468,8 @@ Any such addition must:
 
 - Preserve the no-escape rule and simple ownership model.
 - Not require GC or complex runtime machinery.
- 
-### 17. Appendix: Recommended Design Patterns (Non-Normative)
+
+### 18. Appendix: Recommended Design Patterns (Non-Normative)
 
 This appendix describes idioms that work well with Ion’s ownership and no-escape borrowing rules.  They are not part of the core semantics, but library and application authors are encouraged to follow them for clarity and safety.
 

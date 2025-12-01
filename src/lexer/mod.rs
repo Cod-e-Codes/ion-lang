@@ -46,6 +46,7 @@ pub enum TokenKind {
     Minus,        // -
     Star,         // *
     Slash,        // /
+    Percent,      // %
     Dot,          // .
     Ellipsis,     // ...
     Equals,       // = (assignment)
@@ -187,6 +188,10 @@ impl Lexer {
                     } else {
                         TokenKind::Slash
                     }
+                }
+                Some('%') => {
+                    self.advance();
+                    TokenKind::Percent
                 }
                 Some('=') => {
                     self.advance();
