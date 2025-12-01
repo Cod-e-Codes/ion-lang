@@ -291,6 +291,17 @@ fn type_to_c_impl(ty: &Type) -> String {
     }
 }
 
+// In src/cgen/mod.rs, near your existing type helper functions
+fn type_to_c_return_type(ty: &Type) -> String {
+    match ty {
+        Type::Array { inner, size: _ } => {
+            // CRITICAL FIX: Array return types in Ion must become pointers in C.
+            format!("{}*", type_to_c_impl(inner))
+        }
+        _ => type_to_c_impl(ty),
+    }
+}
+
 impl Codegen {
     pub fn new() -> Self {
         Codegen {
@@ -610,7 +621,9 @@ impl Codegen {
             let return_type = func
                 .return_type
                 .as_ref()
-                .map(|t| self.type_to_c(t))
+                // *** MODIFICATION: Use the new helper here ***
+                .map(|ty| type_to_c_return_type(&resolve_type_alias(ty, &self.type_aliases)))
+                // **********************************************
                 .unwrap_or_else(|| "void".to_string());
             self.write(&format!("{} {}(", return_type, func.name));
             if func.params.is_empty() {
