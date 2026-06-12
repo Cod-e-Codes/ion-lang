@@ -36,10 +36,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_arithmetic.ion` - Arithmetic operations
 - `test_move_basic.ion` - Move semantics
 - `test_ref_valid.ion` - Valid reference usage
-- `test_send_basic.ion` - Placeholder smoke test (returns 42)
+- `test_send_basic.ion` - Send/Send smoke test
 - `test_defer_basic.ion` - Defer statements
 - `test_channel_basic.ion` - Channel operations
 - `test_spawn_basic.ion` - Spawn statements
+- `test_spawn_channel.ion` - Cross-thread channel send/recv via spawn
 - `test_if_basic.ion` - If statements with else
 - `test_if_no_else.ion` - If statements without else
 - `test_struct_basic.ion` - Struct declarations

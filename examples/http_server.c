@@ -4,10 +4,16 @@
 #include <stdint.h>
 #include "ion_runtime.h"
 
+static void* ion_spawn_entry_0(void* arg);
+typedef struct {
+    int client_fd;
+} ion_spawn_ctx_0;
+
 typedef struct SockAddrInBytes {
     uint8_t data[16];
 } SockAddrInBytes;
 
+extern void ion_net_init(void);
 extern int socket(int domain, int sock_type, int protocol);
 extern int bind(int sockfd, uint8_t* addr, int addrlen);
 extern int listen(int sockfd, int backlog);
@@ -19,6 +25,7 @@ extern uint16_t htons(uint16_t hostshort);
 
 SockAddrInBytes create_sockaddr_in(uint16_t port);
 int handle_client(int client_fd);
+void dispatch_client(int client_fd);
 int main(void);
 SockAddrInBytes create_sockaddr_in(uint16_t port) {
     SockAddrInBytes ret_val = {0};
@@ -28,7 +35,7 @@ SockAddrInBytes create_sockaddr_in(uint16_t port) {
         uint8_t port_high = (uint8_t)(port_net >> shift8);
         uint16_t mask_255 = 255;
         uint8_t port_low = (uint8_t)(port_net & mask_255);
-        uint8_t addr[16] = {(uint8_t)2, (uint8_t)0, port_high, port_low, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0};
+        uint8_t addr[16] = {(uint8_t)2, (uint8_t)0, port_low, port_high, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0};
         ret_val = (SockAddrInBytes){{0}} /* ARRAY_FIELD:data:addr */;
         memcpy(&ret_val.data, &addr, sizeof(ret_val.data));
         goto epilogue;
@@ -62,10 +69,26 @@ epilogue:
         return ret_val;
 }
 
+void dispatch_client(int client_fd) {
+    if (client_fd < 0) {
+                goto epilogue;
+    }
+    {
+        ion_spawn_ctx_0* ctx = (ion_spawn_ctx_0*)malloc(sizeof(ion_spawn_ctx_0));
+        if (!ctx) { ion_panic("spawn allocation failed"); }
+        ctx->client_fd = client_fd;
+        client_fd = 0;
+        if (ion_spawn(ion_spawn_entry_0, ctx) != 0) { free(ctx); ion_panic("spawn failed"); }
+    }
+epilogue:
+        return;
+}
+
 int main(void) {
     int ret_val = 0;
     {
-        int server_fd = socket(2, 1, 0);
+        ion_net_init();
+        int server_fd = socket(2, 1, 6);
         if (server_fd < 0) {
             ret_val = 1;
             goto epilogue;
@@ -87,12 +110,24 @@ int main(void) {
             uint8_t client_addr[16] = {0};
             int addrlen = 16;
             int client_fd = accept(server_fd, &client_addr[0], &addrlen);
-            int _result = handle_client(client_fd);
+            dispatch_client(client_fd);
         }
     }
     ret_val = 0;
     goto epilogue;
 epilogue:
         return ret_val;
+}
+
+
+static void* ion_spawn_entry_0(void* arg) {
+    ion_spawn_ctx_0* ctx = (ion_spawn_ctx_0*)arg;
+    if (!ctx) { ion_panic("spawn null context"); }
+    int client_fd = ctx->client_fd;
+    free(ctx);
+    {
+        int _result = handle_client(client_fd);
+    }
+    return NULL;
 }
 

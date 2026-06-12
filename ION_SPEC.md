@@ -1065,6 +1065,7 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - No `else if` syntax; use nested `if`/`else`
 - `break` and `continue` are not implemented
+- `if`/`else` merge: a variable moved in only one branch is an error; use early return or a helper function instead
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP type hover on variable uses only, not `let` binding sites
 - LSP go-to-definition does not resolve function or method callees

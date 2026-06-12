@@ -21,6 +21,12 @@ extern "C" {
  */
 void ion_panic(const char *message);
 
+/**
+ * Initializes platform networking (WSAStartup on Windows, no-op elsewhere).
+ * Call once before socket FFI in programs that use BSD sockets.
+ */
+void ion_net_init(void);
+
 // ============================================================================
 // Threading
 // ============================================================================

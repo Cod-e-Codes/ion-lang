@@ -24,6 +24,9 @@ pub struct Codegen {
     in_unsafe_block: bool,                                // Track if we're in an unsafe block
     temp_var_counter: usize, // Counter for unique temporary variable names
     current_function_params: HashMap<String, Type>, // Track current function parameter types for field access
+    spawn_counter: usize,
+    spawn_forward_decls: String,
+    spawn_definitions: String,
 }
 
 impl Default for Codegen {
@@ -324,6 +327,9 @@ impl Codegen {
             in_unsafe_block: false,
             temp_var_counter: 0,
             current_function_params: HashMap::new(),
+            spawn_counter: 0,
+            spawn_forward_decls: String::new(),
+            spawn_definitions: String::new(),
         }
     }
 
@@ -352,6 +358,9 @@ impl Codegen {
                 .insert(function.name.clone(), function.return_type.clone());
         }
         self.generated_types.clear();
+        self.spawn_counter = 0;
+        self.spawn_forward_decls.clear();
+        self.spawn_definitions.clear();
 
         // Generate includes if needed
         self.writeln("#include <stdio.h>");
@@ -653,9 +662,24 @@ impl Codegen {
             self.writeln(");");
         }
 
-        // Generate each function
+        // Generate each function (populates spawn forward/definition buffers)
         for function in &program.functions {
             self.generate_function(function);
+        }
+
+        if !self.spawn_forward_decls.is_empty()
+            && let Some(pos) = self.output.find("#include \"ion_runtime.h\"\n\n")
+        {
+            let insert_at = pos + "#include \"ion_runtime.h\"\n\n".len();
+            let mut forward_decls = self.spawn_forward_decls.clone();
+            forward_decls.push('\n');
+            self.output.insert_str(insert_at, &forward_decls);
+        }
+
+        if !self.spawn_definitions.is_empty() {
+            self.writeln("");
+            let spawn_defs = self.spawn_definitions.clone();
+            self.write(&spawn_defs);
         }
 
         self.output.clone()
@@ -681,6 +705,9 @@ impl Codegen {
             self.struct_map.insert(s.name.clone(), s.clone());
         }
         self.generated_types.clear();
+        self.spawn_counter = 0;
+        self.spawn_forward_decls.clear();
+        self.spawn_definitions.clear();
 
         // Generate includes
         self.writeln("#include <stdio.h>");
@@ -958,6 +985,21 @@ impl Codegen {
             self.generate_function(function);
         }
 
+        if !self.spawn_forward_decls.is_empty()
+            && let Some(pos) = self.output.find("#include \"ion_runtime.h\"\n\n")
+        {
+            let insert_at = pos + "#include \"ion_runtime.h\"\n\n".len();
+            let mut forward_decls = self.spawn_forward_decls.clone();
+            forward_decls.push('\n');
+            self.output.insert_str(insert_at, &forward_decls);
+        }
+
+        if !self.spawn_definitions.is_empty() {
+            self.writeln("");
+            let spawn_defs = self.spawn_definitions.clone();
+            self.write(&spawn_defs);
+        }
+
         self.output.clone()
     }
 
@@ -1180,6 +1222,100 @@ impl Codegen {
         self.indent_level -= 1;
         self.writeln("}");
         self.writeln("");
+    }
+
+    fn generate_spawn(&mut self, spawn: &IRSpawn) {
+        let spawn_id = self.spawn_counter;
+        self.spawn_counter += 1;
+
+        let ctx_name = format!("ion_spawn_ctx_{}", spawn_id);
+        let entry_name = format!("ion_spawn_entry_{}", spawn_id);
+
+        self.spawn_forward_decls
+            .push_str(&format!("static void* {}(void* arg);\n", entry_name));
+
+        if !spawn.captures.is_empty() {
+            self.spawn_forward_decls.push_str("typedef struct {\n");
+            for (name, ty) in &spawn.captures {
+                self.spawn_forward_decls.push_str(&format!(
+                    "    {} {};\n",
+                    self.type_to_c(ty),
+                    name
+                ));
+            }
+            self.spawn_forward_decls
+                .push_str(&format!("}} {};\n", ctx_name));
+        }
+
+        // Thread entry function implementation (typedef emitted in forward declarations).
+        let mut def = String::new();
+        def.push_str(&format!("static void* {}(void* arg) {{\n", entry_name));
+        if !spawn.captures.is_empty() {
+            def.push_str(&format!("    {}* ctx = ({}*)arg;\n", ctx_name, ctx_name));
+            def.push_str("    if (!ctx) { ion_panic(\"spawn null context\"); }\n");
+            for (name, ty) in &spawn.captures {
+                def.push_str(&format!(
+                    "    {} {} = ctx->{};\n",
+                    self.type_to_c(ty),
+                    name,
+                    name
+                ));
+            }
+            def.push_str("    free(ctx);\n");
+        } else {
+            def.push_str("    (void)arg;\n");
+        }
+        def.push_str("    {\n");
+        let saved_output = std::mem::take(&mut self.output);
+        let saved_indent = self.indent_level;
+        self.indent_level = 2;
+        self.generate_block(&spawn.body);
+        for defer_expr in spawn.defers.iter().rev() {
+            self.write_indent();
+            self.generate_expr(defer_expr);
+            self.writeln(";");
+        }
+        let body_code = std::mem::take(&mut self.output);
+        self.output = saved_output;
+        self.indent_level = saved_indent;
+        def.push_str(&body_code);
+        def.push_str("    }\n");
+        def.push_str("    return NULL;\n");
+        def.push_str("}\n\n");
+        self.spawn_definitions.push_str(&def);
+
+        // Spawn site: heap-allocate captures and start a detached thread.
+        self.write_indent();
+        self.writeln("{");
+        self.indent_level += 1;
+        self.write_indent();
+        if spawn.captures.is_empty() {
+            self.writeln(&format!(
+                "if (ion_spawn({}, NULL) != 0) {{ ion_panic(\"spawn failed\"); }}",
+                entry_name
+            ));
+        } else {
+            self.writeln(&format!(
+                "{}* ctx = ({}*)malloc(sizeof({}));",
+                ctx_name, ctx_name, ctx_name
+            ));
+            self.write_indent();
+            self.writeln("if (!ctx) { ion_panic(\"spawn allocation failed\"); }");
+            for (name, ty) in &spawn.captures {
+                self.write_indent();
+                self.writeln(&format!("ctx->{} = {};", name, name));
+                self.write_indent();
+                self.writeln(&format!("{} = {};", name, self.zero_value_for_type(ty)));
+            }
+            self.write_indent();
+            self.writeln(&format!(
+                "if (ion_spawn({}, ctx) != 0) {{ free(ctx); ion_panic(\"spawn failed\"); }}",
+                entry_name
+            ));
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.writeln("}");
     }
 
     fn generate_block(&mut self, block: &IRBlock) {
@@ -1568,14 +1704,7 @@ impl Codegen {
                 // in the epilogue; no direct code is generated here.
             }
             IRStmt::Spawn(spawn) => {
-                // For now, spawn is lowered to a synchronous nested block.
-                self.write_indent();
-                self.writeln("{");
-                self.indent_level += 1;
-                self.generate_block(&spawn.body);
-                self.indent_level -= 1;
-                self.write_indent();
-                self.writeln("}");
+                self.generate_spawn(spawn);
             }
             IRStmt::If(ir_if) => {
                 // Generate: if (cond) { ... } else { ... }
@@ -2248,6 +2377,17 @@ impl Codegen {
     fn type_to_c(&self, ty: &Type) -> String {
         let resolved = resolve_type_alias(ty, &self.type_aliases);
         type_to_c_impl(&resolved)
+    }
+
+    /// Zero-initialize a moved capture in the parent scope after ownership transfers to the thread.
+    fn zero_value_for_type(&self, ty: &Type) -> String {
+        let resolved = resolve_type_alias(ty, &self.type_aliases);
+        match resolved {
+            Type::Struct(_) | Type::Enum(_) | Type::Sender { .. } | Type::Receiver { .. } => {
+                format!("({}){{0}}", type_to_c_impl(&resolved))
+            }
+            _ => "0".to_string(),
+        }
     }
 
     /// Generate code for built-in function calls.
@@ -3729,7 +3869,12 @@ fn collect_vec_types_from_stmt(stmt: &IRStmt, vec_types: &mut std::collections::
                 collect_vec_types_from_stmt(stmt, vec_types);
             }
         }
-        IRStmt::Spawn(_) | IRStmt::Defer(_) => {}
+        IRStmt::Spawn(spawn) => {
+            for stmt in &spawn.body.statements {
+                collect_vec_types_from_stmt(stmt, vec_types);
+            }
+        }
+        IRStmt::Defer(_) => {}
         IRStmt::UnsafeBlock(unsafe_block) => {
             for stmt in &unsafe_block.body.statements {
                 collect_vec_types_from_stmt(stmt, vec_types);
@@ -4169,7 +4314,12 @@ fn collect_generic_from_stmt(
                 collect_generic_from_stmt(stmt, instantiations);
             }
         }
-        IRStmt::Spawn(_) | IRStmt::Defer(_) => {}
+        IRStmt::Spawn(spawn) => {
+            for stmt in &spawn.body.statements {
+                collect_generic_from_stmt(stmt, instantiations);
+            }
+        }
+        IRStmt::Defer(_) => {}
         IRStmt::UnsafeBlock(unsafe_block) => {
             for stmt in &unsafe_block.body.statements {
                 collect_generic_from_stmt(stmt, instantiations);

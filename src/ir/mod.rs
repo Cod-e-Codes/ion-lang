@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::tc::collect_captured_vars;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -66,7 +67,10 @@ pub struct IRReturn {
 
 #[derive(Debug, Clone)]
 pub struct IRSpawn {
+    pub captures: Vec<(String, Type)>,
     pub body: IRBlock,
+    /// Defers collected from the spawn body (run on thread exit).
+    pub defers: Vec<IREexpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -353,6 +357,8 @@ impl IRBuilder {
                                     tuple_destructure_index: Some(1), // 1 = second element (receiver)
                                 }),
                             }));
+                            ctx.record_binding(tx_name, &elements[0]);
+                            ctx.record_binding(rx_name, &elements[1]);
                             return;
                         }
                     }
@@ -412,16 +418,36 @@ impl IRBuilder {
                 defers.push(build_expr_with_ctx(&defer_stmt.expr, ctx));
             }
             Stmt::Spawn(spawn_stmt) => {
-                // Lower spawn to a nested block in IR for now (synchronous execution).
-                let mut inner_stmts = Vec::new();
-                for inner in &spawn_stmt.body.statements {
-                    Self::lower_stmt(inner, &mut inner_stmts, defers, ctx);
+                let captured_names = collect_captured_vars(&spawn_stmt.body);
+                let mut captures = Vec::new();
+                for name in captured_names {
+                    if let Some(ty) = ctx.var_types.get(&name) {
+                        captures.push((name, ty.clone()));
+                    }
                 }
+
+                let parent_vars = ctx.var_types.clone();
+                ctx.var_types.clear();
+                for (name, ty) in &captures {
+                    ctx.record_binding(name, ty);
+                }
+
+                let mut inner_stmts = Vec::new();
+                let mut spawn_defers = Vec::new();
+                for inner in &spawn_stmt.body.statements {
+                    Self::lower_stmt(inner, &mut inner_stmts, &mut spawn_defers, ctx);
+                }
+                ctx.var_types = parent_vars;
+
                 let inner_block = IRBlock {
                     name: "spawn_body".to_string(),
                     statements: inner_stmts,
                 };
-                out.push(IRStmt::Spawn(IRSpawn { body: inner_block }));
+                out.push(IRStmt::Spawn(IRSpawn {
+                    captures,
+                    body: inner_block,
+                    defers: spawn_defers,
+                }));
             }
             Stmt::If(if_stmt) => {
                 // Lower `if` to an IRIf with nested blocks.
@@ -1022,7 +1048,26 @@ fn rewrite_generic_calls_in_block(
             IRStmt::Defer(expr) => {
                 rewrite_generic_calls_in_expr(expr, generic_defs, var_types, instantiations);
             }
-            IRStmt::Spawn(_) => {}
+            IRStmt::Spawn(spawn) => {
+                let mut spawn_vars = var_types.clone();
+                for (name, ty) in &spawn.captures {
+                    spawn_vars.insert(name.clone(), ty.clone());
+                }
+                rewrite_generic_calls_in_block(
+                    &mut spawn.body,
+                    generic_defs,
+                    &mut spawn_vars,
+                    instantiations,
+                );
+                for defer_expr in &mut spawn.defers {
+                    rewrite_generic_calls_in_expr(
+                        defer_expr,
+                        generic_defs,
+                        &spawn_vars,
+                        instantiations,
+                    );
+                }
+            }
         }
     }
 }
@@ -1329,7 +1374,17 @@ fn substitute_types_in_stmt(stmt: &IRStmt, substitutions: &HashMap<String, Type>
         IRStmt::Expr(expr) => IRStmt::Expr(substitute_types_in_expr(expr, substitutions)),
         IRStmt::Defer(expr) => IRStmt::Defer(substitute_types_in_expr(expr, substitutions)),
         IRStmt::Spawn(spawn) => IRStmt::Spawn(IRSpawn {
+            captures: spawn
+                .captures
+                .iter()
+                .map(|(name, ty)| (name.clone(), substitute_type(ty, substitutions)))
+                .collect(),
             body: substitute_types_in_block(&spawn.body, substitutions),
+            defers: spawn
+                .defers
+                .iter()
+                .map(|expr| substitute_types_in_expr(expr, substitutions))
+                .collect(),
         }),
         IRStmt::If(ir_if) => IRStmt::If(IRIf {
             cond: substitute_types_in_expr(&ir_if.cond, substitutions),

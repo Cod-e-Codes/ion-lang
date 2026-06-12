@@ -119,7 +119,7 @@ gcc input.c runtime/ion_runtime.c -o input -I. -I.. -Iruntime -I../runtime -lpth
 - `input.c` - generated C file
 - `runtime/ion_runtime.c` - Ion runtime (when running from project root)
 - `-I. -I.. -Iruntime -I../runtime` - include paths for runtime headers
-- `-lpthread` - pthread library (required for channels)
+- `-lpthread` - pthread library (required for channels and spawn)
 - `-o input` - output executable name
 
 **Step 3: Run**
@@ -135,8 +135,10 @@ If your Ion program uses FFI names that conflict with Ion keywords (`recv`, `sen
 ```bash
 gcc http_server.c runtime/ion_runtime.c -o http_server \
     -I. -I.. -Iruntime -I../runtime -lpthread \
-    -Drecv_sys=recv -Dsend_sys=send
+    -Drecv_sys=recv -Dsend_sys=send -Dclose=closesocket -lws2_32
 ```
+
+On Linux or macOS, omit `-lws2_32` and `-Dclose=closesocket`. `ion_net_init()` is a no-op outside Windows.
 
 ### Multi-File Mode
 
@@ -154,8 +156,9 @@ Compile and run any example with the same pattern as the quick start above. For 
 |------|---------------------|
 | [examples/hello_world.ion](examples/hello_world.ion) | Minimal FFI `write()` to stdout |
 | [examples/hello_world_safe.ion](examples/hello_world_safe.ion) | stdlib `io` module |
-| [examples/http_server.ion](examples/http_server.ion) | Sockets, FFI, POSIX name mapping |
-| [examples/showcase.ion](examples/showcase.ion) | Mixed language features |
+| [examples/spawn_channel.ion](examples/spawn_channel.ion) | `spawn` with cross-thread channels |
+| [examples/http_server.ion](examples/http_server.ion) | Sockets, FFI, concurrent clients via `spawn` |
+| [examples/showcase.ion](examples/showcase.ion) | Mixed language features (includes spawn/channels) |
 | [examples/minimal.ion](examples/minimal.ion) | Smallest valid program |
 
 ## Project Structure

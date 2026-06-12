@@ -287,7 +287,10 @@ fn link_executable(object_files: &[String], executable_name: &str) -> Result<(),
 
     // Add standard libraries
     args.push("-lm"); // Math library
-    args.push("-lpthread"); // Thread library for channels
+    args.push("-lpthread"); // Thread library for channels and spawn
+    if cfg!(windows) {
+        args.push("-lws2_32");
+    }
 
     let output = Command::new(&cc)
         .args(&args)

@@ -61,8 +61,13 @@ test_file() {
     fi
     # Add include paths for runtime headers (ion_runtime.h can be in runtime/ or ../runtime/)
     compile_cmd="$compile_cmd -I. -I.. -Iruntime -I../runtime"
-    # Link with pthread for channel support
+    # Link with pthread for channels and spawn
     compile_cmd="$compile_cmd -lpthread"
+    if command -v uname >/dev/null 2>&1; then
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*) compile_cmd="$compile_cmd -lws2_32" ;;
+        esac
+    fi
     compile_cmd="$compile_cmd -o \"${test_name}${EXE_SUFFIX}\""
     if ! eval "$compile_cmd" 2>/dev/null; then
         echo -e "${RED}FAIL${NC} - C compilation failed"
@@ -165,6 +170,10 @@ fi
 
 if [ -f "test_spawn_basic.ion" ]; then
     test_file "test_spawn_basic.ion" 0 || true
+fi
+
+if [ -f "test_spawn_channel.ion" ]; then
+    test_file "test_spawn_channel.ion" 0 || true
 fi
 
 if [ -f "test_if_basic.ion" ]; then
@@ -558,7 +567,13 @@ if [ -f "test_multifile.ion" ] && [ -f "utils.ion" ]; then
             fi
             
             # Compile and run the executable
-            multifile_cc="$CC test_multifile.c utils.c -I. -I.. -Iruntime -I../runtime ../runtime/ion_runtime.c -lpthread -o test_multifile${EXE_SUFFIX}"
+            multifile_cc="$CC test_multifile.c utils.c -I. -I.. -Iruntime -I../runtime ../runtime/ion_runtime.c -lpthread"
+            if command -v uname >/dev/null 2>&1; then
+                case "$(uname -s)" in
+                    MINGW*|MSYS*|CYGWIN*) multifile_cc="$multifile_cc -lws2_32" ;;
+                esac
+            fi
+            multifile_cc="$multifile_cc -o test_multifile${EXE_SUFFIX}"
             if ! eval "$multifile_cc" 2>/dev/null; then
                 echo -e "${RED}FAIL${NC} - C compilation failed"
                 fail_count=$((fail_count + 1))

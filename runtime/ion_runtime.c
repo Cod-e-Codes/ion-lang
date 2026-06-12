@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+#endif
 
 // ============================================================================
 // Safety and Error Handling
@@ -237,6 +241,31 @@ void ion_string_free(ion_string_t *s) {
   if (s->data)
     free(s->data);
   free(s);
+}
+
+// ============================================================================
+// Networking (platform socket setup)
+// ============================================================================
+
+void ion_net_init(void) {
+#ifdef _WIN32
+  WSADATA wsa;
+  if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+    ion_panic("WSAStartup failed");
+#endif
+}
+
+// ============================================================================
+// Threading
+// ============================================================================
+
+int ion_spawn(void *(*start_routine)(void *), void *arg) {
+  pthread_t thread;
+  int rc = pthread_create(&thread, NULL, start_routine, arg);
+  if (rc != 0)
+    return rc;
+  pthread_detach(thread);
+  return 0;
 }
 
 // ============================================================================

@@ -9,22 +9,20 @@
 // - Type casting: (port_net >> 8) as u8 for byte extraction
 // - Array element assignment in recv/send buffer use
 //
-// Note: This is a simplified example. A production server would:
-// - Handle multiple concurrent connections using spawn
-// - Parse HTTP requests properly
-// - Handle errors more gracefully
-// - Support different routes and methods
+// Note: This is a simplified example. A production server would still need
+// proper HTTP parsing, error handling, and routing.
 //
 // IMPORTANT: Since 'recv' and 'send' are keywords in Ion, we use 'recv_sys' and 'send_sys'.
 // After compiling to C, you'll need to add these lines to the generated .c file before linking:
 //   #define recv_sys recv
 //   #define send_sys send
-// Or compile with: gcc -Drecv_sys=recv -Dsend_sys=send ...
+// Or compile with: gcc ... -Drecv_sys=recv -Dsend_sys=send -Dclose=closesocket -lws2_32
 
 // ============================================
 // FFI Declarations - POSIX Socket Functions
 // ============================================
 extern "C" {
+    fn ion_net_init();
     // Socket creation and configuration
     fn socket(domain: int, sock_type: int, protocol: int) -> int;
     // Using &int for file descriptors to avoid move semantics
@@ -53,8 +51,8 @@ extern "C" {
     // It will be available automatically when linking with the standard library
 }
 
-// Socket constants (POSIX)
-// AF_INET = 2, SOCK_STREAM = 1, IPPROTO_TCP = 0
+// Socket constants (POSIX / Winsock)
+// AF_INET = 2, SOCK_STREAM = 1, IPPROTO_TCP = 6
 
 // ============================================
 // Helper Functions
@@ -92,9 +90,10 @@ fn create_sockaddr_in(port: u16) -> SockAddrInBytes {
         // sin_family = AF_INET = 2
         // sin_port (network byte order) - dynamically extracted from port_net
         // All values must be u8, so cast integer literals
+        // sin_port: store htons result in little-endian memory order (low byte first)
         let addr: [u8; 16] = [
             2 as u8, 0 as u8,           // sin_family = AF_INET
-            port_high, port_low,  // sin_port (network byte order)
+            port_low, port_high,        // sin_port (network order in memory)
             0 as u8, 0 as u8, 0 as u8, 0 as u8,     // sin_addr = INADDR_ANY
             0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8  // sin_zero (padding)
         ];
@@ -143,13 +142,24 @@ fn handle_client(client_fd: int) -> int {
     return 0;
 }
 
+fn dispatch_client(client_fd: int) {
+    if client_fd < 0 {
+        return;
+    }
+    spawn {
+        let _result: int = handle_client(client_fd);
+    };
+}
+
 // ============================================
 // Main Server Function
 // ============================================
 fn main() -> int {
     unsafe {
+        ion_net_init();
+
         // Create socket
-        let server_fd: int = socket(2, 1, 0);  // AF_INET, SOCK_STREAM, IPPROTO_TCP
+        let server_fd: int = socket(2, 1, 6);  // AF_INET, SOCK_STREAM, IPPROTO_TCP
         if server_fd < 0 {
             return 1;  // Socket creation failed
         }
@@ -173,25 +183,12 @@ fn main() -> int {
             return 3;  // Listen failed
         }
         
-        // Enter an infinite loop to continuously accept connections
-        // In a production server, you'd use spawn to handle each connection concurrently:
-        //   while true {
-        //       let client_fd = accept(...);
-        //       spawn { handle_client(client_fd); };
-        //   }
         while true {
-            // Re-initialize client address structure inside the loop
-            // Now using array initialization syntax: [0; 16]
             let mut client_addr: [u8; 16] = [0; 16];
             let mut addrlen: int = 16;
-            
-            // This call blocks until a client connects
+
             let client_fd: int = accept(&server_fd, &mut client_addr[0], &mut addrlen);
-            
-            // Handle the client connection synchronously
-            // Note: If accept failed (returned -1), handle_client will detect the error
-            // when trying to recv and will close the invalid fd
-            let _result: int = handle_client(client_fd);
+            dispatch_client(client_fd);
         }
         
         // Note: close(&server_fd) is now unreachable since the loop is infinite

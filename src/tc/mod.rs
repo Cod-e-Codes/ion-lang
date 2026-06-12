@@ -4054,119 +4054,164 @@ fn substitute_generic_types_impl(
     }
 }
 
-/// Collect names of variables from the current scope that are referenced inside a block.
-fn collect_captured_vars(block: &Block) -> Vec<String> {
-    let mut names = Vec::new();
+/// Collect names of variables from the enclosing scope referenced inside a block.
+/// Locals declared inside the block (including nested scopes) are excluded.
+pub(crate) fn collect_captured_vars(block: &Block) -> Vec<String> {
+    use std::collections::HashSet;
 
-    fn visit_block(block: &Block, out: &mut Vec<String>) {
-        for stmt in &block.statements {
-            match stmt {
-                Stmt::Let(let_stmt) => {
-                    if let Some(ref init) = let_stmt.init {
-                        visit_expr(init, out);
-                    }
-                }
-                Stmt::Return(return_stmt) => {
-                    if let Some(ref value) = return_stmt.value {
-                        visit_expr(value, out);
-                    }
-                }
-                Stmt::Expr(expr_stmt) => visit_expr(&expr_stmt.expr, out),
-                Stmt::Defer(defer_stmt) => visit_expr(&defer_stmt.expr, out),
-                Stmt::Spawn(spawn_stmt) => visit_block(&spawn_stmt.body, out),
-                Stmt::If(if_stmt) => {
-                    visit_expr(&if_stmt.cond, out);
-                    visit_block(&if_stmt.then_block, out);
-                    if let Some(ref else_blk) = if_stmt.else_block {
-                        visit_block(else_blk, out);
-                    }
-                }
-                Stmt::While(while_stmt) => {
-                    visit_expr(&while_stmt.cond, out);
-                    visit_block(&while_stmt.body, out);
-                }
-                Stmt::UnsafeBlock(unsafe_stmt) => {
-                    visit_block(&unsafe_stmt.body, out);
-                }
-                Stmt::For(for_stmt) => {
-                    visit_expr(&for_stmt.iterable, out);
-                    visit_block(&for_stmt.body, out);
+    let mut refs = Vec::new();
+    let mut locals = HashSet::new();
+    collect_block_var_refs(block, &mut refs, &mut locals);
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
+fn add_pattern_binding_names(pattern: &Pattern, locals: &mut std::collections::HashSet<String>) {
+    match pattern {
+        Pattern::Binding { name, .. } => {
+            locals.insert(name.clone());
+        }
+        Pattern::Variant {
+            sub_patterns,
+            named_fields,
+            ..
+        } => {
+            for sub in sub_patterns {
+                add_pattern_binding_names(sub, locals);
+            }
+            if let Some(fields) = named_fields {
+                for (_, sub) in fields {
+                    add_pattern_binding_names(sub, locals);
                 }
             }
         }
+        Pattern::Wildcard { .. } => {}
     }
+}
 
-    fn visit_expr(expr: &Expr, out: &mut Vec<String>) {
-        match expr {
-            Expr::Lit(_) | Expr::BoolLiteral(_) | Expr::FloatLiteral(_) => {}
-            Expr::Var(var_expr) => out.push(var_expr.name.clone()),
-            Expr::Ref(ref_expr) => visit_expr(&ref_expr.inner, out),
-            Expr::StructLit(lit) => {
-                for field in &lit.fields {
-                    visit_expr(&field.value, out);
+fn collect_block_var_refs(
+    block: &Block,
+    refs: &mut Vec<String>,
+    locals: &mut std::collections::HashSet<String>,
+) {
+    for stmt in &block.statements {
+        match stmt {
+            Stmt::Let(let_stmt) => {
+                if let Some(ref init) = let_stmt.init {
+                    collect_expr_var_refs(init, refs, locals);
+                }
+                locals.insert(let_stmt.name.clone());
+                if let Some(ref patterns) = let_stmt.patterns {
+                    for pattern in patterns {
+                        add_pattern_binding_names(pattern, locals);
+                    }
                 }
             }
-            Expr::FieldAccess(acc) => {
-                visit_expr(&acc.base, out);
-            }
-            Expr::BinOp(bin_op_expr) => {
-                visit_expr(&bin_op_expr.left, out);
-                visit_expr(&bin_op_expr.right, out);
-            }
-            Expr::UnOp(un_op_expr) => {
-                visit_expr(&un_op_expr.operand, out);
-            }
-            Expr::Send(send_expr) => {
-                visit_expr(&send_expr.channel, out);
-                visit_expr(&send_expr.value, out);
-            }
-            Expr::Recv(recv_expr) => {
-                visit_expr(&recv_expr.channel, out);
-            }
-            Expr::EnumLit(enum_lit) => {
-                for arg in &enum_lit.args {
-                    visit_expr(arg, out);
+            Stmt::Return(return_stmt) => {
+                if let Some(ref value) = return_stmt.value {
+                    collect_expr_var_refs(value, refs, locals);
                 }
             }
-            Expr::Match(match_expr) => {
-                visit_expr(&match_expr.expr, out);
-                for arm in &match_expr.arms {
-                    visit_block(&arm.body, out);
+            Stmt::Expr(expr_stmt) => collect_expr_var_refs(&expr_stmt.expr, refs, locals),
+            Stmt::Defer(defer_stmt) => collect_expr_var_refs(&defer_stmt.expr, refs, locals),
+            Stmt::Spawn(spawn_stmt) => {
+                collect_block_var_refs(&spawn_stmt.body, refs, locals);
+            }
+            Stmt::If(if_stmt) => {
+                collect_expr_var_refs(&if_stmt.cond, refs, locals);
+                let mut then_locals = locals.clone();
+                collect_block_var_refs(&if_stmt.then_block, refs, &mut then_locals);
+                if let Some(ref else_blk) = if_stmt.else_block {
+                    let mut else_locals = locals.clone();
+                    collect_block_var_refs(else_blk, refs, &mut else_locals);
                 }
             }
-            Expr::Call(call_expr) => {
-                for arg in &call_expr.args {
-                    visit_expr(arg, out);
-                }
+            Stmt::While(while_stmt) => {
+                collect_expr_var_refs(&while_stmt.cond, refs, locals);
+                let mut body_locals = locals.clone();
+                collect_block_var_refs(&while_stmt.body, refs, &mut body_locals);
             }
-            Expr::MethodCall(method_call) => {
-                visit_expr(&method_call.receiver, out);
-                for arg in &method_call.args {
-                    visit_expr(arg, out);
-                }
+            Stmt::UnsafeBlock(unsafe_stmt) => {
+                collect_block_var_refs(&unsafe_stmt.body, refs, locals);
             }
-            Expr::StringLit(_) => {}
-            Expr::ArrayLiteral(arr_lit) => {
-                for elem in &arr_lit.elements {
-                    visit_expr(elem, out);
-                }
-            }
-            Expr::Index(index_expr) => {
-                visit_expr(&index_expr.target, out);
-                visit_expr(&index_expr.index, out);
-            }
-            Expr::Cast(cast_expr) => {
-                visit_expr(&cast_expr.expr, out);
-            }
-            Expr::Assign(assign_expr) => {
-                visit_expr(&assign_expr.target, out);
-                visit_expr(&assign_expr.value, out);
+            Stmt::For(for_stmt) => {
+                collect_expr_var_refs(&for_stmt.iterable, refs, locals);
+                let mut body_locals = locals.clone();
+                body_locals.insert(for_stmt.var_name.clone());
+                collect_block_var_refs(&for_stmt.body, refs, &mut body_locals);
             }
         }
     }
+}
 
-    visit_block(block, &mut names);
-    names.sort();
-    names.dedup();
-    names
+fn collect_expr_var_refs(
+    expr: &Expr,
+    refs: &mut Vec<String>,
+    locals: &std::collections::HashSet<String>,
+) {
+    match expr {
+        Expr::Lit(_) | Expr::BoolLiteral(_) | Expr::FloatLiteral(_) => {}
+        Expr::Var(var_expr) => {
+            if !locals.contains(&var_expr.name) {
+                refs.push(var_expr.name.clone());
+            }
+        }
+        Expr::Ref(ref_expr) => collect_expr_var_refs(&ref_expr.inner, refs, locals),
+        Expr::StructLit(lit) => {
+            for field in &lit.fields {
+                collect_expr_var_refs(&field.value, refs, locals);
+            }
+        }
+        Expr::FieldAccess(acc) => collect_expr_var_refs(&acc.base, refs, locals),
+        Expr::BinOp(bin_op_expr) => {
+            collect_expr_var_refs(&bin_op_expr.left, refs, locals);
+            collect_expr_var_refs(&bin_op_expr.right, refs, locals);
+        }
+        Expr::UnOp(un_op_expr) => collect_expr_var_refs(&un_op_expr.operand, refs, locals),
+        Expr::Send(send_expr) => {
+            collect_expr_var_refs(&send_expr.channel, refs, locals);
+            collect_expr_var_refs(&send_expr.value, refs, locals);
+        }
+        Expr::Recv(recv_expr) => collect_expr_var_refs(&recv_expr.channel, refs, locals),
+        Expr::EnumLit(enum_lit) => {
+            for arg in &enum_lit.args {
+                collect_expr_var_refs(arg, refs, locals);
+            }
+        }
+        Expr::Match(match_expr) => {
+            collect_expr_var_refs(&match_expr.expr, refs, locals);
+            for arm in &match_expr.arms {
+                let mut arm_locals = locals.clone();
+                add_pattern_binding_names(&arm.pattern, &mut arm_locals);
+                collect_block_var_refs(&arm.body, refs, &mut arm_locals);
+            }
+        }
+        Expr::Call(call_expr) => {
+            for arg in &call_expr.args {
+                collect_expr_var_refs(arg, refs, locals);
+            }
+        }
+        Expr::MethodCall(method_call) => {
+            collect_expr_var_refs(&method_call.receiver, refs, locals);
+            for arg in &method_call.args {
+                collect_expr_var_refs(arg, refs, locals);
+            }
+        }
+        Expr::StringLit(_) => {}
+        Expr::ArrayLiteral(arr_lit) => {
+            for elem in &arr_lit.elements {
+                collect_expr_var_refs(elem, refs, locals);
+            }
+        }
+        Expr::Index(index_expr) => {
+            collect_expr_var_refs(&index_expr.target, refs, locals);
+            collect_expr_var_refs(&index_expr.index, refs, locals);
+        }
+        Expr::Cast(cast_expr) => collect_expr_var_refs(&cast_expr.expr, refs, locals),
+        Expr::Assign(assign_expr) => {
+            collect_expr_var_refs(&assign_expr.target, refs, locals);
+            collect_expr_var_refs(&assign_expr.value, refs, locals);
+        }
+    }
 }
