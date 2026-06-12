@@ -4,6 +4,11 @@ use crate::ast::{
 use crate::ir::*;
 use std::collections::HashMap;
 
+enum BoundsCheck {
+    Fixed(usize),
+    StringLen,
+}
+
 pub struct Codegen {
     output: String,
     indent_level: usize,
@@ -1516,7 +1521,11 @@ impl Codegen {
                     } => {
                         self.generate_match_block(match_expr, enum_type, arms);
                     }
-                    IREexpr::Send { channel, value } => {
+                    IREexpr::Send {
+                        channel,
+                        value,
+                        value_type,
+                    } => {
                         // Send is used as a statement - generate it as a block to handle temp variables
                         // This avoids statement expression syntax issues with comma operator
                         self.write_indent();
@@ -1525,8 +1534,7 @@ impl Codegen {
                         let needs_temp =
                             matches!(value.as_ref(), IREexpr::Lit(_) | IREexpr::BoolLiteral(_));
                         if needs_temp {
-                            let value_type = Type::Int; // TODO: infer from context
-                            self.write(&format!("{} _send_val = ", self.type_to_c(&value_type)));
+                            self.write(&format!("{} _send_val = ", self.type_to_c(value_type)));
                             self.generate_expr(value);
                             self.write("; ");
                         }
@@ -1691,7 +1699,11 @@ impl Codegen {
                     self.write(")");
                 }
             },
-            IREexpr::Send { channel, value } => {
+            IREexpr::Send {
+                channel,
+                value,
+                value_type,
+            } => {
                 // ion_channel_send(sender, &value)
                 // channel is &Sender<T>, which should be passed as the sender value
                 // value needs to be in a variable (can't take address of literal)
@@ -1701,9 +1713,7 @@ impl Codegen {
                 let needs_temp =
                     matches!(value.as_ref(), IREexpr::Lit(_) | IREexpr::BoolLiteral(_));
                 if needs_temp {
-                    // Infer value type from context or default to int
-                    let value_type = Type::Int; // TODO: infer from context
-                    self.write(&format!("{} _send_val = ", self.type_to_c(&value_type)));
+                    self.write(&format!("{} _send_val = ", self.type_to_c(value_type)));
                     self.generate_expr(value);
                     self.write("; ");
                 }
@@ -2014,17 +2024,13 @@ impl Codegen {
                 self.write_indent();
                 self.write(&format!("switch ({}.tag) {{", match_var_name));
                 self.writeln("");
-                self.indent_level += 1;
-                for arm in arms {
-                    self.generate_match_arm(
-                        arm,
-                        &monomorphized_enum_name,
-                        enum_decl.as_ref(),
-                        &match_var_name,
-                        &type_params,
-                    );
-                }
-                self.indent_level -= 1;
+                self.emit_grouped_match_arms(
+                    arms,
+                    &monomorphized_enum_name,
+                    enum_decl.as_ref(),
+                    &match_var_name,
+                    &type_params,
+                );
                 self.write_indent();
                 self.writeln("}");
                 // Statement expressions need a value - use 0 as dummy value
@@ -2156,43 +2162,58 @@ impl Codegen {
                     self.generate_expr(index);
                     self.write("]");
                 } else {
-                    // Bounds-checked indexing using statement expression
-                    // Generate: ({ int __idx = index; (__idx >= 0 && __idx < len) ? arr[__idx] : (ion_panic("..."), arr[0]); })
-
-                    // Extract array length if we have type information
-                    let array_len = if let Some(Type::Array { size, .. }) = target_type {
-                        Some(*size)
-                    } else {
-                        None
+                    let bounds_check = match target_type {
+                        Some(Type::Array { size, .. }) => Some(BoundsCheck::Fixed(*size)),
+                        Some(Type::String) => Some(BoundsCheck::StringLen),
+                        _ => None,
                     };
 
-                    if let Some(len) = array_len {
-                        // We know the array length at compile time - generate bounds check
-                        let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
-                        self.temp_var_counter += 1;
+                    let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
+                    self.temp_var_counter += 1;
 
-                        self.write("({ int ");
-                        self.write(&temp_var);
-                        self.write(" = ");
-                        self.generate_expr(index);
-                        self.write("; (");
-                        self.write(&temp_var);
-                        self.write(" >= 0 && ");
-                        self.write(&temp_var);
-                        self.write(&format!(" < {}) ? ", len));
-                        self.generate_expr(target);
-                        self.write("[");
-                        self.write(&temp_var);
-                        self.write("] : (ion_panic(\"Array index out of bounds\"), ");
-                        self.generate_expr(target);
-                        self.write("[0]); })");
-                    } else {
-                        // No type information - fall back to unchecked (for now)
-                        // TODO: Track array types through IR for complete bounds checking
-                        self.generate_expr(target);
-                        self.write("[");
-                        self.generate_expr(index);
-                        self.write("]");
+                    match bounds_check {
+                        Some(BoundsCheck::Fixed(len)) => {
+                            self.write("({ int ");
+                            self.write(&temp_var);
+                            self.write(" = ");
+                            self.generate_expr(index);
+                            self.write("; (");
+                            self.write(&temp_var);
+                            self.write(" >= 0 && ");
+                            self.write(&temp_var);
+                            self.write(&format!(" < {}) ? ", len));
+                            self.generate_expr(target);
+                            self.write("[");
+                            self.write(&temp_var);
+                            self.write("] : (ion_panic(\"Array index out of bounds\"), ");
+                            self.generate_expr(target);
+                            self.write("[0]); })");
+                        }
+                        Some(BoundsCheck::StringLen) => {
+                            self.write("({ int ");
+                            self.write(&temp_var);
+                            self.write(" = ");
+                            self.generate_expr(index);
+                            self.write("; (");
+                            self.write(&temp_var);
+                            self.write(" >= 0 && ");
+                            self.write(&temp_var);
+                            self.write(" < ");
+                            self.generate_expr(target);
+                            self.write("->len) ? ");
+                            self.generate_expr(target);
+                            self.write("->data[");
+                            self.write(&temp_var);
+                            self.write(
+                                "] : (ion_panic(\"String index out of bounds\"), (uint8_t)0); })",
+                            );
+                        }
+                        None => {
+                            self.generate_expr(target);
+                            self.write("[");
+                            self.generate_expr(index);
+                            self.write("]");
+                        }
                     }
                 }
             }
@@ -3132,192 +3153,263 @@ impl Codegen {
         self.write_indent();
         self.write(&format!("switch ({}.tag) {{", match_var_name));
         self.writeln("");
-        self.indent_level += 1;
-        for arm in arms {
-            self.generate_match_arm(
-                arm,
-                &monomorphized_enum_name,
-                enum_decl.as_ref(),
-                &match_var_name,
-                &type_params,
-            );
-        }
-        self.indent_level -= 1;
+        self.emit_grouped_match_arms(
+            arms,
+            &monomorphized_enum_name,
+            enum_decl.as_ref(),
+            &match_var_name,
+            &type_params,
+        );
         self.write_indent();
         self.writeln("}");
+    }
+
+    fn emit_grouped_match_arms(
+        &mut self,
+        arms: &[IRMatchArm],
+        enum_type: &str,
+        enum_decl: Option<&EnumDecl>,
+        match_var_name: &str,
+        type_params: &[Type],
+    ) {
+        self.indent_level += 1;
+        let mut grouped: std::collections::BTreeMap<usize, Vec<&IRMatchArm>> =
+            std::collections::BTreeMap::new();
+        for arm in arms {
+            let variant_idx = match &arm.pattern {
+                IRPattern::Variant { variant, .. } => enum_decl
+                    .and_then(|e| e.variants.iter().position(|v| v.name == *variant))
+                    .unwrap_or(0),
+                _ => usize::MAX,
+            };
+            grouped.entry(variant_idx).or_default().push(arm);
+        }
+        for (variant_idx, group_arms) in grouped {
+            if variant_idx == usize::MAX {
+                for arm in group_arms {
+                    self.generate_match_arm(
+                        arm,
+                        enum_type,
+                        enum_decl,
+                        match_var_name,
+                        type_params,
+                        false,
+                    );
+                }
+            } else {
+                let variant_name = enum_decl
+                    .and_then(|e| e.variants.get(variant_idx))
+                    .map(|v| v.name.as_str())
+                    .unwrap_or("variant");
+                self.write_indent();
+                self.writeln(&format!("case {}: // {}", variant_idx, variant_name));
+                self.indent_level += 1;
+                if let Some(first_arm) = group_arms.first() {
+                    self.generate_match_arm_payload_bindings(
+                        first_arm,
+                        enum_decl,
+                        match_var_name,
+                        type_params,
+                        variant_idx,
+                    );
+                }
+                for arm in group_arms {
+                    self.generate_guarded_arm_body(arm);
+                }
+                self.indent_level -= 1;
+            }
+        }
+        self.indent_level -= 1;
+    }
+
+    fn generate_match_arm_payload_bindings(
+        &mut self,
+        arm: &IRMatchArm,
+        enum_decl: Option<&EnumDecl>,
+        match_var_name: &str,
+        type_params: &[Type],
+        variant_idx: usize,
+    ) {
+        let IRPattern::Variant {
+            variant,
+            sub_patterns,
+            named_fields,
+            ..
+        } = &arm.pattern
+        else {
+            return;
+        };
+
+        if let Some(variant_decl) =
+            enum_decl.and_then(|e| e.variants.iter().find(|v| v.name == *variant))
+        {
+            // Build substitution map for generic parameters
+            let substitutions: std::collections::HashMap<String, &Type> = enum_decl
+                .map(|e| {
+                    e.generics
+                        .iter()
+                        .zip(type_params.iter())
+                        .map(|(name, ty)| (name.clone(), ty))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Handle struct variants with named fields
+            if let Some(named_fields_patterns) = named_fields {
+                if let Some(variant_named_fields) = &variant_decl.named_fields {
+                    for (field_name, field_pattern) in named_fields_patterns {
+                        // Find the field type in the variant declaration
+                        if let Some((_, field_ty)) = variant_named_fields
+                            .iter()
+                            .find(|(name, _)| name == field_name)
+                        {
+                            // Substitute generic parameters in field type
+                            let concrete_field_ty = if !substitutions.is_empty() {
+                                substitute_type_params(field_ty, &substitutions)
+                            } else {
+                                field_ty.clone()
+                            };
+
+                            match field_pattern {
+                                IRPattern::Binding { name } => {
+                                    // Extract field into binding variable
+                                    // For struct variants, fields are stored in variant_N.field_name
+                                    self.write_indent();
+                                    self.write(&format!(
+                                        "{} {} = {}.data.variant_{}.{};",
+                                        self.type_to_c(&concrete_field_ty),
+                                        name,
+                                        match_var_name,
+                                        variant_idx,
+                                        field_name
+                                    ));
+                                    self.writeln("");
+                                }
+                                IRPattern::Wildcard => {
+                                    // Wildcard - don't extract, field is ignored
+                                }
+                                IRPattern::Variant { .. } => {
+                                    // Nested variant pattern - extract to temp
+                                    let temp_name = format!("_field_{}", field_name);
+                                    self.write_indent();
+                                    self.write(&format!(
+                                        "{} {} = {}.data.variant_{}.{};",
+                                        self.type_to_c(&concrete_field_ty),
+                                        temp_name,
+                                        match_var_name,
+                                        variant_idx,
+                                        field_name
+                                    ));
+                                    self.writeln("");
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Handle tuple variants with positional patterns
+                for (i, payload_ty) in variant_decl.payload_types.iter().enumerate() {
+                    // Substitute generic parameters in payload type
+                    let concrete_payload_ty = if !substitutions.is_empty() {
+                        substitute_type_params(payload_ty, &substitutions)
+                    } else {
+                        // If no substitutions available, use the payload type as-is
+                        // (This shouldn't happen in well-typed code, but handle gracefully)
+                        payload_ty.clone()
+                    };
+
+                    // Get the pattern for this payload position (or use wildcard)
+                    if let Some(sub_pattern) = sub_patterns.get(i) {
+                        match sub_pattern {
+                            IRPattern::Binding { name } => {
+                                // Extract payload into binding variable
+                                self.write_indent();
+                                self.write(&format!(
+                                    "{} {} = {}.data.variant_{}.arg{};",
+                                    self.type_to_c(&concrete_payload_ty),
+                                    name,
+                                    match_var_name,
+                                    variant_idx,
+                                    i
+                                ));
+                                self.writeln("");
+                            }
+                            IRPattern::Wildcard => {
+                                // Wildcard - don't extract, payload is ignored
+                            }
+                            IRPattern::Variant { .. } => {
+                                // Nested variant pattern - for now, extract to temp and match recursively
+                                // This is a simplified version - full implementation would recurse
+                                let temp_name = format!("_payload_{}", i);
+                                self.write_indent();
+                                self.write(&format!(
+                                    "{} {} = {}.data.variant_{}.arg{};",
+                                    self.type_to_c(&concrete_payload_ty),
+                                    temp_name,
+                                    match_var_name,
+                                    variant_idx,
+                                    i
+                                ));
+                                self.writeln("");
+                            }
+                        }
+                    } else {
+                        // No pattern specified - treat as wildcard
+                    }
+                }
+            }
+        }
     }
 
     fn generate_match_arm(
         &mut self,
         arm: &IRMatchArm,
         enum_type: &str,
-        enum_decl: Option<&EnumDecl>,
+        _enum_decl: Option<&EnumDecl>,
         match_var_name: &str,
-        type_params: &[Type],
+        _type_params: &[Type],
+        _grouped: bool,
     ) {
         match &arm.pattern {
-            IRPattern::Variant {
-                enum_name: _,
-                variant,
-                sub_patterns,
-                named_fields,
-            } => {
-                // Look up variant index from enum declaration
-                let variant_idx = enum_decl
-                    .and_then(|e| e.variants.iter().position(|v| v.name == *variant))
-                    .unwrap_or(0); // Fallback to 0 if not found (should not happen in well-typed code)
-
-                self.write_indent();
-                self.writeln(&format!("case {}: // {}", variant_idx, variant));
-                self.indent_level += 1;
-
-                // Extract payloads into pattern bindings
-                if let Some(variant_decl) =
-                    enum_decl.and_then(|e| e.variants.iter().find(|v| v.name == *variant))
-                {
-                    // Build substitution map for generic parameters
-                    let substitutions: std::collections::HashMap<String, &Type> = enum_decl
-                        .map(|e| {
-                            e.generics
-                                .iter()
-                                .zip(type_params.iter())
-                                .map(|(name, ty)| (name.clone(), ty))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    // Handle struct variants with named fields
-                    if let Some(named_fields_patterns) = named_fields {
-                        if let Some(variant_named_fields) = &variant_decl.named_fields {
-                            for (field_name, field_pattern) in named_fields_patterns {
-                                // Find the field type in the variant declaration
-                                if let Some((_, field_ty)) = variant_named_fields
-                                    .iter()
-                                    .find(|(name, _)| name == field_name)
-                                {
-                                    // Substitute generic parameters in field type
-                                    let concrete_field_ty = if !substitutions.is_empty() {
-                                        substitute_type_params(field_ty, &substitutions)
-                                    } else {
-                                        field_ty.clone()
-                                    };
-
-                                    match field_pattern {
-                                        IRPattern::Binding { name } => {
-                                            // Extract field into binding variable
-                                            // For struct variants, fields are stored in variant_N.field_name
-                                            self.write_indent();
-                                            self.write(&format!(
-                                                "{} {} = {}.data.variant_{}.{};",
-                                                self.type_to_c(&concrete_field_ty),
-                                                name,
-                                                match_var_name,
-                                                variant_idx,
-                                                field_name
-                                            ));
-                                            self.writeln("");
-                                        }
-                                        IRPattern::Wildcard => {
-                                            // Wildcard - don't extract, field is ignored
-                                        }
-                                        IRPattern::Variant { .. } => {
-                                            // Nested variant pattern - extract to temp
-                                            let temp_name = format!("_field_{}", field_name);
-                                            self.write_indent();
-                                            self.write(&format!(
-                                                "{} {} = {}.data.variant_{}.{};",
-                                                self.type_to_c(&concrete_field_ty),
-                                                temp_name,
-                                                match_var_name,
-                                                variant_idx,
-                                                field_name
-                                            ));
-                                            self.writeln("");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Handle tuple variants with positional patterns
-                        for (i, payload_ty) in variant_decl.payload_types.iter().enumerate() {
-                            // Substitute generic parameters in payload type
-                            let concrete_payload_ty = if !substitutions.is_empty() {
-                                substitute_type_params(payload_ty, &substitutions)
-                            } else {
-                                // If no substitutions available, use the payload type as-is
-                                // (This shouldn't happen in well-typed code, but handle gracefully)
-                                payload_ty.clone()
-                            };
-
-                            // Get the pattern for this payload position (or use wildcard)
-                            if let Some(sub_pattern) = sub_patterns.get(i) {
-                                match sub_pattern {
-                                    IRPattern::Binding { name } => {
-                                        // Extract payload into binding variable
-                                        self.write_indent();
-                                        self.write(&format!(
-                                            "{} {} = {}.data.variant_{}.arg{};",
-                                            self.type_to_c(&concrete_payload_ty),
-                                            name,
-                                            match_var_name,
-                                            variant_idx,
-                                            i
-                                        ));
-                                        self.writeln("");
-                                    }
-                                    IRPattern::Wildcard => {
-                                        // Wildcard - don't extract, payload is ignored
-                                    }
-                                    IRPattern::Variant { .. } => {
-                                        // Nested variant pattern - for now, extract to temp and match recursively
-                                        // This is a simplified version - full implementation would recurse
-                                        let temp_name = format!("_payload_{}", i);
-                                        self.write_indent();
-                                        self.write(&format!(
-                                            "{} {} = {}.data.variant_{}.arg{};",
-                                            self.type_to_c(&concrete_payload_ty),
-                                            temp_name,
-                                            match_var_name,
-                                            variant_idx,
-                                            i
-                                        ));
-                                        self.writeln("");
-                                    }
-                                }
-                            } else {
-                                // No pattern specified - treat as wildcard
-                            }
-                        }
-                    }
-                }
-
-                self.generate_block(&arm.body);
-                self.write_indent();
-                self.writeln("break;");
-                self.indent_level -= 1;
-            }
             IRPattern::Wildcard => {
                 self.write_indent();
                 self.writeln("default:");
                 self.indent_level += 1;
-                self.generate_block(&arm.body);
-                self.write_indent();
-                self.writeln("break;");
+                self.generate_guarded_arm_body(arm);
                 self.indent_level -= 1;
             }
             IRPattern::Binding { name } => {
-                // Binding pattern matches any variant - just assign match_val to the binding
                 self.write_indent();
                 self.writeln(&format!("default: // binding {}", name));
                 self.indent_level += 1;
                 self.write_indent();
-                self.writeln(&format!("{} {} = match_val;", enum_type, name));
-                self.generate_block(&arm.body);
-                self.write_indent();
-                self.writeln("break;");
+                self.writeln(&format!("{} {} = {};", enum_type, name, match_var_name));
+                self.generate_guarded_arm_body(arm);
                 self.indent_level -= 1;
             }
+            IRPattern::Variant { .. } => {
+                // Variant arms are handled by grouped generation in generate_match_block.
+            }
+        }
+    }
+
+    fn generate_guarded_arm_body(&mut self, arm: &IRMatchArm) {
+        if let Some(ref guard) = arm.guard {
+            self.write_indent();
+            self.write("if (");
+            self.generate_expr(guard);
+            self.writeln(") {");
+            self.indent_level += 1;
+            self.generate_block(&arm.body);
+            self.indent_level -= 1;
+            self.write_indent();
+            self.writeln("break;");
+            self.write_indent();
+            self.writeln("}");
+        } else {
+            self.generate_block(&arm.body);
+            self.write_indent();
+            self.writeln("break;");
         }
     }
 }
@@ -3482,7 +3574,7 @@ fn collect_slice_types_from_expr(
         IREexpr::UnOp { operand, .. } => {
             collect_slice_types_from_expr(operand, slice_types);
         }
-        IREexpr::Send { channel, value } => {
+        IREexpr::Send { channel, value, .. } => {
             collect_slice_types_from_expr(channel, slice_types);
             collect_slice_types_from_expr(value, slice_types);
         }
@@ -3663,7 +3755,7 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
         IREexpr::AddressOf { inner, .. } => {
             collect_vec_types_from_expr(inner, vec_types);
         }
-        IREexpr::Send { channel, value } => {
+        IREexpr::Send { channel, value, .. } => {
             collect_vec_types_from_expr(channel, vec_types);
             collect_vec_types_from_expr(value, vec_types);
         }
@@ -3977,28 +4069,45 @@ fn collect_generic_instantiations(
     }
 }
 
+fn type_params_are_concrete(params: &[Type]) -> bool {
+    params.iter().all(|param| match param {
+        Type::Struct(name) | Type::Enum(name) => {
+            matches!(
+                name.as_str(),
+                "Box" | "Vec" | "Option" | "String" | "Sender" | "Receiver"
+            )
+        }
+        Type::Generic { params: nested, .. } => type_params_are_concrete(nested),
+        Type::Ref { inner, .. }
+        | Type::Box { inner }
+        | Type::Vec { elem_type: inner }
+        | Type::Channel { elem_type: inner }
+        | Type::Array { inner, .. }
+        | Type::Slice { inner }
+        | Type::Sender { elem_type: inner }
+        | Type::Receiver { elem_type: inner }
+        | Type::RawPtr { inner } => type_params_are_concrete(std::slice::from_ref(inner)),
+        Type::Tuple { elements } => type_params_are_concrete(elements),
+        _ => true,
+    })
+}
+
 fn collect_generic_from_type(
     ty: &Type,
     instantiations: &mut std::collections::HashMap<String, (String, Vec<Type>)>,
 ) {
-    // Resolve type aliases first to ensure we collect the actual generic types
-    // Note: This is a simplified version that doesn't have access to type_aliases
-    // For now, we collect both the original type and will handle resolution during codegen
     match ty {
         Type::Generic { name, params } => {
-            // Collect Vec types for element type extraction in match expressions
-            if name == "Vec" && params.len() == 1 {
-                // Use mangled name as key for deduplication, store base name and params
-                let key = mangle_type_name(name, params);
-                instantiations.insert(key, (name.clone(), params.clone()));
+            if type_params_are_concrete(params) {
+                if name == "Vec" && params.len() == 1 {
+                    let key = mangle_type_name(name, params);
+                    instantiations.insert(key, (name.clone(), params.clone()));
+                }
+                if name != "Box" && name != "Vec" {
+                    let key = mangle_type_name(name, params);
+                    instantiations.insert(key, (name.clone(), params.clone()));
+                }
             }
-            // Check if this is a user-defined generic type (not Box)
-            if name != "Box" && name != "Vec" {
-                // Use mangled name as key for deduplication, store base name and params
-                let key = mangle_type_name(name, params);
-                instantiations.insert(key, (name.clone(), params.clone()));
-            }
-            // Recursively collect nested generics
             for param in params {
                 collect_generic_from_type(param, instantiations);
             }
@@ -4089,7 +4198,7 @@ fn collect_generic_from_expr(
         IREexpr::AddressOf { inner, .. } => {
             collect_generic_from_expr(inner, instantiations);
         }
-        IREexpr::Send { channel, value } => {
+        IREexpr::Send { channel, value, .. } => {
             collect_generic_from_expr(channel, instantiations);
             collect_generic_from_expr(value, instantiations);
         }

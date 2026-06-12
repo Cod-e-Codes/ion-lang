@@ -7,7 +7,17 @@
 set +e
 
 COMPILER="${COMPILER:-../target/release/ion-compiler}"
+if [ -f "${COMPILER}.exe" ] && [ ! -x "$COMPILER" ]; then
+    COMPILER="${COMPILER}.exe"
+fi
 CC="${CC:-gcc}"
+
+EXE_SUFFIX=""
+if command -v uname >/dev/null 2>&1; then
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) EXE_SUFFIX=".exe" ;;
+    esac
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -53,7 +63,7 @@ test_file() {
     compile_cmd="$compile_cmd -I. -I.. -Iruntime -I../runtime"
     # Link with pthread for channel support
     compile_cmd="$compile_cmd -lpthread"
-    compile_cmd="$compile_cmd -o \"${test_name}\""
+    compile_cmd="$compile_cmd -o \"${test_name}${EXE_SUFFIX}\""
     if ! eval "$compile_cmd" 2>/dev/null; then
         echo -e "${RED}FAIL${NC} - C compilation failed"
         fail_count=$((fail_count + 1))
@@ -62,19 +72,19 @@ test_file() {
     fi
     
     # Step 3: Run and check exit code
-    "./${test_name}" > /dev/null 2>&1
+    "./${test_name}${EXE_SUFFIX}" > /dev/null 2>&1
     local actual_exit=$?
     
     # Step 4: Verify result
     if [ "$actual_exit" -eq "$expected_exit" ]; then
         echo -e "${GREEN}PASS${NC}"
         pass_count=$((pass_count + 1))
-        rm -f "$c_file" "${test_name}"
+        rm -f "$c_file" "${test_name}" "${test_name}${EXE_SUFFIX}"
         return 0
     else
         echo -e "${RED}FAIL${NC} - Expected exit code $expected_exit, got $actual_exit"
         fail_count=$((fail_count + 1))
-        rm -f "$c_file" "${test_name}"
+        rm -f "$c_file" "${test_name}" "${test_name}${EXE_SUFFIX}"
         return 1
     fi
 }
@@ -354,6 +364,31 @@ if [ -f "test_io_println.ion" ]; then
     test_file "test_io_println.ion" 0 || true
 fi
 
+# Iteration, guards, generics, and formatting tests
+if [ -f "test_for_array.ion" ]; then
+    test_file "test_for_array.ion" 0 || true
+fi
+
+if [ -f "test_for_string.ion" ]; then
+    test_file "test_for_string.ion" 0 || true
+fi
+
+if [ -f "test_match_guard.ion" ]; then
+    test_file "test_match_guard.ion" 0 || true
+fi
+
+if [ -f "test_generic_field_access.ion" ]; then
+    test_file "test_generic_field_access.ion" 0 || true
+fi
+
+if [ -f "test_io_print_int.ion" ]; then
+    test_file "test_io_print_int.ion" 0 || true
+fi
+
+if [ -f "test_fmt_int_to_string.ion" ]; then
+    test_file "test_fmt_int_to_string.ion" 0 || true
+fi
+
 # Phase 3 tests - Unsafe Blocks
 if [ -f "test_unsafe_basic.ion" ]; then
     test_file "test_unsafe_basic.ion" 0 || true
@@ -522,9 +557,13 @@ if [ -f "test_multifile.ion" ] && [ -f "utils.ion" ]; then
                 echo -e "${YELLOW}WARN${NC} - utils.c doesn't include its header"
             fi
             
-            # Run the executable
-            if [ -f "test_multifile" ]; then
-                ./test_multifile > /dev/null 2>&1
+            # Compile and run the executable
+            multifile_cc="$CC test_multifile.c utils.c -I. -I.. -Iruntime -I../runtime ../runtime/ion_runtime.c -lpthread -o test_multifile${EXE_SUFFIX}"
+            if ! eval "$multifile_cc" 2>/dev/null; then
+                echo -e "${RED}FAIL${NC} - C compilation failed"
+                fail_count=$((fail_count + 1))
+            elif [ -f "test_multifile${EXE_SUFFIX}" ]; then
+                ./test_multifile${EXE_SUFFIX} > /dev/null 2>&1
                 actual_exit=$?
                 if [ "$actual_exit" -eq 27 ]; then
                     echo -e "${GREEN}PASS${NC}"
@@ -539,7 +578,7 @@ if [ -f "test_multifile.ion" ] && [ -f "utils.ion" ]; then
             fi
             
             # Cleanup
-            rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile.o utils.o 2>/dev/null
+            rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile${EXE_SUFFIX} test_multifile.o utils.o 2>/dev/null
         fi
     fi
 fi

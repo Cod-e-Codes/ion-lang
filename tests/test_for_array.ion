@@ -1,0 +1,11 @@
+fn main() -> int {
+    let arr: [int; 3] = [10, 20, 30];
+    let mut sum: int = 0;
+    for x in arr {
+        sum = sum + x;
+    }
+    if sum != 60 {
+        return 1;
+    }
+    return 0;
+}

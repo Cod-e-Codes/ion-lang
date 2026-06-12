@@ -50,6 +50,10 @@ struct VariableInfo {
 pub struct LspInfo {
     pub references: HashMap<Span, Span>,
     pub types: HashMap<Span, Type>,
+    /// Hover text keyed by definition span (functions, structs, enums).
+    pub hover_docs: HashMap<Span, String>,
+    /// Top-level and imported symbol names for completion.
+    pub completion_symbols: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -94,6 +98,8 @@ pub struct TypeChecker {
     current_return_type: Option<Type>,
     // LSP information collected during type checking
     pub lsp_info: LspInfo,
+    // Active function generic type parameter names (innermost scope last)
+    type_param_scopes: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +130,31 @@ impl TypeChecker {
             unsafe_context_depth: 0,
             current_return_type: None,
             lsp_info: LspInfo::default(),
+            type_param_scopes: Vec::new(),
+        }
+    }
+
+    fn push_type_params(&mut self, params: &[String]) {
+        self.type_param_scopes.push(params.to_vec());
+    }
+
+    fn pop_type_params(&mut self) {
+        self.type_param_scopes.pop();
+    }
+
+    fn is_type_param(&self, name: &str) -> bool {
+        self.type_param_scopes
+            .iter()
+            .any(|scope| scope.iter().any(|p| p == name))
+    }
+
+    fn record_hover_doc(&mut self, span: Span, doc: String) {
+        self.lsp_info.hover_docs.insert(span, doc);
+    }
+
+    fn record_completion_symbol(&mut self, name: &str) {
+        if !self.lsp_info.completion_symbols.contains(&name.to_string()) {
+            self.lsp_info.completion_symbols.push(name.to_string());
         }
     }
 
@@ -593,7 +624,61 @@ impl TypeChecker {
             }
         }
 
+        for s in &program.structs {
+            self.record_completion_symbol(&s.name);
+            let fields: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
+            let generics = if s.generics.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", s.generics.join(", "))
+            };
+            self.record_hover_doc(
+                s.span,
+                format!("struct {}{} {{ {} }}", s.name, generics, fields.join(", ")),
+            );
+        }
+        for e in &program.enums {
+            self.record_completion_symbol(&e.name);
+            let variants: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
+            let generics = if e.generics.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", e.generics.join(", "))
+            };
+            self.record_hover_doc(
+                e.span,
+                format!("enum {}{} {{ {} }}", e.name, generics, variants.join(", ")),
+            );
+        }
         for function in &program.functions {
+            if function.pub_ {
+                self.record_completion_symbol(&function.name);
+            }
+            let params: Vec<String> = function
+                .params
+                .iter()
+                .map(|p| format!("{}: {}", p.name, type_to_string(&p.ty)))
+                .collect();
+            let ret = function
+                .return_type
+                .as_ref()
+                .map(type_to_string)
+                .unwrap_or_else(|| "void".to_string());
+            let generics = if function.generics.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", function.generics.join(", "))
+            };
+            self.record_hover_doc(
+                function.span,
+                format!(
+                    "fn {}{}({}) -> {}",
+                    function.name,
+                    generics,
+                    params.join(", "),
+                    ret
+                ),
+            );
             self.check_function(function)?;
         }
 
@@ -941,6 +1026,10 @@ impl TypeChecker {
         // Set current return type for return statement checking
         self.current_return_type = resolved_return_type.clone();
 
+        if !function.generics.is_empty() {
+            self.push_type_params(&function.generics);
+        }
+
         // Add parameters to scope (they start as Valid)
         // Resolve type aliases for parameters
         for param in &function.params {
@@ -963,6 +1052,9 @@ impl TypeChecker {
         // Restore previous scope and return type
         self.variables = prev_vars;
         self.current_return_type = prev_return_type;
+        if !function.generics.is_empty() {
+            self.pop_type_params();
+        }
 
         Ok(())
     }
@@ -1443,7 +1535,7 @@ impl TypeChecker {
                 let iterable_type = self.check_expr(&for_stmt.iterable)?;
                 let elem_type = match iterable_type {
                     Type::Vec { ref elem_type } => (**elem_type).clone(),
-                    Type::String => Type::String, // String iteration yields String (character by character, simplified)
+                    Type::String => Type::U8,
                     Type::Array { ref inner, .. } => (**inner).clone(),
                     other => {
                         return Err(TypeCheckError::TypeMismatch {
@@ -1501,151 +1593,171 @@ impl TypeChecker {
                     span: index_init_span,
                 });
 
-                let len_call = Expr::Call(CallExpr {
-                    callee: match iterable_type {
-                        Type::Vec { .. } => "Vec::len".to_string(),
-                        Type::String => "String::len".to_string(),
-                        Type::Array { .. } => {
-                            return Err(TypeCheckError::Message(
-                                "Array iteration not yet supported - use Vec instead".to_string(),
-                            ));
-                        }
-                        _ => unreachable!(),
-                    },
-                    args: vec![Expr::Ref(RefExpr {
-                        mutable: false,
-                        inner: Box::new(container_var_expr.clone()),
-                        span: index_init_span,
-                    })],
+                let index_var_ref = Expr::Var(VarExpr {
+                    name: index_var.clone(),
                     span: index_init_span,
                 });
 
-                // Create: __i < container.len()
-                let cond_expr = Expr::BinOp(BinOpExpr {
-                    op: BinOp::Lt,
-                    left: Box::new(Expr::Var(VarExpr {
-                        name: index_var.clone(),
-                        span: index_init_span,
-                    })),
-                    right: Box::new(len_call),
-                    span: index_init_span,
-                });
-
-                // Create: container.get(__i) or similar
-                let get_expr = match iterable_type {
-                    Type::Vec { .. } => Expr::Call(CallExpr {
-                        callee: "Vec::get".to_string(),
-                        args: vec![
-                            Expr::Ref(RefExpr {
-                                mutable: false,
-                                inner: Box::new(container_var_expr.clone()),
-                                span: index_init_span,
-                            }),
-                            Expr::Var(VarExpr {
-                                name: index_var.clone(),
-                                span: index_init_span,
-                            }),
-                        ],
+                let cond_expr = match &iterable_type {
+                    Type::Array { size, .. } => Expr::BinOp(BinOpExpr {
+                        op: BinOp::Lt,
+                        left: Box::new(index_var_ref.clone()),
+                        right: Box::new(Expr::Lit(LitExpr {
+                            value: *size as i64,
+                            span: index_init_span,
+                        })),
                         span: index_init_span,
                     }),
-                    Type::String => {
-                        // For String, we'd need a different approach - simplified for now
-                        return Err(TypeCheckError::Message(
-                            "String iteration in for loops not yet fully implemented".to_string(),
-                        ));
+                    Type::Vec { .. } | Type::String => {
+                        let len_callee = match iterable_type {
+                            Type::Vec { .. } => "Vec::len",
+                            Type::String => "String::len",
+                            _ => unreachable!(),
+                        };
+                        Expr::BinOp(BinOpExpr {
+                            op: BinOp::Lt,
+                            left: Box::new(index_var_ref.clone()),
+                            right: Box::new(Expr::Call(CallExpr {
+                                callee: len_callee.to_string(),
+                                args: vec![Expr::Ref(RefExpr {
+                                    mutable: false,
+                                    inner: Box::new(container_var_expr.clone()),
+                                    span: index_init_span,
+                                })],
+                                span: index_init_span,
+                            })),
+                            span: index_init_span,
+                        })
                     }
                     _ => unreachable!(),
                 };
 
-                // Vec::get returns Option<T>, so we need to match on it
-                // Wrap body in a match: match container.get(__i) { Option::Some(x) => { body; __i += 1; }, Option::None => {} }
-                let opt_var = format!("__for_opt_{}", for_stmt.span.start);
-
-                // Create desugared body block
                 let mut desugared_body = Block { statements: vec![] };
 
-                // Store Option in a variable
-                desugared_body.statements.push(Stmt::Let(LetStmt {
-                    name: opt_var.clone(),
-                    patterns: None,
-                    mutable: false,
-                    type_ann: Some(Type::Generic {
-                        name: "Option".to_string(),
-                        params: vec![elem_type.clone()],
-                    }),
-                    init: Some(get_expr),
-                    span: index_init_span,
-                }));
-
-                // Create match body with the loop body + increment
-                // The pattern binding will bind directly to for_stmt.var_name
-                let mut match_body = Block { statements: vec![] };
-
-                // Add original body statements (the loop variable is already bound by the pattern)
-                for stmt in &for_stmt.body.statements {
-                    match_body.statements.push(stmt.clone());
-                }
-
-                // Add: __i = __i + 1
-                let incr_expr = Expr::BinOp(BinOpExpr {
-                    op: BinOp::Add,
-                    left: Box::new(Expr::Var(VarExpr {
-                        name: index_var.clone(),
-                        span: index_init_span,
-                    })),
-                    right: Box::new(Expr::Lit(LitExpr {
-                        value: 1,
-                        span: index_init_span,
-                    })),
-                    span: index_init_span,
-                });
-                match_body
-                    .statements
-                    .push(Stmt::Expr(ExprStmt { expr: incr_expr }));
-
-                // Create None arm (empty block - just break/continue in actual desugaring)
-                let none_body = Block { statements: vec![] };
-
-                // Create match expression
-                let match_expr = Expr::Match(MatchExpr {
-                    expr: Box::new(Expr::Var(VarExpr {
-                        name: opt_var.clone(),
-                        span: index_init_span,
-                    })),
-                    arms: vec![
-                        MatchArm {
-                            pattern: Pattern::Variant {
-                                enum_name: "Option".to_string(),
-                                variant: "Some".to_string(),
-                                sub_patterns: vec![Pattern::Binding {
-                                    name: for_stmt.var_name.clone(),
+                match iterable_type {
+                    Type::Vec { .. } => {
+                        let opt_var = format!("__for_opt_{}", for_stmt.span.start);
+                        let get_expr = Expr::Call(CallExpr {
+                            callee: "Vec::get".to_string(),
+                            args: vec![
+                                Expr::Ref(RefExpr {
+                                    mutable: false,
+                                    inner: Box::new(container_var_expr.clone()),
                                     span: index_init_span,
-                                }],
-                                named_fields: None,
-                                span: index_init_span,
-                            },
-                            body: match_body,
+                                }),
+                                index_var_ref.clone(),
+                            ],
                             span: index_init_span,
-                        },
-                        MatchArm {
-                            pattern: Pattern::Variant {
-                                enum_name: "Option".to_string(),
-                                variant: "None".to_string(),
-                                sub_patterns: vec![],
-                                named_fields: None,
-                                span: index_init_span,
-                            },
-                            body: none_body,
+                        });
+                        desugared_body.statements.push(Stmt::Let(LetStmt {
+                            name: opt_var.clone(),
+                            patterns: None,
+                            mutable: false,
+                            type_ann: Some(Type::Generic {
+                                name: "Option".to_string(),
+                                params: vec![elem_type.clone()],
+                            }),
+                            init: Some(get_expr),
                             span: index_init_span,
-                        },
-                    ],
-                    span: index_init_span,
-                });
-
-                // Add match as a statement
-                desugared_body
-                    .statements
-                    .push(Stmt::Expr(ExprStmt { expr: match_expr }));
+                        }));
+                        let mut match_body = Block { statements: vec![] };
+                        for stmt in &for_stmt.body.statements {
+                            match_body.statements.push(stmt.clone());
+                        }
+                        match_body.statements.push(Stmt::Expr(ExprStmt {
+                            expr: Expr::Assign(AssignExpr {
+                                target: Box::new(Expr::Var(VarExpr {
+                                    name: index_var.clone(),
+                                    span: index_init_span,
+                                })),
+                                value: Box::new(Expr::BinOp(BinOpExpr {
+                                    op: BinOp::Add,
+                                    left: Box::new(index_var_ref.clone()),
+                                    right: Box::new(Expr::Lit(LitExpr {
+                                        value: 1,
+                                        span: index_init_span,
+                                    })),
+                                    span: index_init_span,
+                                })),
+                                span: index_init_span,
+                            }),
+                        }));
+                        desugared_body.statements.push(Stmt::Expr(ExprStmt {
+                            expr: Expr::Match(MatchExpr {
+                                expr: Box::new(Expr::Var(VarExpr {
+                                    name: opt_var,
+                                    span: index_init_span,
+                                })),
+                                arms: vec![
+                                    MatchArm {
+                                        pattern: Pattern::Variant {
+                                            enum_name: "Option".to_string(),
+                                            variant: "Some".to_string(),
+                                            sub_patterns: vec![Pattern::Binding {
+                                                name: for_stmt.var_name.clone(),
+                                                span: index_init_span,
+                                            }],
+                                            named_fields: None,
+                                            span: index_init_span,
+                                        },
+                                        guard: None,
+                                        body: match_body,
+                                        span: index_init_span,
+                                    },
+                                    MatchArm {
+                                        pattern: Pattern::Variant {
+                                            enum_name: "Option".to_string(),
+                                            variant: "None".to_string(),
+                                            sub_patterns: vec![],
+                                            named_fields: None,
+                                            span: index_init_span,
+                                        },
+                                        guard: None,
+                                        body: Block { statements: vec![] },
+                                        span: index_init_span,
+                                    },
+                                ],
+                                span: index_init_span,
+                            }),
+                        }));
+                    }
+                    Type::Array { .. } | Type::String => {
+                        desugared_body.statements.push(Stmt::Let(LetStmt {
+                            name: for_stmt.var_name.clone(),
+                            patterns: None,
+                            mutable: false,
+                            type_ann: Some(elem_type.clone()),
+                            init: Some(Expr::Index(IndexExpr {
+                                target: Box::new(container_var_expr.clone()),
+                                index: Box::new(index_var_ref.clone()),
+                                span: index_init_span,
+                            })),
+                            span: index_init_span,
+                        }));
+                        for stmt in &for_stmt.body.statements {
+                            desugared_body.statements.push(stmt.clone());
+                        }
+                        desugared_body.statements.push(Stmt::Expr(ExprStmt {
+                            expr: Expr::Assign(AssignExpr {
+                                target: Box::new(Expr::Var(VarExpr {
+                                    name: index_var.clone(),
+                                    span: index_init_span,
+                                })),
+                                value: Box::new(Expr::BinOp(BinOpExpr {
+                                    op: BinOp::Add,
+                                    left: Box::new(index_var_ref),
+                                    right: Box::new(Expr::Lit(LitExpr {
+                                        value: 1,
+                                        span: index_init_span,
+                                    })),
+                                    span: index_init_span,
+                                })),
+                                span: index_init_span,
+                            }),
+                        }));
+                    }
+                    _ => unreachable!(),
+                }
 
                 // Create the while loop
                 let while_stmt = Stmt::While(WhileStmt {
@@ -1883,6 +1995,13 @@ impl TypeChecker {
                 let base_ty = self.check_expr(&acc.base)?;
                 match base_ty {
                     Type::Struct(ref name) => {
+                        if self.is_type_param(name) {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: "concrete struct value for field access".to_string(),
+                                got: format!("type parameter '{}'", name),
+                                span: acc.span,
+                            });
+                        }
                         let decl =
                             self.structs
                                 .get(name)
@@ -1901,6 +2020,42 @@ impl TypeChecker {
                                 span: acc.span,
                             })?;
                         Ok(field.ty.clone())
+                    }
+                    Type::Generic { name, params } => {
+                        let decl = self.structs.get(&name).ok_or_else(|| {
+                            TypeCheckError::TypeMismatch {
+                                expected: "known struct type".to_string(),
+                                got: name.clone(),
+                                span: acc.span,
+                            }
+                        })?;
+                        if decl.generics.len() != params.len() {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: format!(
+                                    "{} generic parameters for struct '{}'",
+                                    decl.generics.len(),
+                                    name
+                                ),
+                                got: format!("{} parameters", params.len()),
+                                span: acc.span,
+                            });
+                        }
+                        let substitutions = decl
+                            .generics
+                            .iter()
+                            .zip(params.iter())
+                            .map(|(param_name, concrete)| (param_name.clone(), concrete.clone()))
+                            .collect::<std::collections::HashMap<_, _>>();
+                        let field = decl
+                            .fields
+                            .iter()
+                            .find(|f| f.name == acc.field)
+                            .ok_or_else(|| TypeCheckError::TypeMismatch {
+                                expected: format!("field of struct '{}'", decl.name),
+                                got: acc.field.clone(),
+                                span: acc.span,
+                            })?;
+                        Ok(substitute_generic_types_impl(&field.ty, &substitutions))
                     }
                     Type::String => match acc.field.as_str() {
                         "data" => Ok(Type::RawPtr {
@@ -2361,6 +2516,17 @@ impl TypeChecker {
                         &match_expr.expr,
                     )?;
 
+                    if let Some(ref guard) = arm.guard {
+                        let guard_ty = self.check_expr(guard)?;
+                        if !types_equal(&guard_ty, &Type::Bool) {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: "bool (match guard)".to_string(),
+                                got: type_to_string(&guard_ty),
+                                span: guard.span(),
+                            });
+                        }
+                    }
+
                     match &arm.pattern {
                         Pattern::Variant { variant, .. } => {
                             if !enum_decl.variants.iter().any(|v| v.name == *variant) {
@@ -2529,6 +2695,36 @@ impl TypeChecker {
 
                 let func_decl_params = params;
 
+                let fn_generics: Vec<String> = if call_expr.callee.contains("::") {
+                    let parts: Vec<&str> = call_expr.callee.split("::").collect();
+                    if parts.len() == 2 {
+                        self.module_imports
+                            .get(parts[0])
+                            .and_then(|m| m.functions.get(parts[1]))
+                            .map(|f| f.generics.clone())
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    self.functions
+                        .get(&call_expr.callee)
+                        .map(|f| f.generics.clone())
+                        .unwrap_or_default()
+                };
+
+                let mut generic_substitutions = std::collections::HashMap::new();
+                if !fn_generics.is_empty()
+                    && !call_expr.args.is_empty()
+                    && !func_decl_params.is_empty()
+                {
+                    let arg0_ty = self.check_expr(&call_expr.args[0])?;
+                    let resolved_arg = self.resolve_type_name(&arg0_ty)?;
+                    let param0_ty = self.resolve_type_name(&func_decl_params[0].ty)?;
+                    generic_substitutions =
+                        infer_generic_substitutions(&param0_ty, &resolved_arg, &fn_generics);
+                }
+
                 // Check argument count
                 if call_expr.args.len() != func_decl_params.len() {
                     return Err(TypeCheckError::TypeMismatch {
@@ -2545,7 +2741,10 @@ impl TypeChecker {
                 for (arg_expr, param) in call_expr.args.iter().zip(func_decl_params.iter()) {
                     let arg_ty = self.check_expr(arg_expr)?;
                     let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
-                    let resolved_param_ty = self.resolve_type_name(&param.ty)?;
+                    let resolved_param_ty = substitute_generic_types_impl(
+                        &self.resolve_type_name(&param.ty)?,
+                        &generic_substitutions,
+                    );
 
                     // Special case: allow string literals to be passed as *u8 for extern functions
                     // This enables calling C functions like printf with string literals
@@ -2555,6 +2754,18 @@ impl TypeChecker {
                         && matches!(resolved_param_ty, Type::RawPtr { ref inner } if matches!(**inner, Type::U8))
                     {
                         // Allow String literal to be passed as *u8 (char* in C) for extern functions
+                        true
+                    } else if is_extern
+                        && matches!(
+                            resolved_param_ty,
+                            Type::RawPtr { ref inner } if matches!(**inner, Type::U8)
+                        )
+                        && matches!(
+                            resolved_arg_ty,
+                            Type::Ref { ref inner, .. } if matches!(**inner, Type::U8)
+                        )
+                    {
+                        // Allow &u8 (e.g. &buf[0]) for *u8 FFI parameters
                         true
                     } else {
                         // Check for array-to-slice coercion: &[T; N] can be coerced to &[]T
@@ -2629,7 +2840,14 @@ impl TypeChecker {
                 }
 
                 // Return the function's return type, or int if void
-                Ok(return_type_opt.unwrap_or(Type::Int))
+                if let Some(ret) = return_type_opt {
+                    Ok(substitute_generic_types_impl(
+                        &self.resolve_type_name(&ret)?,
+                        &generic_substitutions,
+                    ))
+                } else {
+                    Ok(Type::Int)
+                }
             }
             Expr::MethodCall(method_call) => {
                 // Method call syntax: expr.method(args...)
@@ -2844,28 +3062,21 @@ impl TypeChecker {
                 // Determine result type based on target
                 let target_ty_str = type_to_string(&target_ty);
                 match target_ty {
-                    Type::Array { inner, .. } => {
-                        // Indexing array returns value of element (matches C semantics)
-                        Ok(*inner)
-                    }
-                    Type::Slice { inner } => {
-                        // Indexing slice returns value of element (matches C semantics)
-                        Ok(*inner)
-                    }
-                    Type::Ref { inner, .. } => {
-                        // Indexing a reference - check what it points to
-                        match inner.as_ref() {
-                            Type::Array { inner: elem_ty, .. } => Ok(*elem_ty.clone()),
-                            Type::Slice { inner: elem_ty } => Ok(*elem_ty.clone()),
-                            _ => Err(TypeCheckError::TypeMismatch {
-                                expected: "array or slice type for indexing".to_string(),
-                                got: target_ty_str.clone(),
-                                span: index_expr.span,
-                            }),
-                        }
-                    }
+                    Type::Array { inner, .. } => Ok(*inner),
+                    Type::Slice { inner } => Ok(*inner),
+                    Type::String => Ok(Type::U8),
+                    Type::Ref { inner, .. } => match inner.as_ref() {
+                        Type::Array { inner: elem_ty, .. } => Ok(*elem_ty.clone()),
+                        Type::Slice { inner: elem_ty } => Ok(*elem_ty.clone()),
+                        Type::String => Ok(Type::U8),
+                        _ => Err(TypeCheckError::TypeMismatch {
+                            expected: "array, slice, or String type for indexing".to_string(),
+                            got: target_ty_str.clone(),
+                            span: index_expr.span,
+                        }),
+                    },
                     _ => Err(TypeCheckError::TypeMismatch {
-                        expected: "array or slice type for indexing".to_string(),
+                        expected: "array, slice, or String type for indexing".to_string(),
                         got: target_ty_str,
                         span: index_expr.span,
                     }),
@@ -3457,7 +3668,7 @@ fn types_equal(a: &Type, b: &Type) -> bool {
     }
 }
 
-fn type_to_string(ty: &Type) -> String {
+pub fn type_to_string(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
         Type::Bool => "bool".to_string(),
@@ -3761,6 +3972,35 @@ impl TypeChecker {
             }
         }
     }
+}
+
+fn infer_generic_substitutions(
+    expected: &Type,
+    actual: &Type,
+    fn_generics: &[String],
+) -> std::collections::HashMap<String, Type> {
+    let mut subs = std::collections::HashMap::new();
+    match (expected, actual) {
+        (
+            Type::Generic {
+                name: e_name,
+                params: e_params,
+            },
+            Type::Generic {
+                name: a_name,
+                params: a_params,
+            },
+        ) if e_name == a_name && e_params.len() == a_params.len() => {
+            for (e, a) in e_params.iter().zip(a_params.iter()) {
+                subs.extend(infer_generic_substitutions(e, a, fn_generics));
+            }
+        }
+        (Type::Struct(param_name), actual_ty) if fn_generics.contains(param_name) => {
+            subs.insert(param_name.clone(), actual_ty.clone());
+        }
+        _ => {}
+    }
+    subs
 }
 
 /// Substitute generic type parameters with concrete types

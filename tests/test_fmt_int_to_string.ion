@@ -1,0 +1,13 @@
+import "../stdlib/fmt.ion" as fmt;
+
+fn main() -> int {
+    let s: String = fmt::int_to_string(12345);
+    if String::len(&s) != 5 {
+        return 1;
+    }
+    let neg: String = fmt::int_to_string(-99);
+    if String::len(&neg) != 3 {
+        return 2;
+    }
+    return 0;
+}

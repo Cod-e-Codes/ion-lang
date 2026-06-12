@@ -1033,6 +1033,12 @@ impl Parser {
         let mut arms = Vec::new();
         while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
             let pattern = self.parse_pattern()?;
+            let guard = if !self.is_at_end() && matches!(self.peek().kind, TokenKind::If) {
+                self.advance(); // consume if
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
             self.expect(TokenKind::Arrow)?; // =>
             let body = self.parse_block()?;
             let arm_span = pattern.span().merge(
@@ -1054,6 +1060,7 @@ impl Parser {
             );
             arms.push(MatchArm {
                 pattern,
+                guard,
                 body,
                 span: arm_span,
             });
@@ -2414,17 +2421,24 @@ impl Parser {
                     // If the token after { is a keyword (like `if`, `let`, `return`), it's likely a block.
                     let token_after_brace_idx = self.current + 2; // current=Ident, current+1={, current+2=token after {
                     let is_likely_block = if token_after_brace_idx < self.tokens.len() {
-                        matches!(
-                            self.tokens[token_after_brace_idx].kind,
+                        match &self.tokens[token_after_brace_idx].kind {
                             TokenKind::If
-                                | TokenKind::While
-                                | TokenKind::Let
-                                | TokenKind::Return
-                                | TokenKind::Else
-                                | TokenKind::Defer
-                                | TokenKind::Spawn
-                                | TokenKind::Unsafe
-                        )
+                            | TokenKind::While
+                            | TokenKind::For
+                            | TokenKind::Let
+                            | TokenKind::Return
+                            | TokenKind::Else
+                            | TokenKind::Defer
+                            | TokenKind::Spawn
+                            | TokenKind::Unsafe => true,
+                            TokenKind::Ident(_) => {
+                                // `name = expr` is a statement, not a struct field
+                                let after_ident = token_after_brace_idx + 1;
+                                after_ident < self.tokens.len()
+                                    && matches!(self.tokens[after_ident].kind, TokenKind::Equals)
+                            }
+                            _ => false,
+                        }
                     } else {
                         false
                     };

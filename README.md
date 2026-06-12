@@ -29,9 +29,14 @@ The binary will be at `target/release/ion-compiler` (or `target/release/ion-comp
 
 ### VS Code Extension
 
-Ion has a VS Code extension that provides:
+Ion has a VS Code / Cursor extension that provides:
 - Syntax highlighting
 - Real-time diagnostics (syntax and type errors)
+- Hover: variable types at use sites; symbol docs at definitions
+- Completion: keywords, builtins, and file symbols
+- Go to definition: variables only (same file)
+
+Limitations: no hover on `let` bindings; function calls do not go to definition; completion has no prefix filtering.
 
 **Installation:**
 
@@ -45,9 +50,12 @@ Ion has a VS Code extension that provides:
    cd ion-vscode
    npm install
    npm run compile
-   npx vsce package
+   npx @vscode/vsce package --allow-missing-repository
    code --install-extension ion-language-0.1.0.vsix
    ```
+   On Cursor, use `cursor --install-extension ion-language-0.1.0.vsix` instead of `code`.
+
+3. Workspace settings (`.vscode/settings.json`) point `ion.lspPath` at `target/release/ion-lsp.exe`.
 
 ## Usage
 
@@ -152,6 +160,8 @@ The `--output` flag specifies the name of the final executable (defaults to the 
 
 #### Generics
 - Monomorphization-based generics for `struct`, `enum`, and `fn`
+- Field access on generic struct values (e.g. `pair.first` when `pair: Pair<T>`)
+- Generic calls infer type arguments from the first parameter (e.g. `get_first(pair)`)
 - Examples: `Vec<int>`, `Box<Point>`, `Option<T>`
 
 ### Control Flow
@@ -159,27 +169,28 @@ The `--output` flag specifies the name of the final executable (defaults to the 
 - **Conditionals**: `if expr { ... } else { ... }` (condition must be `bool`)
 - **Loops**: 
   - `while expr { ... }` (condition must be `bool`)
-  - `for identifier in expr { ... }` (iterates over `Vec<T>`, `String`, or `[T; N]`)
+  - `for identifier in expr { ... }` (iterates over `Vec<T>`, `[T; N]`, or `String` as `u8` bytes)
 - **Pattern Matching**: `match expr { pattern => block, ... }` with exhaustiveness checking
   - Supports enum variant patterns: `Option::Some(_)`, `Option::None`
   - Supports struct variant patterns: `Result::Ok { value: v }`, `Result::Err { message: _m }`
   - Supports wildcard patterns: `_`
   - Supports binding patterns: `x`
   - Supports nested patterns in variant payloads
+  - Supports guards: `Option::Some(x) if x > 0 => { ... }`
 - **Defer**: `defer expr;` at function scope for cleanup
 
 ### Operators
 
-- **Arithmetic**: `+`, `-`, `*`, `/`, `%` (modulo, Phase 8)
-- **Comparison**: `==`, `!=`, `<`, `>`, `<=`, `>=` (Phase 8)
+- **Arithmetic**: `+`, `-`, `*`, `/`, `%` (modulo)
+- **Comparison**: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - **Logical**: `&&`, `||`, `!`
-- **Bitwise** (Phase 7): `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
+- **Bitwise**: `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
   - Operands must be integer types
   - Shift amount must be unsigned integer
   - Standard precedence: shifts before bitwise AND/XOR/OR
   - Critical for network programming and binary protocols
 
-### Method Call Syntax (Phase 5)
+### Method Call Syntax
 
 Ion supports method call syntax as syntactic sugar for calling functions where the first argument is implicitly the receiver:
 
@@ -237,15 +248,19 @@ Ion includes a safe standard library for common operations:
   - `io::print(s: String)` - Print string to stdout
   - `io::println(s: String)` - Print string with newline to stdout
   - `io::print_str(s: *u8, len: int)` - Print raw string with length validation
-  - `io::print_int(n: int)` - Print integer (TODO: complete implementation)
+  - `io::print_int(n: int)` - Print signed integer (full decimal conversion)
   - All I/O functions use safe wrappers around POSIX `write()` syscall
   - Example: `import "stdlib/io.ion" as io; io::println(String::from("Hello!"));`
+
+- **Formatting Module** (`stdlib/fmt.ion`):
+  - `fmt::int_to_string(n: int) -> String`
+  - `fmt::print_int(n: int)`, `fmt::println_int(n: int)`
 
 #### Arrays and Slices
 - Fixed-size arrays: `[T; N]` syntax (e.g., `[int; 5]`)
 - Dynamically sized slices: `[]T` syntax (e.g., `[]int`)
 - Array literals: `[1, 2, 3]` syntax (explicit element listing)
-- **Array initialization**: `[value; count]` syntax for repeated values (Phase 7)
+- **Array initialization**: `[value; count]` syntax for repeated values
   - Example: `let buffer: [u8; 128] = [0; 128];`
   - Works in variable declarations, struct fields, and function returns
 - **Array bounds checking** (Safety Enhancement):
@@ -253,7 +268,7 @@ Ion includes a safe standard library for common operations:
   - If `i < 0` or `i >= array_length`, the program panics with "Array index out of bounds"
   - Bounds checking can be disabled in `unsafe` blocks for performance-critical code
   - Example: `unsafe { let x = arr[i]; }` skips bounds checking
-- **Array element assignment** (Phase 8): `arr[i] = value` syntax for mutating array elements
+- **Array element assignment**: `arr[i] = value` syntax for mutating array elements
   - Example: `let mut arr: [int; 5] = [0; 5]; arr[0] = 10;`
   - Requires mutable array variables (`let mut`)
   - Subject to bounds checking (panics on out-of-bounds access)
@@ -295,7 +310,7 @@ Ion includes a safe standard library for common operations:
 
 ### Concurrency
 
-- **Channels**: Split channel API with `Sender<T>` and `Receiver<T>` types (Phase 6)
+- **Channels**: Split channel API with `Sender<T>` and `Receiver<T>` types
   - `let (tx, rx) = channel<T>();` - create a channel, returns `(Sender<T>, Receiver<T>)` tuple
   - `send(&tx, value)` - send value over channel (requires `&Sender<T>`)
   - `recv(&mut rx)` - receive value from channel (requires `&mut Receiver<T>`)
@@ -314,38 +329,14 @@ Ion includes a safe standard library for common operations:
   - Automatic object file compilation (`.c` → `.o`) and linking orchestration
   - Proper include path handling for cross-module dependencies
 
-### Phase 7 Features (Complete)
-
-- **Array Initialization Syntax**: `[value; count]` for initializing arrays with repeated values
-  - Example: `let buffer: [u8; 128] = [0; 128];`
-  - Works in variable declarations, struct fields, and function returns
-  - Supports type coercion (e.g., `int` to `u8` for array elements)
-- **Bitwise Operators**: Full support for bitwise operations
-  - `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
-  - Standard operator precedence: shifts before bitwise AND/XOR/OR
-  - Requires integer operands; shift amount must be unsigned
-  - Critical for network programming, binary protocols, and low-level systems code
-- **Complete Escape Sequence Support**: All standard C escape sequences
-  - `\r` (carriage return), `\t` (tab), `\0` (null terminator)
-  - `\n` (newline), `\\` (backslash), `\"` (double quote), `\'` (single quote)
-  - Essential for HTTP protocol implementation (`\r\n` line endings)
-
-### Phase 8 Features (Complete)
-
-- **Type Casting**: `expr as Type` syntax for explicit type conversions between numeric types
-  - Example: `let u8_val: u8 = int_val as u8;`
-  - Only allows casts between numeric types (integers and floats)
-- **Array Element Assignment**: `arr[i] = value` syntax for mutating array elements
-  - Example: `let mut arr: [int; 5] = [0; 5]; arr[0] = 10;`
-  - Requires mutable array variables
-- **Full Comparison Operators**: `<=` and `>=` operators for complete relational comparisons
-  - Example: `if a <= b { ... }` and `if b >= a { ... }`
-
 ### Not Yet Supported
 
 - Trait bounds on generics
-- Pattern matching guards
-- Raw pointer dereferencing in Ion code (raw pointers are pass-through only, except in unsafe blocks)
+- `else if` chains (use nested `if`/`else`)
+- `break` / `continue`
+- Raw pointer dereferencing outside `unsafe` blocks
+- LSP go-to-definition for functions and methods
+- LSP type hover on `let` binding names
 
 ## Examples
 
@@ -580,7 +571,7 @@ fn main() -> int {
         i = i + 1;
     }
     
-    // Comparison operators (Phase 8)
+    // Comparison operators
     let a: int = 10;
     let b: int = 20;
     if a <= b {  // true
@@ -634,7 +625,7 @@ fn main() -> int {
     return 0;
 }
 
-// Type casting (Phase 8)
+// Type casting
 fn main() -> int {
     let a: int = 10;
     let b: u8 = a as u8;  // int to u8
@@ -684,11 +675,11 @@ fn main() -> int {
     // Array literals
     let numbers: [int; 3] = [1, 2, 3];
     
-    // Array initialization with repeated values (Phase 7)
+    // Array initialization with repeated values
     let zeros: [int; 10] = [0; 10];
     let ones: [u8; 5] = [1; 5];
     
-    // Array element assignment (Phase 8)
+    // Array element assignment
     let mut buffer: [u8; 128] = [0; 128];
     buffer[0] = 65;  // 'A'
     buffer[1] = 66;  // 'B'
@@ -702,7 +693,7 @@ fn main() -> int {
 }
 ```
 
-### Bitwise Operations (Phase 7)
+### Bitwise Operations
 
 ```ion
 fn main() -> int {
@@ -725,7 +716,7 @@ fn main() -> int {
 }
 ```
 
-### Escape Sequences (Phase 7)
+### Escape Sequences
 
 ```ion
 fn main() -> int {
@@ -795,7 +786,7 @@ enum Option<T> {
 }
 
 fn main() -> int {
-    // Vec operations with method call syntax (Phase 5)
+    // Vec operations with method call syntax
     let mut v: Vec<int> = Vec::new();
     v.push(10);
     v.push(20);
@@ -807,7 +798,7 @@ fn main() -> int {
         Option::None => {}
     };
     
-    // String operations with method call syntax (Phase 5)
+    // String operations with method call syntax
     let mut s: String = String::new();
     s.push_str("Hello");
     s.push_str(", Ion!");

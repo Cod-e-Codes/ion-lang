@@ -1,4 +1,4 @@
-## Ion Language Specification (Phase 8)
+## Ion Language Specification
 
 ### 1. Introduction
 
@@ -10,7 +10,7 @@ Ion is a systems programming language designed for:
 - **Simple syntax** and predictable performance
 - A minimal, C-oriented runtime and ABI
 
-This document defines the core semantics of Ion for Phase 8. Phase 8 extends Phase 7 with type casting, array element assignment, and complete comparison operators. Phase 7 introduced array initialization syntax, bitwise operators, and complete escape sequence support. Phase 6 extended Phase 5 with struct-style enum variants and for loops. Phase 5 introduced method call syntax (Uniform Function Call Syntax) for improved ergonomics. Phase 4 introduced a complete type system including boolean, floating-point, additional integer types, and type aliases. This specification is intended to be:
+This document defines Ion semantics for the current compiler: ownership, types, control flow, generics, concurrency, and the C code generation backend. It is intended to be:
 
 - Precise enough to guide an implementation (parser, type checker, and C backend)
 - Strict about memory and concurrency safety
@@ -351,7 +351,7 @@ while_stmt       = "while" , expr , block ;
 for_stmt         = "for" , identifier , "in" , expr , block , ";" ;
 
 match_stmt       = "match" , expr , "{" , { match_arm } , "}" ;
-match_arm        = pattern , "=>" , block ;
+match_arm        = pattern , [ "if" , expr ] , "=>" , block ;
 
 return_stmt      = "return" , [ expr ] , ";" ;
 
@@ -1249,6 +1249,8 @@ for identifier in expr { ... }
 **Semantics:**
 - The iterable expression must be of type `Vec<T>`, `String`, or `[T; N]`
 - The loop variable is bound to each element in sequence
+- For `Vec<T>` and `[T; N]`, the loop variable has type `T`
+- For `String`, the loop variable has type `u8` (raw UTF-8 bytes, not graphemes)
 - For loops are desugared to while loops with index-based iteration
 - The loop body has access to the loop variable
 
@@ -1442,11 +1444,10 @@ Phase 3 extends Phase 2 with arrays, slices, explicit unsafe blocks, and multi-f
 #### 12.4 Not Yet Implemented
 - Advanced iterator pipelines and zero-cost abstractions beyond the basics.
 
-### 16. Phase 8 Implementation Status
+### 16. Type Casting and Standard I/O
 
-Phase 8 extends Phase 7 with type casting, array element assignment, complete comparison operators, and a safe standard library. **Phase 8 is complete** with all features implemented and tested.
+Ion supports type casting, array element assignment, full comparison operators, and a safe standard library.
 
-#### 13.1 Implemented in Phase 8 (Complete)
 - **Comparison Operators**: Full support for `<=`, `>=` (in addition to `==`, `!=`, `<`, `>`)
 - **Modulo Operator**: `%` for integer types
 - **Type Casting**: `as` keyword for numeric conversions (e.g., `float as int`)
@@ -1455,7 +1456,41 @@ Phase 8 extends Phase 7 with type casting, array element assignment, complete co
   - `io::print`, `io::println` for safe string output
   - `String` field access (`.data`, `.len`) for low-level manipulation
 
-### 17. Future Work (Non-Normative)
+### 17. Tooling and Known Limitations
+
+#### 17.1 Language server (LSP)
+
+The `ion-lsp` binary and VS Code/Cursor extension provide:
+
+- Syntax highlighting (TextMate grammar, no server required)
+- Parse and type diagnostics
+- Hover: variable types at **use sites**; symbol docs at definitions
+- Completion: keywords, builtins, and file symbols (no prefix filtering yet)
+- Go to definition: variables only (not function or method calls)
+
+Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor settings to the executable path.
+
+#### 17.2 Recent language additions
+
+- **Array and string `for...in`**: `[T; N]` and `String` iteration (string yields `u8`)
+- **Match guards**: `pattern if expr => { ... }` where `expr` must be `bool`
+- **Nested match patterns**: Struct and enum sub-patterns in match arms
+- **Generic field access**: Field lookup on values with generic parameters
+- **Generic call inference and monomorphization**: Type arguments inferred from the first argument; each instantiation emits a separate C function (e.g. `get_first_int`)
+- **Bounds-checked indexing**: Runtime checks for `[T; N]` and `String` index operations
+- **stdlib/io.ion**: `print_int` decimal conversion
+- **stdlib/fmt.ion**: `int_to_string`, `print_int`, `println_int`
+
+#### 17.3 Known limitations
+
+- String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
+- No `else if` syntax; use nested `if`/`else`
+- `break` and `continue` are not implemented
+- Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
+- LSP type hover on variable uses only, not `let` binding sites
+- LSP go-to-definition does not resolve function or method callees
+
+### 18. Future Work (Non-Normative)
 
 The following features are deliberately **out of scope** for Phase 2:
 
@@ -1469,7 +1504,7 @@ Any such addition must:
 - Preserve the no-escape rule and simple ownership model.
 - Not require GC or complex runtime machinery.
 
-### 18. Appendix: Recommended Design Patterns (Non-Normative)
+### 19. Appendix: Recommended Design Patterns (Non-Normative)
 
 This appendix describes idioms that work well with Ion’s ownership and no-escape borrowing rules.  They are not part of the core semantics, but library and application authors are encouraged to follow them for clarity and safety.
 

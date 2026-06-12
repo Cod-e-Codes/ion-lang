@@ -1,16 +1,30 @@
-import * as path from 'path';
-import { workspace, ExtensionContext } from 'vscode';
+import { workspace, ExtensionContext, window } from 'vscode';
 import {
     LanguageClient,
     LanguageClientOptions,
     ServerOptions,
 } from 'vscode-languageclient/node';
+import * as fs from 'fs';
 
 let client: LanguageClient;
 
+function resolveLspPath(configured: string): string {
+    const folder = workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+    return configured
+        .replace(/\$\{workspaceFolder\}/g, folder)
+        .replace(/\$\{workspaceRoot\}/g, folder);
+}
+
 export function activate(context: ExtensionContext) {
     const config = workspace.getConfiguration('ion');
-    const serverPath = config.get<string>('lspPath') || 'ion-lsp';
+    const configured = config.get<string>('lspPath') || 'ion-lsp';
+    const serverPath = resolveLspPath(configured);
+
+    if (!fs.existsSync(serverPath)) {
+        void window.showWarningMessage(
+            `Ion LSP not found at: ${serverPath}. Build with: cargo build --release --bin ion-lsp`
+        );
+    }
 
     const serverOptions: ServerOptions = {
         command: serverPath,

@@ -1,0 +1,7 @@
+import "../stdlib/io.ion" as io;
+
+fn main() -> int {
+    io::print_int(42);
+    io::print_int(-7);
+    return 0;
+}

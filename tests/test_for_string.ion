@@ -1,0 +1,11 @@
+fn main() -> int {
+    let s: String = String::from("abc");
+    let mut count: int = 0;
+    for _ch in s {
+        count = count + 1;
+    }
+    if count != 3 {
+        return 1;
+    }
+    return 0;
+}

@@ -1,0 +1,95 @@
+// Formatting utilities built on stdlib/io.ion
+
+import "./io.ion" as io;
+
+extern "C" {
+    fn write(fd: int, buf: *u8, count: int) -> int;
+}
+
+pub fn print_int(n: int) {
+    io::print_int(n);
+}
+
+pub fn println_int(n: int) {
+    io::print_int(n);
+    unsafe {
+        let _newline: int = write(1, "\n", 1);
+    }
+}
+
+// Build decimal representation into an owned String.
+pub fn int_to_string(n: int) -> String {
+    let mut buf: [u8; 12] = [0; 12];
+    let mut len: int = 0;
+    let mut negative: bool = false;
+    let mut value: int = n;
+    let mut result: String = String::new();
+
+    if value == 0 {
+        return String::from("0");
+    }
+
+    if value < 0 {
+        negative = true;
+        if value == -2147483648 {
+            return String::from("-2147483648");
+        }
+        value = 0 - value;
+    }
+
+    while value > 0 {
+        let digit: int = value % 10;
+        buf[len] = (48 + digit) as u8;
+        len = len + 1;
+        value = value / 10;
+    }
+
+    if negative {
+        String::push_str(&mut result, "-");
+    }
+
+    let mut i: int = len - 1;
+    while i >= 0 {
+        let ch: u8 = buf[i];
+        if ch == 48 {
+            String::push_str(&mut result, "0");
+        } else {
+            if ch == 49 {
+                String::push_str(&mut result, "1");
+            } else {
+                if ch == 50 {
+                    String::push_str(&mut result, "2");
+                } else {
+                    if ch == 51 {
+                        String::push_str(&mut result, "3");
+                    } else {
+                        if ch == 52 {
+                            String::push_str(&mut result, "4");
+                        } else {
+                            if ch == 53 {
+                                String::push_str(&mut result, "5");
+                            } else {
+                                if ch == 54 {
+                                    String::push_str(&mut result, "6");
+                                } else {
+                                    if ch == 55 {
+                                        String::push_str(&mut result, "7");
+                                    } else {
+                                        if ch == 56 {
+                                            String::push_str(&mut result, "8");
+                                        } else {
+                                            String::push_str(&mut result, "9");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i - 1;
+    }
+
+    return result;
+}

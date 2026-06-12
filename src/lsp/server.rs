@@ -1,15 +1,38 @@
 use crate::lexer;
 use crate::parser;
-use crate::tc::{self, TypeCheckError};
+use crate::tc::{self, TypeCheckError, type_to_string};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
+const KEYWORDS: &[&str] = &[
+    "fn", "let", "mut", "struct", "enum", "if", "else", "return", "while", "for", "match", "spawn",
+    "defer", "unsafe", "pub", "import", "extern", "type", "as", "true", "false", "int", "bool",
+    "String", "Vec", "Box", "channel", "send", "recv",
+];
+
+const BUILTINS: &[&str] = &[
+    "Vec::new",
+    "Vec::push",
+    "Vec::pop",
+    "Vec::len",
+    "Vec::get",
+    "Vec::set",
+    "String::new",
+    "String::from",
+    "String::len",
+    "String::push_str",
+    "Box::new",
+    "Box::unwrap",
+    "channel",
+    "send",
+    "recv",
+];
+
 pub struct IonLanguageServer {
     pub client: Client,
-    // Cache of LSP info per file
     pub file_cache: Arc<Mutex<HashMap<Url, tc::LspInfo>>>,
 }
 
@@ -22,7 +45,10 @@ impl LanguageServer for IonLanguageServer {
                     TextDocumentSyncKind::FULL,
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
-                completion_provider: Some(CompletionOptions::default()),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec![".".to_string(), ":".to_string()]),
+                    ..CompletionOptions::default()
+                }),
                 definition_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
@@ -58,7 +84,6 @@ impl LanguageServer for IonLanguageServer {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        // Get LSP info for this file
         let lsp_info = {
             if let Ok(cache) = self.file_cache.lock() {
                 cache.get(&uri).cloned()
@@ -68,20 +93,15 @@ impl LanguageServer for IonLanguageServer {
         };
 
         if let Some(info) = lsp_info {
-            // Find the symbol at the requested position
-            // LSP positions are 0-indexed, but our Spans are 1-indexed
             let target_line = (position.line + 1) as usize;
             let target_column = (position.character + 1) as usize;
 
-            // Search through references to find one at this position
             for (reference_span, definition_span) in &info.references {
-                // Check if the position is within this reference span
                 if reference_span.line == target_line
                     && target_column >= reference_span.column
                     && target_column
                         < reference_span.column + (reference_span.end - reference_span.start)
                 {
-                    // Found it! Return the definition location
                     let location = Location {
                         uri,
                         range: Range {
@@ -107,25 +127,103 @@ impl LanguageServer for IonLanguageServer {
         Ok(None)
     }
 
-    async fn hover(&self, _params: HoverParams) -> Result<Option<Hover>> {
-        // TODO: Implement using type checker info
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let lsp_info = {
+            if let Ok(cache) = self.file_cache.lock() {
+                cache.get(&uri).cloned()
+            } else {
+                None
+            }
+        };
+
+        let Some(info) = lsp_info else {
+            return Ok(None);
+        };
+
+        let target_line = (position.line + 1) as usize;
+        let target_column = (position.character + 1) as usize;
+
+        for (span, ty) in &info.types {
+            if span.line == target_line
+                && target_column >= span.column
+                && target_column < span.column + (span.end - span.start)
+            {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Scalar(MarkedString::String(format!(
+                        "`{}`",
+                        type_to_string(ty)
+                    ))),
+                    range: None,
+                }));
+            }
+        }
+
+        for (span, doc) in &info.hover_docs {
+            if span.line == target_line
+                && target_column >= span.column
+                && target_column < span.column + (span.end - span.start)
+            {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Scalar(MarkedString::String(doc.clone())),
+                    range: None,
+                }));
+            }
+        }
+
         Ok(None)
     }
 
-    async fn completion(&self, _params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        // TODO: Implement autocomplete
-        Ok(None)
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let lsp_info = {
+            if let Ok(cache) = self.file_cache.lock() {
+                cache.get(&uri).cloned()
+            } else {
+                None
+            }
+        };
+
+        let mut items: Vec<CompletionItem> = KEYWORDS
+            .iter()
+            .map(|kw| CompletionItem {
+                label: kw.to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            })
+            .collect();
+
+        items.extend(BUILTINS.iter().map(|name| CompletionItem {
+            label: name.to_string(),
+            kind: Some(CompletionItemKind::FUNCTION),
+            ..Default::default()
+        }));
+
+        if let Some(info) = lsp_info {
+            for symbol in &info.completion_symbols {
+                items.push(CompletionItem {
+                    label: symbol.clone(),
+                    kind: Some(CompletionItemKind::FUNCTION),
+                    ..Default::default()
+                });
+            }
+        }
+
+        let _ = position;
+        Ok(Some(CompletionResponse::Array(items)))
     }
 }
 
 impl IonLanguageServer {
     async fn check_file(&self, uri: Url, text: String) {
-        // Lex
         let mut lexer = lexer::Lexer::new(&text);
         let tokens = match lexer.tokenize() {
             Ok(t) => t,
             Err(e) => {
-                // Report lexer error
                 let diagnostic = Diagnostic {
                     range: Range::default(),
                     severity: Some(DiagnosticSeverity::ERROR),
@@ -140,72 +238,30 @@ impl IonLanguageServer {
             }
         };
 
-        // Parse
         let mut parser = parser::Parser::new(tokens);
         match parser.parse() {
             Ok(ast) => {
-                // Type Check
                 let mut checker = tc::TypeChecker::new();
                 match checker.check_program(&ast) {
                     Ok(result) => {
-                        // Store LSP info for goto_definition
                         if let Ok(mut cache) = self.file_cache.lock() {
                             cache.insert(uri.clone(), result.lsp_info);
                         }
-                        // Clear diagnostics
                         self.client.publish_diagnostics(uri, vec![], None).await;
                     }
                     Err(err) => {
-                        // Extract span and message from TypeCheckError
-                        let (span, message) = match &err {
-                            TypeCheckError::UndefinedVariable { span, name } => {
-                                (*span, format!("Undefined variable: {}", name))
-                            }
-                            TypeCheckError::TypeMismatch {
-                                span,
-                                expected,
-                                got,
-                            } => (
-                                *span,
-                                format!("Type mismatch: expected {}, got {}", expected, got),
-                            ),
-                            TypeCheckError::UseAfterMove { span, name } => {
-                                (*span, format!("Use after move: {}", name))
-                            }
-                            TypeCheckError::ReferenceEscape { span, description } => {
-                                (*span, format!("Reference escape: {}", description))
-                            }
-                            TypeCheckError::Message(msg) => {
-                                (crate::ast::Span::default(), msg.clone())
-                            }
-                        };
-
-                        let diagnostic = Diagnostic {
-                            range: Range {
-                                start: Position {
-                                    line: (span.line.saturating_sub(1)) as u32,
-                                    character: (span.column.saturating_sub(1)) as u32,
-                                },
-                                end: Position {
-                                    line: (span.line.saturating_sub(1)) as u32,
-                                    character: (span.end.saturating_sub(span.start)
-                                        + span.column.saturating_sub(1))
-                                        as u32,
-                                },
-                            },
-                            severity: Some(DiagnosticSeverity::ERROR),
-                            message,
-                            source: Some("ion-tc".to_string()),
-                            ..Default::default()
-                        };
+                        let (span, message) = diagnostic_from_tc_error(&err);
                         self.client
-                            .publish_diagnostics(uri, vec![diagnostic], None)
+                            .publish_diagnostics(
+                                uri,
+                                vec![diagnostic_for_span(span, message)],
+                                None,
+                            )
                             .await;
                     }
                 }
             }
             Err(err) => {
-                // Report parse error
                 let (span, message) = match &err {
                     parser::ParseError::UnexpectedToken {
                         span,
@@ -220,29 +276,51 @@ impl IonLanguageServer {
                     }
                     parser::ParseError::Message(msg) => (crate::ast::Span::default(), msg.clone()),
                 };
-
-                let diagnostic = Diagnostic {
-                    range: Range {
-                        start: Position {
-                            line: (span.line.saturating_sub(1)) as u32,
-                            character: (span.column.saturating_sub(1)) as u32,
-                        },
-                        end: Position {
-                            line: (span.line.saturating_sub(1)) as u32,
-                            character: (span.end.saturating_sub(span.start)
-                                + span.column.saturating_sub(1))
-                                as u32,
-                        },
-                    },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    message,
-                    source: Some("ion-parser".to_string()),
-                    ..Default::default()
-                };
                 self.client
-                    .publish_diagnostics(uri, vec![diagnostic], None)
+                    .publish_diagnostics(uri, vec![diagnostic_for_span(span, message)], None)
                     .await;
             }
         }
+    }
+}
+
+fn diagnostic_from_tc_error(err: &TypeCheckError) -> (crate::ast::Span, String) {
+    match err {
+        TypeCheckError::UndefinedVariable { span, name } => {
+            (*span, format!("Undefined variable: {}", name))
+        }
+        TypeCheckError::TypeMismatch {
+            span,
+            expected,
+            got,
+        } => (
+            *span,
+            format!("Type mismatch: expected {}, got {}", expected, got),
+        ),
+        TypeCheckError::UseAfterMove { span, name } => (*span, format!("Use after move: {}", name)),
+        TypeCheckError::ReferenceEscape { span, description } => {
+            (*span, format!("Reference escape: {}", description))
+        }
+        TypeCheckError::Message(msg) => (crate::ast::Span::default(), msg.clone()),
+    }
+}
+
+fn diagnostic_for_span(span: crate::ast::Span, message: String) -> Diagnostic {
+    Diagnostic {
+        range: Range {
+            start: Position {
+                line: (span.line.saturating_sub(1)) as u32,
+                character: (span.column.saturating_sub(1)) as u32,
+            },
+            end: Position {
+                line: (span.line.saturating_sub(1)) as u32,
+                character: (span.end.saturating_sub(span.start) + span.column.saturating_sub(1))
+                    as u32,
+            },
+        },
+        severity: Some(DiagnosticSeverity::ERROR),
+        message,
+        source: Some("ion".to_string()),
+        ..Default::default()
     }
 }

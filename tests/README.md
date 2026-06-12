@@ -121,6 +121,14 @@ Each test is an Ion source file (`.ion`) that should:
 - `test_io_print.ion` - Safe I/O library: `print()` function for String
 - `test_io_println.ion` - Safe I/O library: `println()` function for String
 
+### Iteration, Guards, and Formatting Tests
+- `test_for_array.ion` - `for...in` over fixed-size arrays
+- `test_for_string.ion` - `for...in` over `String` (byte iteration)
+- `test_match_guard.ion` - Match arms with `if` guards
+- `test_generic_field_access.ion` - Field access on generic struct values
+- `test_io_print_int.ion` - `io::print_int` decimal output
+- `test_fmt_int_to_string.ion` - `fmt::int_to_string` conversion
+
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors
 - `test_ref_return_error.ion` - Reference escape errors

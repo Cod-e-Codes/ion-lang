@@ -1,0 +1,17 @@
+struct Pair<T> {
+    first: T;
+    second: T;
+}
+
+fn get_first<T>(pair: Pair<T>) -> T {
+    return pair.first;
+}
+
+fn main() -> int {
+    let p: Pair<int> = Pair { first: 42, second: 99 };
+    let v: int = get_first(p);
+    if v != 42 {
+        return 1;
+    }
+    return 0;
+}

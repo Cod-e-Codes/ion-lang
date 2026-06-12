@@ -42,10 +42,9 @@ fn create_point(x: int, y: int) -> Point {
     return Point { x: x, y: y };
 }
 
-// Generic function example (field access on generics not yet fully supported)
-// fn get_first<T>(pair: Pair<T>) -> T {
-//     return pair.first;
-// }
+fn get_first<T>(pair: Pair<T>) -> T {
+    return pair.first;
+}
 
 // ============================================
 // 4. HEAP ALLOCATION - Box<T>
