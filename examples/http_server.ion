@@ -1,15 +1,13 @@
-// HTTP Server Example - Demonstrating FFI, Phase 7, and Phase 8 Features
+// HTTP Server Example - FFI, sockets, and low-level I/O
 // This example creates a simple HTTP server that listens on port 8080
 // and responds to GET requests with a simple HTML page.
 //
-// Phase 7 Features Demonstrated:
-// - Array initialization syntax: [0; 128] for buffer initialization
+// Language features used:
+// - Array initialization: [0; 128] for buffer initialization
 // - Bitwise operations: port >> 8 and port & 0xFF for byte extraction
 // - Escape sequences: \r\n for proper HTTP line endings
-//
-// Phase 8 Features Demonstrated:
 // - Type casting: (port_net >> 8) as u8 for byte extraction
-// - Array element assignment: buffer[0] = value (used in recv/send operations)
+// - Array element assignment in recv/send buffer use
 //
 // Note: This is a simplified example. A production server would:
 // - Handle multiple concurrent connections using spawn
@@ -82,7 +80,7 @@ fn create_sockaddr_in(port: u16) -> SockAddrInBytes {
         // Convert port to network byte order
         let port_net: u16 = htons(port);
         
-        // Extract bytes using bitwise operations with type casting (Phase 8)
+        // Extract bytes using bitwise operations with type casting
         // High byte: (port_net >> 8) as u8
         // Low byte: (port_net & 255) as u8  // 255 = 0xFF
         let shift8: u16 = 8;  // Shift amount must be unsigned

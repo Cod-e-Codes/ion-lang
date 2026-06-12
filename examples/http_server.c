@@ -17,6 +17,9 @@ extern int send_sys(int sockfd, uint8_t* buf, int len, int flags);
 extern int close(int fd);
 extern uint16_t htons(uint16_t hostshort);
 
+SockAddrInBytes create_sockaddr_in(uint16_t port);
+int handle_client(int client_fd);
+int main(void);
 SockAddrInBytes create_sockaddr_in(uint16_t port) {
     SockAddrInBytes ret_val = {0};
     {

@@ -6,6 +6,7 @@
 
 extern int write(int fd, uint8_t* buf, int count);
 
+int main(void);
 int main(void) {
     int ret_val = 0;
     {

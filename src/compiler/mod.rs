@@ -90,43 +90,7 @@ impl Compiler {
         let program = parser.parse().map_err(CompileError::ParseError)?;
 
         // Recursively parse imports and build export maps
-        for import in &program.imports {
-            let import_path = self.resolve_import_path(&import.path, &canonical_path);
-            let imported_module = self.parse_module(&import_path)?;
-
-            // Build exports for this imported module
-            let mut exports = ModuleExports {
-                functions: HashMap::new(),
-                structs: HashMap::new(),
-                enums: HashMap::new(),
-                all_functions: HashMap::new(),
-            };
-
-            // Collect public functions and track all functions for error messages
-            for func in &imported_module.functions {
-                exports.all_functions.insert(func.name.clone(), func.pub_);
-                if func.pub_ {
-                    exports.functions.insert(func.name.clone(), func.clone());
-                }
-            }
-
-            // Collect public structs
-            for s in &imported_module.structs {
-                if s.pub_ {
-                    exports.structs.insert(s.name.clone(), s.clone());
-                }
-            }
-
-            // Collect public enums
-            for e in &imported_module.enums {
-                if e.pub_ {
-                    exports.enums.insert(e.name.clone(), e.clone());
-                }
-            }
-
-            // Store exports by import alias
-            self.module_exports.insert(import.alias.clone(), exports);
-        }
+        self.register_imports(&canonical_path, &program.imports)?;
 
         // Remove from visiting set
         self.visiting.remove(&canonical_path);
@@ -134,6 +98,53 @@ impl Compiler {
         // Cache and return
         self.modules.insert(canonical_path, program.clone());
         Ok(program)
+    }
+
+    /// Resolve imports for a file and populate `module_exports`.
+    /// Used when the root program is already parsed (e.g. LSP buffer text).
+    pub fn register_imports(
+        &mut self,
+        from_file: &Path,
+        imports: &[ImportStmt],
+    ) -> Result<(), CompileError> {
+        let canonical_from = from_file
+            .canonicalize()
+            .unwrap_or_else(|_| from_file.to_path_buf());
+
+        for import in imports {
+            let import_path = self.resolve_import_path(&import.path, &canonical_from);
+            let imported_module = self.parse_module(&import_path)?;
+
+            let mut exports = ModuleExports {
+                functions: HashMap::new(),
+                structs: HashMap::new(),
+                enums: HashMap::new(),
+                all_functions: HashMap::new(),
+            };
+
+            for func in &imported_module.functions {
+                exports.all_functions.insert(func.name.clone(), func.pub_);
+                if func.pub_ {
+                    exports.functions.insert(func.name.clone(), func.clone());
+                }
+            }
+
+            for s in &imported_module.structs {
+                if s.pub_ {
+                    exports.structs.insert(s.name.clone(), s.clone());
+                }
+            }
+
+            for e in &imported_module.enums {
+                if e.pub_ {
+                    exports.enums.insert(e.name.clone(), e.clone());
+                }
+            }
+
+            self.module_exports.insert(import.alias.clone(), exports);
+        }
+
+        Ok(())
     }
 
     /// Get all parsed modules

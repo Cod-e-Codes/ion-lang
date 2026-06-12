@@ -1,3 +1,4 @@
+use crate::compiler;
 use crate::lexer;
 use crate::parser;
 use crate::tc::{self, TypeCheckError, type_to_string};
@@ -242,6 +243,14 @@ impl IonLanguageServer {
         match parser.parse() {
             Ok(ast) => {
                 let mut checker = tc::TypeChecker::new();
+
+                if let Ok(file_path) = uri.to_file_path() {
+                    let mut compiler = compiler::Compiler::new();
+                    if compiler.register_imports(&file_path, &ast.imports).is_ok() {
+                        checker.set_module_exports(compiler.get_module_exports().clone());
+                    }
+                }
+
                 match checker.check_program(&ast) {
                     Ok(result) => {
                         if let Ok(mut cache) = self.file_cache.lock() {

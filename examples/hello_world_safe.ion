@@ -2,7 +2,6 @@
 import "../stdlib/io.ion" as io;
 
 fn main() -> int {
-    // Use safe I/O wrapper instead of direct FFI
     io::println(String::from("Hello, World!"));
     return 0;
 }

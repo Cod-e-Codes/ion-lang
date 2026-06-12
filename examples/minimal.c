@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "ion_runtime.h"
 
+int main(void);
 int main(void) {
     int ret_val = 0;
     int x = 10;

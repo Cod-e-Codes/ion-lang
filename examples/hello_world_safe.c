@@ -49,14 +49,46 @@ epilogue:
 }
 
 void print_int(int n) {
-    {
-        if (n == 0) {
+    uint8_t buf[12] = {0};
+    int len = 0;
+    int negative = 0;
+    int value = n;
+    if (value == 0) {
+        {
             int _result = write(1, "0", 1);
+        }
+                goto epilogue;
+    }
+    if (value < 0) {
+        negative = 1;
+        if (value == (-2147483648)) {
+            {
+                int _result = write(1, "-2147483648", 11);
+            }
                         goto epilogue;
         }
-        int digit = (n % 10);
-        int char_code = (48 + digit);
-        int _result = write(1, "TODO: full int conversion", 25);
+        value = (0 - value);
+    }
+    while (value > 0) {
+        int digit = (value % 10);
+        buf[len] = (uint8_t)(48 + digit);
+        len = (len + 1);
+        value = (value / 10);
+    }
+    int i = 0;
+    while (i < (len / 2)) {
+        uint8_t tmp = ({ int __ion_idx_0 = i; (__ion_idx_0 >= 0 && __ion_idx_0 < 12) ? buf[__ion_idx_0] : (ion_panic("Array index out of bounds"), buf[0]); });
+        buf[i] = ({ int __ion_idx_1 = ((len - 1) - i); (__ion_idx_1 >= 0 && __ion_idx_1 < 12) ? buf[__ion_idx_1] : (ion_panic("Array index out of bounds"), buf[0]); });
+        buf[((len - 1) - i)] = tmp;
+        i = (i + 1);
+    }
+    if (negative) {
+        {
+            int _minus = write(1, "-", 1);
+        }
+    }
+    {
+        int _result = write(1, &buf[0], len);
     }
 epilogue:
         return;

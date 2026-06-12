@@ -1,4 +1,4 @@
-// Ion Language Showcase - Demonstrating Phase 1 Features
+// Ion Language Showcase
 
 // ============================================
 // 1. STRUCTS - Custom data types
@@ -8,7 +8,6 @@ struct Point {
     y: int;
 }
 
-// Generic struct
 struct Pair<T> {
     first: T;
     second: T;
@@ -25,6 +24,11 @@ enum Option<T> {
 enum Result<T, E> {
     Ok(T);
     Err(E);
+}
+
+enum Status {
+    Ok { value: int };
+    Err { code: int };
 }
 
 // ============================================
@@ -61,19 +65,16 @@ fn box_example() -> int {
 // ============================================
 fn vec_example() -> int {
     let mut numbers: Vec<int> = Vec::new();
-    
-    // Push some values (using method call syntax)
+
     numbers.push(10);
     numbers.push(20);
     numbers.push(30);
-    
-    // Get length (using method call syntax)
+
     let len: int = numbers.len();
     if len != 3 {
         return 1;
     }
-    
-    // Access elements (using method call syntax)
+
     match numbers.get(0) {
         Option::Some(value) => {
             if value != 10 {
@@ -84,11 +85,9 @@ fn vec_example() -> int {
             return 3;
         }
     };
-    
-    // Modify elements (using method call syntax)
+
     numbers.set(1, 25);
-    
-    // Pop elements (using method call syntax)
+
     match numbers.pop() {
         Option::Some(value) => {
             if value != 30 {
@@ -99,7 +98,25 @@ fn vec_example() -> int {
             return 5;
         }
     };
-    
+
+    return 0;
+}
+
+fn for_loop_example() -> int {
+    let mut values: Vec<int> = Vec::new();
+    values.push(1);
+    values.push(2);
+    values.push(3);
+
+    let mut sum: int = 0;
+    for v in values {
+        sum = sum + v;
+    }
+
+    if sum != 6 {
+        return 1;
+    }
+
     return 0;
 }
 
@@ -111,19 +128,18 @@ fn string_example() -> int {
     greeting.push_str("Hello");
     greeting.push_str(", ");
     greeting.push_str("Ion!");
-    
+
     let len: int = greeting.len();
     if len != 11 {
         return 1;
     }
-    
-    // String from literal
+
     let message: String = "Welcome to Ion";
     let msg_len: int = message.len();
     if msg_len != 14 {
         return 2;
     }
-    
+
     return 0;
 }
 
@@ -132,28 +148,30 @@ fn string_example() -> int {
 // ============================================
 fn if_example() -> int {
     let cap: int = 10;
-    
-    // If/else branching - matching pattern from working tests
+
     if cap < 10 {
         return 1;
     }
-    
+
     let len: int = 5;
     if len == 0 {
         return 2;
     }
-    
+
     return 0;
 }
 
 fn while_example() -> int {
-    let x: int = 0;
-    
-    // While loop with condition
-    while x < 0 {
-        let _: int = x + 1;
+    let mut x: int = 0;
+
+    while x < 3 {
+        x = x + 1;
     }
-    
+
+    if x != 3 {
+        return 1;
+    }
+
     return 0;
 }
 
@@ -164,6 +182,9 @@ fn control_flow_example() -> int {
     if while_example() != 0 {
         return 2;
     }
+    if for_loop_example() != 0 {
+        return 3;
+    }
     return 0;
 }
 
@@ -172,18 +193,17 @@ fn control_flow_example() -> int {
 // ============================================
 fn pattern_matching_example() -> int {
     let opt: Option<int> = Option::Some(42);
-    
+
     match opt {
-        Option::Some(value) => {
-            if value != 42 {
-                return 1;
-            }
+        Option::Some(v) if v == 42 => {}
+        Option::Some(_) => {
+            return 1;
         }
         Option::None => {
             return 2;
         }
     };
-    
+
     let result: Result<int, int> = Result::Ok(100);
     match result {
         Result::Ok(value) => {
@@ -195,7 +215,19 @@ fn pattern_matching_example() -> int {
             return 4;
         }
     };
-    
+
+    let status: Status = Status::Ok { value: 7 };
+    match status {
+        Status::Ok { value: v } => {
+            if v != 7 {
+                return 5;
+            }
+        }
+        Status::Err { code: _c } => {
+            return 6;
+        }
+    };
+
     return 0;
 }
 
@@ -205,16 +237,18 @@ fn pattern_matching_example() -> int {
 fn reference_example() -> int {
     let mut x: int = 10;
     let y: int = 20;
-    
-    // Immutable reference (can be passed to functions)
-    let ref_y: &int = &y;
-    
-    // Mutable reference (can be passed to functions)
-    let ref_x: &mut int = &mut x;
-    
-    // References are used implicitly when passed to functions
-    // For example: Vec::len(&v) takes a reference
-    
+
+    let _ref_y: &int = &y;
+    let _ref_x: &mut int = &mut x;
+
+    // Method calls borrow the receiver automatically
+    let mut values: Vec<int> = Vec::new();
+    values.push(x);
+    values.push(y);
+    if values.len() != 2 {
+        return 1;
+    }
+
     return 0;
 }
 
@@ -222,30 +256,34 @@ fn reference_example() -> int {
 // 10. GENERICS - Type parameterization
 // ============================================
 fn generic_example() -> int {
-    // Generic struct - can be instantiated with different types
     let int_pair: Pair<int> = Pair { first: 10, second: 20 };
-    // Note: Field access on generic types in functions needs type resolution
-    
-    // Generic enum
+
+    if int_pair.first != 10 {
+        return 1;
+    }
+
+    if get_first(int_pair) != 10 {
+        return 2;
+    }
+
     let opt_int: Option<int> = Option::Some(42);
-    
+
     match opt_int {
         Option::Some(_) => {}
         Option::None => {
-            return 2;
+            return 3;
         }
     };
-    
-    // Generic Vec (using method call syntax)
+
     let mut vec: Vec<int> = Vec::new();
     vec.push(1);
     vec.push(2);
-    
+
     let vec_len: int = vec.len();
     if vec_len != 2 {
-        return 3;
+        return 4;
     }
-    
+
     return 0;
 }
 
@@ -253,20 +291,17 @@ fn generic_example() -> int {
 // 11. COMPLEX EXAMPLE - Combining features
 // ============================================
 fn complex_example() -> int {
-    // Create a vector of integers (Vec::new defaults to Vec<int>)
     let mut numbers: Vec<int> = Vec::new();
-    
+
     numbers.push(1);
     numbers.push(3);
     numbers.push(5);
-    
-    // Access elements from vector (using method call syntax)
+
     let len: int = numbers.len();
     if len != 3 {
         return 1;
     }
-    
-    // Get first element (using method call syntax)
+
     match numbers.get(0) {
         Option::Some(value) => {
             if value != 1 {
@@ -277,8 +312,7 @@ fn complex_example() -> int {
             return 3;
         }
     };
-    
-    // Get second element (using method call syntax)
+
     match numbers.get(1) {
         Option::Some(value) => {
             if value != 3 {
@@ -289,16 +323,15 @@ fn complex_example() -> int {
             return 5;
         }
     };
-    
-    // Work with strings (using method call syntax)
+
     let mut description: String = "Numbers: ";
     description.push_str("(");
-    
+
     let desc_len: int = description.len();
     if desc_len < 8 {
         return 6;
     }
-    
+
     return 0;
 }
 
@@ -306,48 +339,44 @@ fn complex_example() -> int {
 // MAIN - Run all examples
 // ============================================
 fn main() -> int {
-    // Basic arithmetic (from minimal.ion)
     let x: int = 10;
     let y: int = 20;
     let z: int = x + y;
     if z != 30 {
         return 100;
     }
-    
-    // Test all features
+
     if box_example() != 42 {
         return 1;
     }
-    
+
     if vec_example() != 0 {
         return 2;
     }
-    
+
     if string_example() != 0 {
         return 3;
     }
-    
+
     if control_flow_example() != 0 {
         return 4;
     }
-    
+
     if pattern_matching_example() != 0 {
         return 5;
     }
-    
+
     if reference_example() != 0 {
         return 6;
     }
-    
+
     if generic_example() != 0 {
         return 7;
     }
-    
+
     if complex_example() != 0 {
         return 8;
     }
-    
-    // All tests passed!
+
     return 0;
 }
-

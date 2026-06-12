@@ -861,11 +861,10 @@ fn infer_type_from_expr(expr: &Expr) -> Type {
             infer_type_from_call(&call_expr.callee, &call_expr.args).unwrap_or(Type::Int)
         }
         Expr::StringLit(_) => Type::String,
-        Expr::Ref(ref_expr) => {
-            // &T -> T, but we can't infer T from the inner expression easily
-            // For now, just infer from inner
-            infer_type_from_expr(&ref_expr.inner)
-        }
+        Expr::Ref(ref_expr) => Type::Ref {
+            inner: Box::new(infer_type_from_expr(&ref_expr.inner)),
+            mutable: ref_expr.mutable,
+        },
         _ => Type::Int, // Default fallback
     }
 }
