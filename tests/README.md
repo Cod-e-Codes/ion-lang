@@ -18,6 +18,8 @@ Or from the project root:
 cd tests && ./test_runner.sh
 ```
 
+On Windows, use Git Bash, not WSL bash. WSL often cannot run `ion-compiler.exe`.
+
 ## Test Format
 
 Each test is an Ion source file (`.ion`) that should:
