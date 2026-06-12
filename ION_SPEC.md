@@ -67,6 +67,8 @@ The type checker tracks moves and borrows to prevent use-after-move and use-afte
 - **No hidden allocations**: All heap allocation is explicit in Ion code.
 - **Deterministic destruction**: Values are destroyed at scope end; `defer` ensures deterministic cleanup actions.
 
+Feature coverage is validated by the integration test suite. See [tests/README.md](tests/README.md).
+
 ### 2. Lexical Structure
 
 #### 2.1 Characters and Source Files
@@ -165,12 +167,12 @@ fn main() -> int {
 Ion supports:
 
 - **Integer literals** (e.g., `0`, `42`) – implemented
-- **String literals**: `"..."` with complete escape sequence support (Phase 7)
+- **String literals**: `"..."` with complete escape sequence support
   - `\r` (carriage return), `\n` (newline), `\t` (tab), `\0` (null)
   - `\\` (backslash), `\"` (double quote), `\'` (single quote)
   - Can be assigned to `String` type
-- **Floating-point literals** (e.g., `3.14`, `1e9`, `.5`, `3.`) – implemented (Phase 4)
-- **Boolean literals**: `true`, `false` – implemented (Phase 4)
+- **Floating-point literals** (e.g., `3.14`, `1e9`, `.5`, `3.`) – implemented
+- **Boolean literals**: `true`, `false` – implemented
 
 The exact numeric literal grammar is given in the EBNF (Section 3.1).
 
@@ -179,11 +181,11 @@ The exact numeric literal grammar is given in the EBNF (Section 3.1).
 Ion uses the following operators:
 
 - Arithmetic: `+`, `-`, `*`, `/`, `%`
-- Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=` (Phase 8)
+- Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - Logical: `&&`, `||`, `!`
-- Bitwise (Phase 7): `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
+- Bitwise: `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
 - Assignment: `=`
-- Type casting (Phase 8): `as` keyword for explicit type conversions
+- Type casting: `as` keyword for explicit type conversions
 - Field access: `.`
 - Address-of / borrow: `&` (borrow shared) and `&mut` (borrow exclusive)
 - Channel: `<-` (send and receive in expressions)
@@ -202,7 +204,7 @@ Delimiters:
 ##### 2.2.5 Comments and Whitespace
 
 - Line comment: `//` to end of line.
-- Block comments are not defined in Phase 0 (may be added later).
+- Block comments are not defined (may be added later).
 
 Whitespace (spaces, tabs, newlines) separates tokens but is otherwise insignificant, except in string literals.
 
@@ -276,7 +278,7 @@ fn_decl          = "fn" , identifier , type_params? , "(" , params? , ")" ,
                    return_type? , block ;
 
 type_params      = "<" , type_param , { "," , type_param } , ">" ;
-type_param       = identifier ;  (* Phase 0: no bounds *)
+type_param       = identifier ;  (* no trait bounds *)
 
 params           = param , { "," , param } ;
 param            = identifier , ":" , type_expr ;
@@ -284,7 +286,7 @@ param            = identifier , ":" , type_expr ;
 return_type      = "->" , type_expr ;
 ```
 
-In Phase 2, visibility is controlled by the `pub` keyword. Top-level declarations (functions, structs, enums) may be prefixed with `pub` to make them accessible from other modules. Non-public items are only accessible within the same file. Public items can be accessed from other modules via qualified names (`mod::item`).
+Visibility is controlled by the `pub` keyword. Top-level declarations (functions, structs, enums) may be prefixed with `pub` to make them accessible from other modules. Non-public items are only accessible within the same file. Public items can be accessed from other modules via qualified names (`mod::item`).
 
 #### 3.3 Types
 
@@ -318,7 +320,7 @@ channel_type     = "channel" , "<" , type_expr , ">" ;
 generic_type     = identifier , "<" , type_expr , { "," , type_expr } , ">" ;
 ```
 
-Note: Union types (`A | B`) are reserved for future use and may be restricted or removed; enums are the primary sum type mechanism in Phase 0.
+Note: Union types (`A | B`) are reserved for future use and may be restricted or removed; enums are the primary sum type mechanism.
 
 #### 3.4 Statements and Blocks
 
@@ -415,7 +417,7 @@ arg_list         = expr , { "," , expr } ;
 
 send_suffix      = "<-" , expr ;  (* e.g., tx<-value *)
 
-cast             = "as" , type_expr ;  (* Phase 8: type casting *)
+cast             = "as" , type_expr ;  (* type casting *)
 
 primary_expr     = identifier
                  | literal
@@ -456,23 +458,23 @@ This grammar is compatible with a conventional expression parser. Channel send a
 
 #### 4.1 Primitive and Built-in Types
 
-Ion includes the following primitive types (Phase 4 implementation):
+Ion includes the following primitive types:
 
 - Machine-sized integer: `int` (signed integer matching the target platform's `int`)
-- Signed integers: `i8`, `i16`, `i32`, `i64` (Phase 4)
-- Unsigned integers: `u8` (available for raw pointers), `u16`, `u32`, `u64`, `uint` (Phase 4)
-- Floating point: `f32`, `f64` (Phase 4)
-- Boolean: `bool` (Phase 4)
+- Signed integers: `i8`, `i16`, `i32`, `i64`
+- Unsigned integers: `u8` (available for raw pointers), `u16`, `u32`, `u64`, `uint`
+- Floating point: `f32`, `f64`
+- Boolean: `bool`
 - Unit / void: `void` (function return type with no value)
 
 Additional built-in generic types:
 
-- `Box<T>` – heap-allocated `T` with owning semantics (fully implemented: `Box::new()`, `Box::unwrap()`)
-- `channel<T>` – bounded MPSC channel carrying values of type `T` (lowercase, not `Chan<T>`)
-- `Vec<T>` – growable heap-allocated vector (fully implemented: `Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::set()`)
+- `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`)
+- `Sender<T>` and `Receiver<T>` – move-only handles for the two ends of a bounded MPSC channel
+- `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::set()`)
 - `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::push_str()`, `String::len()`)
-- `[T; N]` – fixed-size array of `N` elements of type `T` (Phase 3)
-- `[]T` – dynamically sized slice (fat pointer) of type `T` (Phase 3)
+- `[T; N]` – fixed-size array of `N` elements of type `T`
+- `[]T` – dynamically sized slice (fat pointer) of type `T`
 
 #### 4.1.1 Array Safety
 
@@ -506,24 +508,24 @@ let x = arr[10]; // Runtime panic: "Array index out of bounds"
 ```
 
 
-**Standard library enums (user-defined in Phase 1):**
+**Standard library enums (user-defined):**
 - `Option<T>` – optional value (`Some(T)` or `None`) – can be defined as a generic enum
 - `Result<T, E>` – success or error (`Ok(T)` or `Err(E)`) – can be defined as a generic enum
 
 User-defined types:
 
-- `struct` – product types (with generic support in Phase 1, visibility in Phase 2)
-- `enum` – tagged unions (sum types) with tuple-style variants (with generic support in Phase 1, visibility in Phase 2)
-- `*T` – raw pointer types (Phase 2, for FFI only, dereferencing only in unsafe blocks in Phase 3)
-- `[T; N]` – fixed-size array types (Phase 3)
-- `[]T` – slice types (Phase 3)
+- `struct` – product types (with generic and visibility support)
+- `enum` – tagged unions (sum types) with tuple-style or struct-style variants (with generic and visibility support)
+- `*T` – raw pointer types (for FFI; dereferencing only in `unsafe` blocks)
+- `[T; N]` – fixed-size array types
+- `[]T` – slice types
 
-**Implemented in Phase 4:**
+**Type aliases:**
 - `type` – type aliases: `type Name = T;` and `type Name<T> = Type;` syntax
 
 #### 4.2 Type Equivalence and Aliases
 
-Type aliases created with `type Name = T;` are **transparent**: `Name` is equivalent to `T` for type checking. There is no nominal distinction introduced by `type` in Phase 0.
+Type aliases created with `type Name = T;` are **transparent**: `Name` is equivalent to `T` for type checking. There is no nominal distinction introduced by `type`.
 
 Struct and enum types are **nominal**: two structs with identical fields but different names are different types.
 
@@ -560,7 +562,27 @@ Ion supports a **local, Hindley–Milner-inspired inference**:
 The inference engine is intentionally limited:
 
 - No higher-rank polymorphism.
-- No complex trait constraints; only simple, **structural** `Send` constraints may appear in Phase 0. For a generic type `Wrapper<T>`, each monomorphized instantiation `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`.
+- No complex trait constraints; only simple, **structural** `Send` constraints. For a generic type `Wrapper<T>`, each monomorphized instantiation `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`.
+
+#### 4.5 Type Casting and Array Assignment
+
+- **Type casting**: `expr as Type` performs explicit numeric conversions (e.g., `f64 as int`).
+- **Array element assignment**: `arr[i] = value` mutates a mutable array element. Subject to bounds checking unless inside `unsafe`.
+- **Array initialization**: `[value; count]` fills an array with `count` copies of `value`, where `count` is a compile-time constant.
+
+#### 4.6 Method Call Syntax
+
+`expr.method(args)` is syntactic sugar for `Type::method(expr, args)`, where `Type` is the concrete type of `expr`.
+
+- The compiler infers `&T` or `&mut T` for the receiver based on the function signature.
+- Generic methods use existing monomorphization; type arguments may be inferred from the first argument.
+- Qualified calls (`Vec::push(&mut vec, 10)`) remain valid.
+
+#### 4.7 Control Flow Extensions
+
+- **`for identifier in expr`**: iterates over `Vec<T>`, `[T; N]`, or `String`. Loop variable type is `T` for vectors and arrays, `u8` for strings (raw bytes).
+- **Match guards**: `pattern if expr => { ... }` where `expr` must be `bool`.
+- **Struct-style enum variants**: `enum E { Ok { value: int }; }` with matching literals and patterns.
 
 ### 5. Ownership and Borrowing
 
@@ -600,7 +622,7 @@ fn main() {
 
 By default, Ion types are **move-only**. For a small subset of primitive types (e.g., `int`, `bool`, pointers), the implementation may treat moves as cheap copies, but the semantic model is still “move”.
 
-Phase 0 does not expose a `Copy` marker to user code; whether a move is implemented as a copy is an implementation detail.
+Ion does not expose a `Copy` marker to user code; whether a move is implemented as a copy is an implementation detail.
 
 #### 5.3 Borrowing
 
@@ -689,7 +711,7 @@ fn print_twice(x: &int) {
 } // borrow ends here
 ```
 
-The type checker implements this by rejecting any attempt to **store or return** a type containing `&` or `&mut` outside the current function’s local variables. In particular, types such as `Option<&T>` or `Result<&T, E>` are only permitted as **local temporaries** within a function body; they cannot be returned, stored in longer-lived data structures, sent through channels, or cross thread boundaries.  Standard library APIs in Phase 0 are designed to avoid exposing such reference-carrying types across function boundaries.
+The type checker implements this by rejecting any attempt to **store or return** a type containing `&` or `&mut` outside the current function’s local variables. In particular, types such as `Option<&T>` or `Result<&T, E>` are only permitted as **local temporaries** within a function body; they cannot be returned, stored in longer-lived data structures, sent through channels, or cross thread boundaries. Standard library APIs are designed to avoid exposing such reference-carrying types across function boundaries.
 
 #### 5.5 Destruction and `defer`
 
@@ -755,9 +777,9 @@ By default, `struct` and `enum` layouts are **C-compatible**:
 
 - Field order and alignment follow the target C ABI.
 - No hidden metadata is inserted into structs.
-- Enums are compatible with “tagged unions” encoded according to a specified ABI (to be detailed in a later phase; Phase 0 may restrict FFI with enums).
+- Enums are compatible with “tagged unions” encoded according to a specified ABI (to be detailed later; FFI with enums may be restricted).
 
-Functions may be declared `extern "C"` in Phase 2. Raw pointer types `*T` are available for FFI (distinct from safe references `&T`). Raw pointers are pass-through only in Ion code (no dereferencing). In Phase 0, we assumed:
+Functions may be declared `extern "C"`. Raw pointer types `*T` are available for FFI (distinct from safe references `&T`). Raw pointers are pass-through only in Ion code (no dereferencing). The compiler assumes:
 
 - Ion compiles to C functions with straightforward signatures.
 - Parameter and return passing follows the C calling convention of the target platform.
@@ -791,53 +813,27 @@ Attempting to use `v` after `spawn` is a compile-time error.
 
 #### 7.2 Channels
 
-Ion provides typed, bounded MPSC channels via the `channel<T>` type and built-in `send()` and `recv()` functions:
-
-**Channel Type:**
-```ion
-let ch: channel<int>;
-```
-
-**Sending and Receiving:**
-```ion
-send(ch, value);  // Moves value into the channel
-let x = recv(ch); // Moves value out of the channel, blocking until available
-```
-
-**Semantics (Phase 1 implementation):**
-
-- Channels are declared with the type `channel<T>` where `T` must be `Send`.
-- `send(ch, value)` moves a value into the channel; the channel itself is read-only.
-- `recv(ch)` returns a value of type `T` moved out of the channel.
-- Both operations block: `send` when the buffer is full, `recv` when empty.
-- Channel creation and capacity management are handled by the runtime.
-
-**Split Channel API (Phase 6 implementation):**
-
-Phase 6 introduces the split channel API with `Sender<T>` and `Receiver<T>` types:
+Ion provides typed, bounded MPSC channels via built-in `Sender<T>` and `Receiver<T>` types and the `channel<T>()` function:
 
 ```ion
-// Create a channel - returns (Sender<T>, Receiver<T>) tuple
 let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
-
-// Send requires &Sender<T>
 send(&tx, 42);
-
-// Recv requires &mut Receiver<T>
-let mut rx_mut = rx;
-let value = recv(&mut rx_mut);
+let value = recv(&mut rx);
 ```
 
-- `channel<T>()` is a built-in function that returns a tuple `(Sender<T>, Receiver<T>)`
-- `Sender<T>` and `Receiver<T>` are move-only value types (not pointers)
-- `send()` requires `&Sender<T>` (shared reference to sender)
-- `recv()` requires `&mut Receiver<T>` (mutable reference to receiver)
+Semantics:
+
+- `channel<T>()` is a built-in function that returns `(Sender<T>, Receiver<T>)`. Element type `T` must be `Send`.
+- `Sender<T>` and `Receiver<T>` are move-only value types (not pointers).
+- `send(&tx, value)` moves a value into the channel. Requires `&Sender<T>`.
+- `recv(&mut rx)` moves a value out of the channel. Requires `&mut Receiver<T>`. Blocks until a value is available.
+- `send` blocks when the buffer is full; `recv` blocks when empty.
 - Tuple destructuring is supported: `let (tx, rx) = channel<int>();`
-- Both types are `Send` if `T: Send`, allowing them to be moved between threads
+- Both `Sender<T>` and `Receiver<T>` are `Send` when `T: Send`, so either end may be moved between threads.
 
 #### 7.3 `Send` Property
 
-The `Send` property marks types that are safe to transfer to another thread by value. In Phase 0:
+The `Send` property marks types that are safe to transfer to another thread by value:
 
 - Primitive types (`int`, `bool`, etc.) are `Send`.
 - `Box<T>` is `Send` if `T: Send`.
@@ -845,7 +841,7 @@ The `Send` property marks types that are safe to transfer to another thread by v
 - `String` is `Send`.
 - `Option<T>` is `Send` if `T: Send`.
 - `Result<T, E>` is `Send` if both `T: Send` and `E: Send`.
-- `channel<T>` types are `Send` if `T: Send`.
+- `Sender<T>` and `Receiver<T>` are `Send` if `T: Send`.
 - Any type containing a reference (`&T`, `&mut T`) is **not** `Send`.
 
 User-defined `struct` and `enum` types are `Send` if and only if **all of their fields / payloads are `Send`**. For generic types, this rule is applied **per instantiation**: e.g., `Wrapper<int>` may be `Send` while `Wrapper<NonSend>` is not, depending on the fields.
@@ -937,58 +933,53 @@ Note that:
 - `String::from()` creates a heap-allocated copy of a string literal.
 - `String::push_str()` appends a string literal to an existing `String`.
 
-`&str` is always a **borrowed view** into existing UTF-8 data; it cannot be returned or stored in long-lived structures in ways that would violate the no-escape rule.  Phase 1 intentionally avoids APIs that would expose `&str` values across function boundaries in ways that require complex lifetime reasoning (e.g., `String::as_str` methods that return borrowed views).
+`&str` is always a **borrowed view** into existing UTF-8 data; it cannot be returned or stored in long-lived structures in ways that would violate the no-escape rule. The standard library intentionally avoids APIs that would expose `&str` values across function boundaries in ways that require complex lifetime reasoning (e.g., `String::as_str` methods that return borrowed views).
 
 #### 8.4 Channels
 
-**Split Channel API (Phase 6):**
+See Section 7.2 for channel semantics and API.
 
-Ion provides a split channel API with `Sender<T>` and `Receiver<T>` types:
+#### 8.5 Planned File I/O (not implemented)
 
-```ion
-// Create a channel
-let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
-
-// Send a value (requires &Sender<T>)
-send(&tx, 42);
-
-// Receive a value (requires &mut Receiver<T>)
-let mut rx_mut = rx;
-let value = recv(&mut rx_mut);
-```
-
-- `channel<T>()` - Built-in function that creates a channel and returns `(Sender<T>, Receiver<T>)`
-- `Sender<T>` - Move-only handle for sending messages (value type, not a pointer)
-- `Receiver<T>` - Move-only handle for receiving messages (value type, not a pointer)
-- `send(&Sender<T>, T)` - Sends a value, blocking if the buffer is full
-- `recv(&mut Receiver<T>) -> T` - Receives a value, blocking if the buffer is empty
-- Both `Sender<T>` and `Receiver<T>` are `Send` if `T: Send`, allowing them to be moved between threads
-
-See Section 7.2 for detailed channel semantics.
-
-#### 8.5 File I/O
-
-Minimal file API (sketch):
+The following file API is a design sketch only. It is **not** implemented in the compiler or stdlib today.
 
 ```ion
 struct File { /* opaque, not Send unless specified */ }
 
-impl File {
-    fn open(path: &String) -> Result<File, IOError>;
-    fn read(self: &mut File, buf: &mut Vec<u8>) -> Result<int, IOError>;
-    fn write(self: &mut File, buf: &Vec<u8>) -> Result<int, IOError>;
-    fn close(self: &mut File) -> Result<void, IOError>;
-}
+// Sketch only; `impl` blocks are not valid Ion syntax today.
+fn open(path: &String) -> Result<File, IOError>;
+fn read(file: &mut File, buf: &mut Vec<u8>) -> Result<int, IOError>;
+fn write(file: &mut File, buf: &Vec<u8>) -> Result<int, IOError>;
+fn close(file: &mut File) -> Result<void, IOError>;
 
 enum IOError {
     NotFound;
     PermissionDenied;
     UnexpectedEof;
-    Other(int); // platform error code
+    Other(int);
 }
 ```
 
-File handles are typically **not `Send`** in Phase 0, to avoid subtle platform-dependent behavior; they must be used from the thread that created them.
+File handles would typically be **not `Send`**, to avoid subtle platform-dependent behavior across threads.
+
+#### 8.6 Standard I/O Modules
+
+The stdlib provides safe wrappers in `stdlib/io.ion` and `stdlib/fmt.ion`:
+
+**`stdlib/io.ion`:**
+- `io::print(s: String)` – print string to stdout
+- `io::println(s: String)` – print string with newline
+- `io::print_str(s: *u8, len: int)` – print raw bytes with length validation
+- `io::print_int(n: int)` – print signed integer in decimal
+
+**`stdlib/fmt.ion`:**
+- `fmt::int_to_string(n: int) -> String`
+- `fmt::print_int(n: int)`
+- `fmt::println_int(n: int)`
+
+All I/O functions wrap POSIX `write()` in safe Ion code. Import with `import "stdlib/io.ion" as io;`.
+
+`String` exposes `.data` (`*u8`) and `.len` (`int`) fields for low-level access when needed.
 
 ### 9. Examples and Edge Cases
 
@@ -1016,12 +1007,6 @@ fn main() {
 ```ion
 fn increment(x: &mut int) {
     *x = *x + 1;
-}
-
-fn main() {
-    let mut n = 0;
-    increment(&mut n);
-    println("n = {}", n);
 }
 ```
 
@@ -1060,405 +1045,9 @@ Note: `Sender<T>` and `Receiver<T>` are `Send` values; here we move `rx` directl
 
 Each such pattern must produce a clear, actionable compiler error.
 
-### 10. Phase 7 Implementation Status
+### 10. Tooling and Known Limitations
 
-Phase 7 extends Phase 6 with critical systems programming features: array initialization syntax, bitwise operators, and complete escape sequence support. **Phase 7 is complete** with all features implemented and tested (76/76 tests passing).
-
-#### 10.0 Array Initialization Syntax
-
-Phase 7 introduces Rust-style array initialization syntax for initializing arrays with repeated values:
-
-**Syntax:**
-```ion
-let buffer: [u8; 128] = [0; 128];  // Fill array with 128 copies of 0
-let ones: [int; 10] = [1; 10];     // Fill array with 10 copies of 1
-```
-
-**Features:**
-- `[value; count]` syntax where `count` must be a compile-time constant integer literal
-- Works in variable declarations, struct field initializers, and function returns
-- Supports type coercion for array elements (e.g., `int` to `u8`)
-- For zero initialization, generates efficient C code using `{0}` syntax
-- For non-zero values, generates explicit initialization lists
-
-**Example:**
-```ion
-struct Buffer {
-    data: [u8; 128];
-}
-
-fn make_zeros() -> [int; 4] {
-    return [0; 4];
-}
-
-fn main() -> int {
-    let arr: [int; 5] = [0; 5];
-    let buf: Buffer = Buffer { data: [0; 128] };
-    let zeros = make_zeros();
-    return 0;
-}
-```
-
-#### 10.1 Bitwise Operators
-
-Phase 7 adds full support for bitwise operations, critical for network programming and binary protocols:
-
-**Operators:**
-- `&` - bitwise AND
-- `|` - bitwise OR
-- `^` - bitwise XOR
-- `<<` - left shift
-- `>>` - right shift (arithmetic for signed, logical for unsigned)
-
-**Precedence** (from highest to lowest):
-1. Unary (`-`, `!`, `*`, `&`, `&mut`)
-2. Multiplicative (`*`, `/`, `%`)
-3. Additive (`+`, `-`)
-4. **Shift** (`<<`, `>>`)
-5. **Bitwise AND** (`&`)
-6. **Bitwise XOR** (`^`)
-7. **Bitwise OR** (`|`)
-8. Comparison (`<`, `>`, `==`, `!=`)
-9. Logical (`&&`, `||`)
-
-**Type Rules:**
-- Operands must be integer types (`int`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `uint`)
-- Result type follows standard integer promotion rules
-- Shift operators: right operand must be unsigned integer (shift amount)
-- For signed types, right shift is arithmetic (sign-extending)
-- For unsigned types, right shift is logical (zero-filling)
-
-**Operator Disambiguation:**
-- `&ident` or `&mut ident` → reference operator (unary)
-- `expr & expr` → bitwise AND (binary)
-
-**Example:**
-```ion
-// Network byte order extraction
-let port: u16 = 8080;
-let shift8: u16 = 8;
-let high_byte: u16 = port >> shift8;   // High byte
-let mask: u16 = 255;  // 0xFF mask
-let low_byte: u16 = port & mask;       // Low byte
-
-// Basic bitwise operations
-let a: u8 = 170;  // 0xAA
-let b: u8 = 240;  // 0xF0
-let and_result: u8 = a & b;  // 160 (0xA0)
-let or_result: u8 = a | b;    // 250 (0xFA)
-let xor_result: u8 = a ^ b;   // 90 (0x5A)
-```
-
-#### 10.2 Complete Escape Sequence Support
-
-Phase 7 adds support for all standard C escape sequences in string literals:
-
-**Supported Escape Sequences:**
-- `\r` - carriage return (0x0D)
-- `\n` - line feed (0x0A)
-- `\t` - horizontal tab (0x09)
-- `\0` - null terminator (0x00)
-- `\\` - backslash (0x5C)
-- `\"` - double quote (0x22)
-- `\'` - single quote (0x27)
-
-**Example:**
-```ion
-// HTTP response with proper line endings
-let response: String = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n";
-
-// Tab-separated values
-let tsv: String = "name\tage\tcity\n";
-
-// Null-terminated strings (for C interop)
-let c_string: String = "Hello\0World";
-```
-
-This is essential for proper HTTP protocol implementation and C interop.
-
-### 12. Phase 6 Implementation Status
-
-Phase 6 extends Phase 5 with struct-style enum variants, for loops, and the split channel API. **Phase 6 is complete** with all features implemented and tested.
-
-#### 10.0 Split Channel API
-
-Phase 6 introduces the split channel API with `Sender<T>` and `Receiver<T>` types, replacing the simplified channel model from earlier phases.
-
-**Syntax:**
-```ion
-// Create a channel - returns (Sender<T>, Receiver<T>) tuple
-let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
-
-// Send requires &Sender<T>
-send(&tx, 42);
-
-// Recv requires &mut Receiver<T>
-let mut rx_mut = rx;
-let value = recv(&mut rx_mut);
-```
-
-**Features:**
-- `channel<T>()` is a built-in function that returns `(Sender<T>, Receiver<T>)`
-- `Sender<T>` and `Receiver<T>` are move-only value types (struct values, not pointers)
-- Tuple destructuring is supported: `let (tx, rx) = channel<int>();`
-- `send(&Sender<T>, T)` requires a shared reference to the sender
-- `recv(&mut Receiver<T>) -> T` requires a mutable reference to the receiver
-- Both types are `Send` if `T: Send`, allowing them to be moved between threads
-- The split API enables better concurrency patterns where different threads own different ends of the channel
-
-#### 10.1 Struct-Style Enum Variants
-
-Ion supports enum variants with named fields (struct-style variants) in addition to tuple-style variants:
-
-**Syntax:**
-```ion
-enum Result {
-    Ok { value: int };
-    Err { message: String };
-}
-```
-
-**Enum Literals:**
-```ion
-let result: Result = Result::Ok { value: 42 };
-```
-
-**Pattern Matching:**
-```ion
-match result {
-    Result::Ok { value: v } => {
-        return v;
-    }
-    Result::Err { message: _m } => {
-        return 0;
-    }
-}
-```
-
-Struct variants are fully integrated with the type system, pattern matching, and code generation. They provide better ergonomics for variants with multiple fields compared to tuple-style variants.
-
-#### 10.2 For Loops
-
-Ion supports `for...in` loops for iterating over collections:
-
-**Syntax:**
-```ion
-for identifier in expr { ... }
-```
-
-**Semantics:**
-- The iterable expression must be of type `Vec<T>`, `String`, or `[T; N]`
-- The loop variable is bound to each element in sequence
-- For `Vec<T>` and `[T; N]`, the loop variable has type `T`
-- For `String`, the loop variable has type `u8` (raw UTF-8 bytes, not graphemes)
-- For loops are desugared to while loops with index-based iteration
-- The loop body has access to the loop variable
-
-**Example:**
-```ion
-let mut vec: Vec<int> = Vec::new();
-vec.push(42);
-vec.push(100);
-
-for x in vec {
-    // x is bound to each element: 42, then 100
-    let _y = x;
-}
-```
-
-**Desugaring:**
-For loops are desugared to:
-```ion
-let mut __i = 0;
-while __i < container.len() {
-    let __opt = container.get(__i);
-    match __opt {
-        Option::Some(x) => {
-            // loop body
-            __i = __i + 1;
-        }
-        Option::None => {}
-    }
-}
-```
-
-### 13. Phase 5 Implementation Status
-
-Phase 5 extends Phase 4 with method call syntax (Uniform Function Call Syntax) for improved ergonomics. **Phase 5 is complete** with all features implemented and tested.
-
-#### 10.0 Method Call Syntax (Uniform Function Call Syntax)
-
-Ion supports method call syntax as **syntactic sugar** for calling functions where the first argument is implicitly the caller. This feature provides a more ergonomic way to call static functions without introducing new language concepts like object-oriented dispatch or dynamic methods.
-
-##### 10.0.1 Syntax
-
-A function call of the form:
-
-```ion
-expression.method_name(arg2, arg3, ...)
-```
-
-is desugared by the parser and type checker into a normal static function call:
-
-```ion
-Type::method_name(expression, arg2, arg3, ...)
-```
-
-where `Type` is the concrete type of `expression`.
-
-##### 10.0.2 Resolution Rules
-
-The compiler performs the following steps to resolve a method call `e.m(a1, a2, ...)`:
-
-1. **Determine the Type**: The type checker determines the concrete type of the receiver expression, `T = TypeOf(e)`.
-2. **Resolve Type Aliases**: Type aliases are resolved to their underlying types (e.g., `type MyVec = Vec<int>` → `Vec<int>`).
-3. **Look up Qualified Function**: The compiler searches for a function named `T::m`.
-4. **Check Arity and Type**: The function `T::m` must exist and be callable with a total of `N+1` arguments, where `N` is the number of arguments provided in the method call.
-
-##### 10.0.3 Implicit Borrowing
-
-The compiler automatically infers the correct reference type (`&T` or `&mut T`) for the receiver argument:
-
-- **Mutable Receiver**: If the function signature requires `&mut T` for its first argument and the receiver is a mutable binding, the compiler implicitly borrows as `&mut receiver`.
-  - Example: `v.push(10)` where `v: mut Vec<int>` desugars to `Vec::push(&mut v, 10)`.
-- **Immutable Receiver**: If the function signature requires `&T` or the receiver is immutable, the compiler borrows as `&receiver`.
-  - Example: `s.len()` where `s: String` desugars to `String::len(&s)`.
-- **By Value**: If the function signature requires `T` (by value), the receiver is passed directly (moves).
-
-##### 10.0.4 Generic Types
-
-Method call syntax fully supports generic types by leveraging existing monomorphization logic. For example, `Vec::push` is a generic function, and `numbers.push(10)` where `numbers: Vec<int>` correctly resolves to the monomorphized `Vec::push<int>`.
-
-##### 10.0.5 Built-in Methods
-
-Built-in types support method call syntax:
-
-- **Vec<T>**: `new()`, `push(value)`, `pop()`, `len()`, `capacity()`, `get(index)`, `set(index, value)`
-- **String**: `new()`, `from(str)`, `push_str(str)`, `len()`
-
-##### 10.0.6 Examples
-
-```ion
-// Phase 4 syntax (still valid)
-let mut numbers: Vec<int> = Vec::new();
-Vec::push(&mut numbers, 10);
-
-// Phase 5 method syntax (preferred)
-let mut numbers: Vec<int> = Vec::new();
-numbers.push(10);
-numbers.push(20);
-
-match numbers.pop() {
-    Option::Some(value) => { /* ... */ }
-    Option::None => {}
-};
-
-let desc: String = String::from("Hello");
-let len: int = desc.len();
-```
-
-Method call syntax significantly improves readability, especially for chained operations, while maintaining full compatibility with the existing qualified function call syntax.
-
-### 14. Phase 4 Implementation Status
-
-Phase 4 extends Phase 3 with a complete type system including boolean, floating-point, additional integer types, and type aliases. **Phase 4 is complete** with all features implemented and tested (66/66 tests passing).
-
-#### 11.0 Implemented in Phase 4 (Complete)
-- **Type System Completeness**: Full primitive type support
-  - Boolean type: `bool` with literals `true` and `false`
-  - Logical operators: `&&` (and), `||` (or), `!` (not)
-  - Floating-point types: `f32` (32-bit float) and `f64` (64-bit double)
-  - Additional integer types: `i8`, `i16`, `i32`, `i64`, `u16`, `u32`, `u64`, `uint` (unsigned int)
-  - Type aliases: `type Name = T;` for creating new names for existing types
-  - Generic type aliases: `type Result<T> = Option<T>;` with parameter substitution
-  - Type promotion rules: automatic coercion between compatible numeric types
-  - **Breaking change**: `if` and `while` conditions now require `bool` instead of truthy `int` values
-  - **Parser improvements**: Enhanced lookahead to correctly distinguish struct literals from blocks in boolean expressions (e.g., `if x && !y { ... }`)
-
-### 15. Phase 3 Implementation Status
-
-Phase 3 extends Phase 2 with arrays, slices, explicit unsafe blocks, and multi-file compilation. **Phase 3 is complete** with all features implemented and tested (52/52 tests passing).
-
-#### 12.1 Implemented in Phase 3 (Complete)
-- **Arrays and Slices**: Low-overhead memory access
-  - Fixed-size arrays: `[T; N]` syntax (e.g., `[int; 5]`)
-  - Dynamically sized slices: `[]T` syntax (e.g., `[]int`)
-  - Array literals: `[1, 2, 3]` syntax
-  - Indexing: `arr[i]` returns the element value (not a reference)
-  - Implicit array-to-slice coercion: `&[T; N]` automatically coerces to `&[]T` in function calls
-- **Explicit Unsafe Blocks**: Mark code that circumvents safety guarantees
-  - `unsafe { ... }` blocks for low-level operations
-  - Raw pointer dereferencing (`*ptr`) only allowed in unsafe blocks
-  - Raw pointer arithmetic (`ptr + offset`) only allowed in unsafe blocks
-  - Extern function calls require unsafe context
-  - Core safety (no-escape, Send checking) still enforced even in unsafe
-- **Advanced Compilation**: Multi-file compilation support
-  - Single-file mode (default, Phase 2 compatible): generates one `.c` file
-  - Multi-file mode (`--mode multi`): generates separate `.c` and `.h` files per module
-  - Header generation for `pub` items (functions, structs, enums)
-  - Automatic object file compilation (`.c` → `.o`) and linking orchestration
-  - Proper include path handling for cross-module dependencies
-  - All headers generated before compilation to ensure dependencies are available
-- **Variadic Functions**: Support for C variadic functions in extern blocks
-  - `fn printf(format: *u8, ...) -> int;` syntax with `...` ellipsis
-  - Variadic functions require `unsafe` context when called
-  - Variadic functions require `unsafe` context when called
-
-#### 12.2 Implemented in Phase 2
-- **Module System**: Multi-file programs with `import "file.ion" as name;`
-  - Relative import paths (`./file.ion`, `../file.ion`) with mandatory `.ion` extension
-  - Import cycle detection using DFS
-  - Qualified name resolution: `mod::item` syntax
-- **Visibility Control**: `pub` keyword for functions, structs, and enums
-  - Non-public items are only accessible within the same file
-  - Public items can be accessed from other modules via qualified names
-- **Foreign Function Interface (FFI)**: 
-  - `extern "C" { fn name(...) -> ...; }` blocks
-  - Raw pointer types `*T` for FFI (e.g., `*u8` for `char*` in C)
-  - Automatic string literal to `*u8` conversion for extern function calls
-  - C function prototypes are emitted in generated code
-
-#### 12.3 Implemented in Phase 1
-
-- **Enums**: Generic and non-generic enums with tuple-style variants
-- **Pattern Matching**: `match` expressions with:
-  - Enum variant patterns: `Option::Some(value)`, `Option::None`
-  - Wildcard patterns: `_`
-  - Binding patterns: `value` (extracts payload values)
-  - Nested patterns in variant payloads
-  - Exhaustiveness checking
-- **Generics**: Monomorphization-based generics for:
-  - Struct declarations: `struct Point<T> { x: T; y: T; }`
-  - Enum declarations: `enum Option<T> { Some(T); None; }`
-  - Function declarations: `fn id<T>(x: T) -> T { x }`
-- **Heap Allocation Types**:
-  - `Box<T>` fully implemented: `Box::new()`, `Box::unwrap()`
-  - `Vec<T>` fully implemented: `Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::set()`
-  - `String` fully implemented: `String::new()`, `String::from()`, `String::push_str()`, `String::len()`, with string literal conversion: `let s: String = "hello";`
-  - `Box<T>` fully implemented: `Box::new()`, `Box::unwrap()`
-- **Control Flow**:
-  - `while expr { ... }` loops
-  - Function calls: `fn_name(arg1, arg2)`
-- **String Literals**: `"..."` string literals with automatic conversion to `String` type
-
-#### 12.4 Not Yet Implemented
-- Advanced iterator pipelines and zero-cost abstractions beyond the basics.
-
-### 16. Type Casting and Standard I/O
-
-Ion supports type casting, array element assignment, full comparison operators, and a safe standard library.
-
-- **Comparison Operators**: Full support for `<=`, `>=` (in addition to `==`, `!=`, `<`, `>`)
-- **Modulo Operator**: `%` for integer types
-- **Type Casting**: `as` keyword for numeric conversions (e.g., `float as int`)
-- **Array Element Assignment**: `arr[i] = value` syntax for mutable arrays
-- **Standard Library**: Safe I/O module (`stdlib/io.ion`)
-  - `io::print`, `io::println` for safe string output
-  - `String` field access (`.data`, `.len`) for low-level manipulation
-
-### 17. Tooling and Known Limitations
-
-#### 17.1 Language server (LSP)
+#### 10.1 Language server (LSP)
 
 The `ion-lsp` binary and VS Code/Cursor extension provide:
 
@@ -1470,19 +1059,9 @@ The `ion-lsp` binary and VS Code/Cursor extension provide:
 
 Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor settings to the executable path.
 
-#### 17.2 Recent language additions
+#### 10.2 Known limitations
 
-- **Array and string `for...in`**: `[T; N]` and `String` iteration (string yields `u8`)
-- **Match guards**: `pattern if expr => { ... }` where `expr` must be `bool`
-- **Nested match patterns**: Struct and enum sub-patterns in match arms
-- **Generic field access**: Field lookup on values with generic parameters
-- **Generic call inference and monomorphization**: Type arguments inferred from the first argument; each instantiation emits a separate C function (e.g. `get_first_int`)
-- **Bounds-checked indexing**: Runtime checks for `[T; N]` and `String` index operations
-- **stdlib/io.ion**: `print_int` decimal conversion
-- **stdlib/fmt.ion**: `int_to_string`, `print_int`, `println_int`
-
-#### 17.3 Known limitations
-
+- No trait bounds on generics
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - No `else if` syntax; use nested `if`/`else`
 - `break` and `continue` are not implemented
@@ -1490,9 +1069,9 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 - LSP type hover on variable uses only, not `let` binding sites
 - LSP go-to-definition does not resolve function or method callees
 
-### 18. Future Work (Non-Normative)
+### 11. Future Work (Non-Normative)
 
-The following features are deliberately **out of scope** for Phase 2:
+The following features are **not planned** for the current compiler:
 
 - Asynchronous/await syntax and futures.
 - Complex trait or typeclass systems.
@@ -1504,11 +1083,11 @@ Any such addition must:
 - Preserve the no-escape rule and simple ownership model.
 - Not require GC or complex runtime machinery.
 
-### 19. Appendix: Recommended Design Patterns (Non-Normative)
+### 12. Appendix: Recommended Design Patterns (Non-Normative)
 
 This appendix describes idioms that work well with Ion’s ownership and no-escape borrowing rules.  They are not part of the core semantics, but library and application authors are encouraged to follow them for clarity and safety.
 
-#### 14.1 Handle / Index Access Instead of Borrowed Returns
+#### 12.1 Handle / Index Access Instead of Borrowed Returns
 
 Because Ion does not allow returning references from functions, helpers that would traditionally return `&T` should instead return:
 
@@ -1544,7 +1123,7 @@ fn use_customer(db: &mut Db, id: int) {
 
 This pattern keeps **all borrows local** to the caller while still allowing helpers to encapsulate search logic.
 
-#### 14.2 Callback-Based Accessors
+#### 12.2 Callback-Based Accessors
 
 For more complex logic, helpers can accept a **callback** to operate on a found element, rather than returning a reference:
 
@@ -1563,7 +1142,7 @@ fn with_customer_mut(db: &mut Db, id: int, f: fn(&mut Customer)) {
 
 The callback itself must obey the no-escape rule (it cannot store the reference), but this style allows reusable traversal logic.
 
-#### 14.3 Owned Results Instead of Borrowed Views
+#### 12.3 Owned Results Instead of Borrowed Views
 
 At API boundaries (public functions, module exports), favor **owned results** over borrowed views:
 
@@ -1573,7 +1152,7 @@ At API boundaries (public functions, module exports), favor **owned results** ov
 
 Borrowed views (`&T`, `&str`, local `Option<&T>` temporaries) are best used **inside** a single function to avoid copying in tight loops, not as part of public APIs.
 
-#### 14.4 Short-Lived Local View Types
+#### 12.4 Short-Lived Local View Types
 
 Local helper types that contain references (e.g., a small struct bundling several `&T` values) are allowed **within a single function** as long as:
 
@@ -1602,7 +1181,7 @@ fn compare(a: &Customer, b: &Customer) -> int {
 
 This leverages references for readability without leaking them beyond the function body.
 
-#### 14.5 Concurrency: Message-Passing Ownership Transfer
+#### 12.5 Concurrency: Message-Passing Ownership Transfer
 
 For concurrent designs:
 
@@ -1619,26 +1198,20 @@ struct Job {
 
 fn worker(mut rx: Receiver<Job>) {
     loop {
-        match rx.recv() {
-            Ok(job) => {
-                process(job.data); // job and its data are owned here
-            }
-            Err(_) => {
-                return;
-            }
-        }
+        let job = recv(&mut rx);
+        process(job.data);
     }
 }
 
 fn main() {
-    let (tx, rx) = channel::<Job>(128);
+    let (tx, rx): (Sender<Job>, Receiver<Job>) = channel<Job>();
 
     spawn {
-        worker(rx); // rx moved into worker thread
+        worker(rx);
     };
 
     let job = Job { data: Vec::<u8>::new() };
-    tx.send(job); // ownership moved to worker
+    send(&tx, job);
 }
 ```
 

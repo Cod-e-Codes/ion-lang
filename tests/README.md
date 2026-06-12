@@ -27,13 +27,14 @@ Each test is an Ion source file (`.ion`) that should:
 
 ## Test Categories
 
-### Phase 0 Tests
+The test runner prints pass/fail counts when it finishes. Do not rely on hardcoded totals in documentation.
+
+### Core language
 - `test_basic.ion` - Basic function and return
 - `test_arithmetic.ion` - Arithmetic operations
 - `test_move_basic.ion` - Move semantics
 - `test_ref_valid.ion` - Valid reference usage
-- `test_send_basic.ion` - Channel send/recv
-- `test_send.ion` - Channel send operations
+- `test_send_basic.ion` - Placeholder smoke test (returns 42)
 - `test_defer_basic.ion` - Defer statements
 - `test_channel_basic.ion` - Channel operations
 - `test_spawn_basic.ion` - Spawn statements
@@ -41,7 +42,7 @@ Each test is an Ion source file (`.ion`) that should:
 - `test_if_no_else.ion` - If statements without else
 - `test_struct_basic.ion` - Struct declarations
 
-### Phase 1 Tests
+### Enums, generics, and collections
 - `test_enum_basic.ion` - Enum declarations and literals
 - `test_enum_generic.ion` - Generic enum types
 - `test_match_basic.ion` - Pattern matching
@@ -63,12 +64,12 @@ Each test is an Ion source file (`.ion`) that should:
 - `test_vec_get_set.ion` - Vec get and set operations
 - `test_vec_capacity.ion` - Vec capacity management
 
-### Phase 2 Tests
+### Modules and FFI
 - `test_module_basic.ion` - Module system and imports
 - `test_module_visibility.ion` - Module visibility control (negative test)
 - `test_ffi_basic.ion` - Foreign Function Interface (FFI)
 
-### Phase 3 Tests
+### Arrays, slices, and unsafe
 - `test_array_basic.ion` - Fixed-size arrays
 - `test_array_literal.ion` - Array literals
 - `test_array_indexing.ion` - Array indexing operations
@@ -81,7 +82,7 @@ Each test is an Ion source file (`.ion`) that should:
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls (negative test)
 - `test_multifile.ion` - Multi-file compilation
 
-### Phase 4 Tests
+### Numeric types and aliases
 - `test_bool_literal.ion` - Boolean literals (`true`, `false`)
 - `test_bool_operations.ion` - Boolean type usage
 - `test_bool_comparison.ion` - Comparison operators returning `bool`
@@ -97,23 +98,23 @@ Each test is an Ion source file (`.ion`) that should:
 - `test_type_alias_generic.ion` - Generic type aliases
 - `test_type_alias_resolution.ion` - Type alias resolution in function signatures
 
-### Phase 5 Tests
+### Method call syntax
 - `test_method_call_basic.ion` - Basic method call syntax (`vec.push()`, `s.len()`)
 - `test_method_call_mut.ion` - Mutable receiver method calls (`vec.pop()`, `vec.set()`)
 - `test_method_call_generic.ion` - Generic method calls with type inference
 - `test_method_call_chaining.ion` - Chained method calls (`vec.push().len()`)
 
-### Phase 6 Tests
+### Split channels, struct variants, and for loops
 - `test_channel_split.ion` - Split Channel API (`Sender<T>`, `Receiver<T>` types)
 - `test_enum_struct_variant.ion` - Struct-style enum variants with named fields
 - `test_for_loop.ion` - `for...in` loop syntax with Vec iteration
 
-### Phase 7 Tests
+### Literals and bitwise operators
 - `test_escape_sequences.ion` - Complete escape sequence support (`\r`, `\t`, `\0`, etc.)
 - `test_array_init.ion` - Array initialization syntax (`[value; count]`)
 - `test_bitwise_ops.ion` - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`)
 
-### Phase 8 Tests
+### Casting, comparison, and stdlib I/O
 - `test_comparison_operators.ion` - Full comparison operators (`<=`, `>=`)
 - `test_type_cast.ion` - Type casting with `as` keyword
 - `test_array_assignment.ion` - Array element assignment (`arr[i] = value`)
@@ -141,7 +142,7 @@ Each test is an Ion source file (`.ion`) that should:
 - `test_enum_ref_error.ion` - Reference in enum variants
 - `test_module_visibility.ion` - Module visibility violations
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls
-- `test_if_bool_required.ion` - Boolean requirement for if conditions (Phase 4)
+- `test_if_bool_required.ion` - Boolean requirement for if conditions
 
 ## Adding Tests
 
