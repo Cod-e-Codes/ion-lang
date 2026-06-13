@@ -219,6 +219,17 @@ if [ -f "test_struct_field_drop.ion" ]; then
     test_file "test_struct_field_drop.ion" 43 || true
     test_cgen_grep "test_struct_field_drop.ion" "ion_string_free(h.inner.s)" "" || true
     test_cgen_grep "test_struct_field_drop.ion" "ion_string_free(h.label)" "" || true
+    test_cgen_grep "test_struct_field_drop.ion" "switch (p.tag)" "" || true
+fi
+
+if [ -f "test_struct_field_drop_box.ion" ]; then
+    test_file "test_struct_field_drop_box.ion" 44 || true
+    test_cgen_grep "test_struct_field_drop_box.ion" "ion_box_free(h.b)" "" || true
+fi
+
+if [ -f "test_struct_enum_empty_drop.ion" ]; then
+    test_file "test_struct_enum_empty_drop.ion" 45 || true
+    test_cgen_grep "test_struct_enum_empty_drop.ion" "switch (p.tag)" "" || true
 fi
 
 if [ -f "test_move_call_drop.ion" ]; then
@@ -227,6 +238,10 @@ fi
 
 if [ -f "test_move_in_loop_ok.ion" ]; then
     test_file "test_move_in_loop_ok.ion" 42 || true
+fi
+
+if [ -f "test_move_in_loop_copy.ion" ]; then
+    test_file "test_move_in_loop_copy.ion" 30 || true
 fi
 
 if [ -f "test_scope_drop_elif.ion" ]; then
@@ -353,6 +368,7 @@ fi
 
 if [ -f "test_string_eq.ion" ]; then
     test_file "test_string_eq.ion" 55 || true
+    test_cgen_grep "test_string_eq.ion" "ion_string_equals" "" || true
 fi
 
 # Modules and FFI
@@ -371,6 +387,10 @@ fi
 
 if [ -f "test_move_in_loop.ion" ]; then
     test_error "test_move_in_loop.ion" "UseAfterMove" || true
+fi
+
+if [ -f "test_move_in_loop_for.ion" ]; then
+    test_error "test_move_in_loop_for.ion" "UseAfterMove" || true
 fi
 
 if [ -f "test_move_channel_error.ion" ]; then
@@ -442,6 +462,11 @@ if [ -f "test_array_to_slice_coercion.ion" ]; then
     test_cgen_grep "test_array_to_slice_coercion.ion" "(ion_slice_int){" "" || true
 fi
 
+if [ -f "test_array_to_slice_let.ion" ]; then
+    test_file "test_array_to_slice_let.ion" 11 || true
+    test_cgen_grep "test_array_to_slice_let.ion" "__ion_arr_slice" "" || true
+fi
+
 # Array bounds checking tests (Safety Enhancement)
 if [ -f "test_array_bounds_safe.ion" ]; then
     test_file "test_array_bounds_safe.ion" 150 || true
@@ -459,8 +484,16 @@ if [ -f "test_unsafe_array_indexing.ion" ]; then
     test_file "test_unsafe_array_indexing.ion" 1 || true
 fi
 
-# Note: test_array_bounds_panic.ion and test_slice_bounds_panic.ion panic and abort - skip automated run
-# To manually test: compile and run, should see "Ion panic: Array index out of bounds"
+if [ -f "test_array_bounds_panic.ion" ]; then
+    test_cgen_grep "test_array_bounds_panic.ion" 'ion_panic("Array index out of bounds")' "" || true
+fi
+
+if [ -f "test_slice_bounds_panic.ion" ]; then
+    test_cgen_grep "test_slice_bounds_panic.ion" 'ion_panic("Slice index out of bounds")' "" || true
+fi
+
+# Note: test_array_bounds_panic.ion and test_slice_bounds_panic.ion panic and abort at runtime.
+# Harness checks generated C only. See tests/README.md for manual run steps.
 
 # Safe I/O library tests
 if [ -f "test_io_print_str.ion" ]; then

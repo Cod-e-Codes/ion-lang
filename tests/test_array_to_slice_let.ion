@@ -1,0 +1,9 @@
+fn first_elem(s: &[]int) -> int {
+    return s[0];
+}
+
+fn main() -> int {
+    let arr: [int; 3] = [1, 2, 3];
+    let s: &[]int = &arr;
+    return first_elem(s) + 10;
+}

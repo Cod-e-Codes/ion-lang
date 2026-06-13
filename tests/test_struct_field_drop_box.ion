@@ -1,0 +1,10 @@
+struct Holder {
+    b: Box<int>;
+}
+
+fn main() -> int {
+    if true {
+        let h: Holder = Holder { b: Box::new(7) };
+    }
+    return 44;
+}

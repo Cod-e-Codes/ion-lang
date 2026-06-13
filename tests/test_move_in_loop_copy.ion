@@ -1,0 +1,11 @@
+// Copy types may be bound fresh each loop iteration without move errors.
+fn main() -> int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 3 {
+        let n = 10;
+        total = total + n;
+        i = i + 1;
+    }
+    return 30;
+}

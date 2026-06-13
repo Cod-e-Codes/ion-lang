@@ -59,8 +59,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_defer_block.ion` - Block-scoped defer
 - `test_scope_drop_block.ion` - Automatic Vec drop at block exit
 - `test_struct_field_drop.ion` - Struct and enum field drops at block exit (nested String fields, enum payload)
+- `test_struct_field_drop_box.ion` - Box field drop at block exit (exit 44)
+- `test_struct_enum_empty_drop.ion` - Enum drop with Empty variant only (exit 45)
 - `test_move_call_drop.ion` - No double-drop when String is moved into a function call
 - `test_move_in_loop_ok.ion` - Borrowing a non-copy value across loop iterations (no move in body)
+- `test_move_in_loop_copy.ion` - Fresh copy-type bindings each loop iteration (exit 30)
 - `test_scope_drop_elif.ion` - Vec drop inside an else-if branch
 - `test_channel_basic.ion` - Channel operations
 - `test_spawn_basic.ion` - Spawn statements
@@ -108,10 +111,12 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_unsafe_array_indexing.ion` - Unsafe array indexing without bounds checking (Safety Enhancement)
 - `test_slice_bounds_codegen.ion` - Slice bounds checking in generated C (codegen grep)
 - `test_unsafe_slice_indexing.ion` - Unsafe slice indexing without bounds checking (codegen grep)
-- `test_slice_bounds_panic.ion` - Slice out-of-bounds panic (manual only in harness; compiles and runs once array-to-slice coercion is in place)
+- `test_slice_bounds_panic.ion` - Slice out-of-bounds panic (harness: codegen grep only; manual run below)
 - `test_slice_basic.ion` - Dynamically sized slices
 - `test_slice_indexing.ion` - Slice indexing operations
 - `test_array_to_slice_coercion.ion` - `&[T; N]` to `&[]T` at call sites (exit 10)
+- `test_array_to_slice_let.ion` - `&[T; N]` to `&[]T` in let bindings (exit 11)
+- `test_array_bounds_panic.ion` - Array out-of-bounds panic (harness: codegen grep only; manual run below)
 - `test_unsafe_basic.ion` - Unsafe blocks
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls (negative test)
 - `test_multifile.ion` - Multi-file compilation
@@ -168,6 +173,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors
 - `test_move_in_loop.ion` - Use-after-move when a non-copy value is moved inside a loop body
+- `test_move_in_loop_for.ion` - Same rule for `for` loops (outer binding moved in body)
 - `test_move_channel_error.ion` - Use-after-move on channel receivers
 - `test_ref_return_error.ion` - Reference escape errors
 - `test_ref_return_error2.ion` - Additional reference escape errors
@@ -181,6 +187,26 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls
 - `test_if_bool_required.ion` - Boolean requirement for if conditions
 - `test_break_continue_error.ion` - `break` outside of a loop (negative test)
+
+### Manual panic tests (bounds)
+
+`test_array_bounds_panic.ion` and `test_slice_bounds_panic.ion` call `ion_panic` and abort. The harness compiles them and greps generated C for the panic message; it does not run the binaries.
+
+From `tests/` (Git Bash):
+
+```bash
+../target/release/ion-compiler test_array_bounds_panic.ion
+gcc test_array_bounds_panic.c ../runtime/ion_runtime.c -o test_array_bounds_panic \
+    -I. -I.. -I../runtime -lpthread -lws2_32
+./test_array_bounds_panic
+# Expect stderr: Ion panic: Array index out of bounds
+
+../target/release/ion-compiler test_slice_bounds_panic.ion
+gcc test_slice_bounds_panic.c ../runtime/ion_runtime.c -o test_slice_bounds_panic \
+    -I. -I.. -I../runtime -lpthread -lws2_32
+./test_slice_bounds_panic
+# Expect stderr: Ion panic: Slice index out of bounds
+```
 
 ## Adding Tests
 

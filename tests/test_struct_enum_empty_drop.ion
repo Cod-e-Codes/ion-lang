@@ -1,0 +1,11 @@
+enum Payload {
+    Text(String);
+    Empty;
+}
+
+fn main() -> int {
+    if true {
+        let p: Payload = Payload::Empty;
+    }
+    return 45;
+}

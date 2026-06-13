@@ -1,0 +1,12 @@
+// Moving an outer non-copy binding inside a for loop is rejected (same rule as while).
+fn consume(b: Box<int>) -> int {
+    return Box::unwrap(b);
+}
+
+fn main() -> int {
+    let x = Box::new(10);
+    for i in [1, 2, 3] {
+        consume(x);
+    }
+    return 0;
+}
