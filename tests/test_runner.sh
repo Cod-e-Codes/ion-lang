@@ -215,6 +215,12 @@ if [ -f "test_scope_drop_block.ion" ]; then
     test_file "test_scope_drop_block.ion" 0 || true
 fi
 
+if [ -f "test_struct_field_drop.ion" ]; then
+    test_file "test_struct_field_drop.ion" 43 || true
+    test_cgen_grep "test_struct_field_drop.ion" "ion_string_free(h.inner.s)" "" || true
+    test_cgen_grep "test_struct_field_drop.ion" "ion_string_free(h.label)" "" || true
+fi
+
 if [ -f "test_move_call_drop.ion" ]; then
     test_file "test_move_call_drop.ion" 42 || true
 fi

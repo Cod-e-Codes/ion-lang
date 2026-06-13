@@ -751,8 +751,10 @@ When a binding goes out of scope (block exit, function return), owned values wit
 - `Vec<T>`: `ion_vec_free`
 - `String`: `ion_string_free`
 - `Sender<T>` / `Receiver<T>`: `ion_channel_handle_drop` (refcounted; freed when both ends are dropped)
+- Struct fields with owned heap types (`Box`, `Vec`, `String`, channels, or nested structs/enums containing them) are dropped in declaration order when the struct goes out of scope.
+- Enum payloads are dropped for the active variant when the enum goes out of scope.
 
-For structs and enums, field drops are not yet emitted by the compiler. Uninitialized `Box`/`Vec`/`String` bindings are zero-initialized to `NULL` so drop is a no-op.
+Uninitialized `Box`/`Vec`/`String` bindings are zero-initialized to `NULL` so drop is a no-op.
 
 ### 6. Memory Model
 

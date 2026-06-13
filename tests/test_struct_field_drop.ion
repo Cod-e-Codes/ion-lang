@@ -1,0 +1,24 @@
+struct Inner {
+    s: String;
+}
+
+struct Holder {
+    inner: Inner;
+    label: String;
+}
+
+enum Payload {
+    Text(String);
+    Empty;
+}
+
+fn main() -> int {
+    if true {
+        let h: Holder = Holder {
+            inner: Inner { s: String::from("hello") },
+            label: String::from("world"),
+        };
+        let p: Payload = Payload::Text(String::from("drop me"));
+    }
+    return 43;
+}
