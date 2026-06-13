@@ -560,12 +560,7 @@ impl IRBuilder {
                         let mut match_defers = Vec::new();
                         ctx.record_binding(&for_stmt.var_name, &elem_type);
                         for inner in &for_stmt.body.statements {
-                            Self::lower_stmt(
-                                inner,
-                                &mut match_body_stmts,
-                                &mut match_defers,
-                                ctx,
-                            );
+                            Self::lower_stmt(inner, &mut match_body_stmts, &mut match_defers, ctx);
                         }
                         match_body_stmts.push(IRStmt::Expr(IREexpr::Assign {
                             target: index_var.clone(),
@@ -625,12 +620,7 @@ impl IRBuilder {
                         }));
                         ctx.record_binding(&for_stmt.var_name, &elem_type);
                         for inner in &for_stmt.body.statements {
-                            Self::lower_stmt(
-                                inner,
-                                &mut while_body_stmts,
-                                &mut while_defers,
-                                ctx,
-                            );
+                            Self::lower_stmt(inner, &mut while_body_stmts, &mut while_defers, ctx);
                         }
                         while_body_stmts.push(IRStmt::Expr(IREexpr::Assign {
                             target: index_var.clone(),

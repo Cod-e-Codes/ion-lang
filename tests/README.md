@@ -20,6 +20,24 @@ cd tests && ./test_runner.sh
 
 On Windows, use Git Bash, not WSL bash. WSL often cannot run `ion-compiler.exe`.
 
+The harness defaults to `../target/release/ion-compiler`. Rebuild it after compiler changes:
+
+```bash
+cargo build --release
+```
+
+If the release build fails with "Access is denied", stop `ion-lsp` (or any running `ion-compiler` / `ion-lsp` process) and retry. You can also build only the compiler:
+
+```bash
+cargo build --release --bin ion-compiler
+```
+
+To run against the debug compiler instead:
+
+```bash
+COMPILER=../target/debug/ion-compiler.exe ./test_runner.sh
+```
+
 ## Test Format
 
 Each test is an Ion source file (`.ion`) that should:

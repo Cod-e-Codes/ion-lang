@@ -1113,14 +1113,14 @@ impl Codegen {
 
     fn needs_drop(&self, ty: &Type) -> bool {
         let resolved = resolve_type_alias(ty, &self.type_aliases);
-        match resolved {
+        matches!(
+            resolved,
             Type::Box { .. }
-            | Type::Vec { .. }
-            | Type::String
-            | Type::Sender { .. }
-            | Type::Receiver { .. } => true,
-            _ => false,
-        }
+                | Type::Vec { .. }
+                | Type::String
+                | Type::Sender { .. }
+                | Type::Receiver { .. }
+        )
     }
 
     fn emit_drop(&mut self, name: &str, ty: &Type) {
@@ -1711,10 +1711,10 @@ impl Codegen {
 
                 self.writeln(";");
                 self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
-                if let Some(IREexpr::Var(src)) = &let_stmt.init {
-                    if self.needs_drop(&let_stmt.ty) {
-                        self.scope_mark_moved(src);
-                    }
+                if let Some(IREexpr::Var(src)) = &let_stmt.init
+                    && self.needs_drop(&let_stmt.ty)
+                {
+                    self.scope_mark_moved(src);
                 }
             }
             IRStmt::Return(ret) => {
@@ -1778,6 +1778,9 @@ impl Codegen {
                             ));
                         }
                     }
+                }
+                if let Some(IREexpr::Var(name)) = &ret.value {
+                    self.scope_mark_moved(name);
                 }
                 self.scope_emit_return_unwind();
                 self.write_indent();
