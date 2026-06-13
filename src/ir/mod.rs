@@ -18,9 +18,6 @@ pub struct IRFunction {
     pub params: Vec<IRParam>,
     pub return_type: Option<Type>,
     pub blocks: Vec<IRBlock>,
-    /// Collected defers for this function, in source order.
-    /// Codegen will emit them in reverse (LIFO) order at the epilogue.
-    pub defers: Vec<IREexpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +30,8 @@ pub struct IRParam {
 pub struct IRBlock {
     pub name: String,
     pub statements: Vec<IRStmt>,
+    /// Defers registered in this block, in source order (emitted LIFO at scope exit).
+    pub defers: Vec<IREexpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,8 +68,6 @@ pub struct IRReturn {
 pub struct IRSpawn {
     pub captures: Vec<(String, Type)>,
     pub body: IRBlock,
-    /// Defers collected from the spawn body (run on thread exit).
-    pub defers: Vec<IREexpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -273,19 +270,9 @@ impl IRBuilder {
             .collect();
 
         // For minimal subset, we use a single basic block
-        let mut statements = Vec::new();
-        let mut defers = Vec::new();
         let mut ctx = LoweringContext::from_params(&params);
-
-        for stmt in &function.body.statements {
-            Self::lower_stmt(stmt, &mut statements, &mut defers, &mut ctx);
-        }
-
-        // Create a single basic block named "entry"
-        let blocks = vec![IRBlock {
-            name: "entry".to_string(),
-            statements,
-        }];
+        let entry = Self::lower_ast_block("entry", &function.body, &mut ctx);
+        let blocks = vec![entry];
 
         IRFunction {
             name: function.name.clone(),
@@ -293,6 +280,18 @@ impl IRBuilder {
             params,
             return_type: function.return_type.clone(),
             blocks,
+        }
+    }
+
+    fn lower_ast_block(name: &str, body: &Block, ctx: &mut LoweringContext) -> IRBlock {
+        let mut statements = Vec::new();
+        let mut defers = Vec::new();
+        for stmt in &body.statements {
+            Self::lower_stmt(stmt, &mut statements, &mut defers, ctx);
+        }
+        IRBlock {
+            name: name.to_string(),
+            statements,
             defers,
         }
     }
@@ -414,7 +413,6 @@ impl IRBuilder {
                 out.push(IRStmt::Expr(build_expr_with_ctx(&expr_stmt.expr, ctx)));
             }
             Stmt::Defer(defer_stmt) => {
-                // Collect defers per function; they will be emitted at the epilogue.
                 defers.push(build_expr_with_ctx(&defer_stmt.expr, ctx));
             }
             Stmt::Spawn(spawn_stmt) => {
@@ -432,48 +430,18 @@ impl IRBuilder {
                     ctx.record_binding(name, ty);
                 }
 
-                let mut inner_stmts = Vec::new();
-                let mut spawn_defers = Vec::new();
-                for inner in &spawn_stmt.body.statements {
-                    Self::lower_stmt(inner, &mut inner_stmts, &mut spawn_defers, ctx);
-                }
+                let body = Self::lower_ast_block("spawn_body", &spawn_stmt.body, ctx);
                 ctx.var_types = parent_vars;
 
-                let inner_block = IRBlock {
-                    name: "spawn_body".to_string(),
-                    statements: inner_stmts,
-                };
-                out.push(IRStmt::Spawn(IRSpawn {
-                    captures,
-                    body: inner_block,
-                    defers: spawn_defers,
-                }));
+                out.push(IRStmt::Spawn(IRSpawn { captures, body }));
             }
             Stmt::If(if_stmt) => {
-                // Lower `if` to an IRIf with nested blocks.
                 let cond = build_expr_with_ctx(&if_stmt.cond, ctx);
-
-                let mut then_stmts = Vec::new();
-                for inner in &if_stmt.then_block.statements {
-                    Self::lower_stmt(inner, &mut then_stmts, defers, ctx);
-                }
-                let then_block = IRBlock {
-                    name: "then_block".to_string(),
-                    statements: then_stmts,
-                };
-
-                let else_block = if let Some(ref else_blk) = if_stmt.else_block {
-                    let mut else_stmts = Vec::new();
-                    for inner in &else_blk.statements {
-                        Self::lower_stmt(inner, &mut else_stmts, defers, ctx);
-                    }
-                    Some(IRBlock {
-                        name: "else_block".to_string(),
-                        statements: else_stmts,
-                    })
-                } else {
-                    None
-                };
+                let then_block = Self::lower_ast_block("then_block", &if_stmt.then_block, ctx);
+                let else_block = if_stmt
+                    .else_block
+                    .as_ref()
+                    .map(|b| Self::lower_ast_block("else_block", b, ctx));
 
                 out.push(IRStmt::If(IRIf {
                     cond,
@@ -483,14 +451,7 @@ impl IRBuilder {
             }
             Stmt::While(while_stmt) => {
                 let cond = build_expr_with_ctx(&while_stmt.cond, ctx);
-                let mut body_stmts = Vec::new();
-                for inner in &while_stmt.body.statements {
-                    Self::lower_stmt(inner, &mut body_stmts, defers, ctx);
-                }
-                let body = IRBlock {
-                    name: "while_body".to_string(),
-                    statements: body_stmts,
-                };
+                let body = Self::lower_ast_block("while_body", &while_stmt.body, ctx);
                 out.push(IRStmt::While(IRWhile { cond, body }));
             }
             Stmt::For(for_stmt) => {
@@ -573,6 +534,7 @@ impl IRBuilder {
                 };
 
                 let mut while_body_stmts = Vec::new();
+                let mut while_defers = Vec::new();
 
                 match &container_ty {
                     Type::Vec { .. } => {
@@ -595,9 +557,15 @@ impl IRBuilder {
                             init: Some(get_call),
                         }));
                         let mut match_body_stmts = Vec::new();
+                        let mut match_defers = Vec::new();
                         ctx.record_binding(&for_stmt.var_name, &elem_type);
                         for inner in &for_stmt.body.statements {
-                            Self::lower_stmt(inner, &mut match_body_stmts, defers, ctx);
+                            Self::lower_stmt(
+                                inner,
+                                &mut match_body_stmts,
+                                &mut match_defers,
+                                ctx,
+                            );
                         }
                         match_body_stmts.push(IRStmt::Expr(IREexpr::Assign {
                             target: index_var.clone(),
@@ -624,6 +592,7 @@ impl IRBuilder {
                                     body: IRBlock {
                                         name: "for_match_body".to_string(),
                                         statements: match_body_stmts,
+                                        defers: match_defers,
                                     },
                                 },
                                 IRMatchArm {
@@ -637,6 +606,7 @@ impl IRBuilder {
                                     body: IRBlock {
                                         name: "for_none_body".to_string(),
                                         statements: Vec::new(),
+                                        defers: Vec::new(),
                                     },
                                 },
                             ],
@@ -655,7 +625,12 @@ impl IRBuilder {
                         }));
                         ctx.record_binding(&for_stmt.var_name, &elem_type);
                         for inner in &for_stmt.body.statements {
-                            Self::lower_stmt(inner, &mut while_body_stmts, defers, ctx);
+                            Self::lower_stmt(
+                                inner,
+                                &mut while_body_stmts,
+                                &mut while_defers,
+                                ctx,
+                            );
                         }
                         while_body_stmts.push(IRStmt::Expr(IREexpr::Assign {
                             target: index_var.clone(),
@@ -674,18 +649,12 @@ impl IRBuilder {
                     body: IRBlock {
                         name: "for_while_body".to_string(),
                         statements: while_body_stmts,
+                        defers: while_defers,
                     },
                 }));
             }
             Stmt::UnsafeBlock(unsafe_stmt) => {
-                let mut body_stmts = Vec::new();
-                for inner in &unsafe_stmt.body.statements {
-                    Self::lower_stmt(inner, &mut body_stmts, defers, ctx);
-                }
-                let body = IRBlock {
-                    name: "unsafe_body".to_string(),
-                    statements: body_stmts,
-                };
+                let body = Self::lower_ast_block("unsafe_body", &unsafe_stmt.body, ctx);
                 out.push(IRStmt::UnsafeBlock(IRUnsafeBlock { body }));
             }
         }
@@ -789,6 +758,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                         body: IRBlock {
                             name: "match_arm".to_string(),
                             statements: body_stmts,
+                            defers: arm_defers,
                         },
                     }
                 })
@@ -954,14 +924,6 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
                 &mut instantiations,
             );
         }
-        for defer_expr in &mut func.defers {
-            rewrite_generic_calls_in_expr(
-                defer_expr,
-                &generic_defs,
-                &var_types,
-                &mut instantiations,
-            );
-        }
     }
 
     let monomorphized: Vec<IRFunction> = instantiations
@@ -985,6 +947,9 @@ fn rewrite_generic_calls_in_block(
     var_types: &mut HashMap<String, Type>,
     instantiations: &mut HashMap<String, (IRFunction, HashMap<String, Type>)>,
 ) {
+    for defer_expr in &mut block.defers {
+        rewrite_generic_calls_in_expr(defer_expr, generic_defs, var_types, instantiations);
+    }
     for stmt in &mut block.statements {
         match stmt {
             IRStmt::Let(let_stmt) => {
@@ -1059,14 +1024,6 @@ fn rewrite_generic_calls_in_block(
                     &mut spawn_vars,
                     instantiations,
                 );
-                for defer_expr in &mut spawn.defers {
-                    rewrite_generic_calls_in_expr(
-                        defer_expr,
-                        generic_defs,
-                        &spawn_vars,
-                        instantiations,
-                    );
-                }
             }
         }
     }
@@ -1329,18 +1286,12 @@ fn instantiate_generic_function(
         .iter()
         .map(|block| substitute_types_in_block(block, substitutions))
         .collect();
-    let defers = template
-        .defers
-        .iter()
-        .map(|expr| substitute_types_in_expr(expr, substitutions))
-        .collect();
     IRFunction {
         name,
         generics: Vec::new(),
         params,
         return_type,
         blocks,
-        defers,
     }
 }
 
@@ -1351,6 +1302,11 @@ fn substitute_types_in_block(block: &IRBlock, substitutions: &HashMap<String, Ty
             .statements
             .iter()
             .map(|stmt| substitute_types_in_stmt(stmt, substitutions))
+            .collect(),
+        defers: block
+            .defers
+            .iter()
+            .map(|expr| substitute_types_in_expr(expr, substitutions))
             .collect(),
     }
 }
@@ -1380,11 +1336,6 @@ fn substitute_types_in_stmt(stmt: &IRStmt, substitutions: &HashMap<String, Type>
                 .map(|(name, ty)| (name.clone(), substitute_type(ty, substitutions)))
                 .collect(),
             body: substitute_types_in_block(&spawn.body, substitutions),
-            defers: spawn
-                .defers
-                .iter()
-                .map(|expr| substitute_types_in_expr(expr, substitutions))
-                .collect(),
         }),
         IRStmt::If(ir_if) => IRStmt::If(IRIf {
             cond: substitute_types_in_expr(&ir_if.cond, substitutions),

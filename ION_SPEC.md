@@ -721,18 +721,27 @@ When a binding goes out of scope (e.g., block exit, function return, panic unwin
 - For enums, the active variant’s payload is dropped.
 - For `Box<T>`, `T` is dropped, then the allocation is freed.
 
-`defer` schedules an expression to be executed when the current function scope is left, in **last-in, first-out** order.
+`defer` schedules an expression to be executed when the **current block** scope is left, in **last-in, first-out** order. On `return`, all enclosing block defers and drops run innermost-first before the function returns.
 
 ```ion
 fn process() {
-    let f = File::open("data.txt")?;
-    defer f.close();  // guaranteed to run on any exit path from process
+    defer log_cleanup(); // runs when process() returns
 
-    // ...
+    if ready {
+        defer arm_cleanup(); // runs when the if arm ends or on return through this arm
+        // ...
+    }
 }
 ```
 
-Deferred expressions may not create escaping references or otherwise violate the ownership rules.
+When a binding goes out of scope (block exit, function return), owned values with heap resources are dropped automatically:
+
+- `Box<T>`: `ion_box_free`
+- `Vec<T>`: `ion_vec_free`
+- `String`: `ion_string_free`
+- `Sender<T>` / `Receiver<T>`: `ion_channel_handle_drop` (refcounted; freed when both ends are dropped)
+
+For structs and enums, field drops are not yet emitted by the compiler. Uninitialized `Box`/`Vec`/`String` bindings are zero-initialized to `NULL` so drop is a no-op.
 
 ### 6. Memory Model
 
@@ -758,7 +767,8 @@ Ion guarantees that every owned value is dropped exactly once when its owner’s
 
 In particular:
 
-- Early `return` from a function drops all owned locals before returning.
+- Early `return` from a function drops all owned locals (and runs block defers) before returning.
+- `spawn` thread entry functions use the same scope-exit machinery; captures are dropped when the thread body finishes.
 - Panics (if implemented) unwind the stack, dropping owned values on each frame.
 - `spawn`ed threads manage their own stacks independently.
 
@@ -830,6 +840,7 @@ Semantics:
 - `send` blocks when the buffer is full; `recv` blocks when empty.
 - Tuple destructuring is supported: `let (tx, rx) = channel<int>();`
 - Both `Sender<T>` and `Receiver<T>` are `Send` when `T: Send`, so either end may be moved between threads.
+- Channel handles share a refcounted backing channel. Dropping either handle decrements the refcount; the channel is freed when the last handle is dropped at scope exit.
 
 #### 7.3 `Send` Property
 

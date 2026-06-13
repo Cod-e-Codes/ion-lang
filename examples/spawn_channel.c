@@ -33,9 +33,13 @@ int main(void) {
     int result = ({ int tmp; ion_channel_recv(&rx_back_mut, &tmp); tmp; });
     if (result == 42) {
         ret_val = 0;
+        if (rx_back_mut.channel) { ion_channel_handle_drop(rx_back_mut.channel); }
+        if (tx.channel) { ion_channel_handle_drop(tx.channel); }
         goto epilogue;
     }
     ret_val = 1;
+    if (rx_back_mut.channel) { ion_channel_handle_drop(rx_back_mut.channel); }
+    if (tx.channel) { ion_channel_handle_drop(tx.channel); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -48,11 +52,13 @@ static void* ion_spawn_entry_0(void* arg) {
     ion_receiver_t rx = ctx->rx;
     ion_sender_t tx_back = ctx->tx_back;
     free(ctx);
-    {
-        ion_receiver_t rx_mut = rx;
-        int value = ({ int tmp; ion_channel_recv(&rx_mut, &tmp); tmp; });
-        { ion_channel_send(&tx_back, &value); }
-    }
+    ion_receiver_t rx_mut = rx;
+    int value = ({ int tmp; ion_channel_recv(&rx_mut, &tmp); tmp; });
+    { ion_channel_send(&tx_back, &value); }
+    if (rx_mut.channel) { ion_channel_handle_drop(rx_mut.channel); }
+    if (tx_back.channel) { ion_channel_handle_drop(tx_back.channel); }
+    goto spawn_0_epilogue;
+spawn_0_epilogue:
     return NULL;
 }
 

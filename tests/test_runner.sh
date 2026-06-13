@@ -164,6 +164,14 @@ if [ -f "test_defer_basic.ion" ]; then
     test_file "test_defer_basic.ion" 7 || true
 fi
 
+if [ -f "test_defer_block.ion" ]; then
+    test_file "test_defer_block.ion" 1 || true
+fi
+
+if [ -f "test_scope_drop_block.ion" ]; then
+    test_file "test_scope_drop_block.ion" 0 || true
+fi
+
 if [ -f "test_channel_basic.ion" ]; then
     test_file "test_channel_basic.ion" 0 || true
 fi

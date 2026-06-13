@@ -99,6 +99,12 @@ int ion_channel_send(const ion_sender_t *sender, const void *value);
  */
 int ion_channel_recv(ion_receiver_t *receiver, void *out_value);
 
+/**
+ * Drops one sender or receiver handle. Frees the channel when the last handle
+ * is dropped.
+ */
+void ion_channel_handle_drop(ion_channel_t *ch);
+
 // Legacy channel API (deprecated, kept for backward compatibility)
 ion_channel_t *ion_channel_new_legacy(size_t elem_size, int capacity);
 int ion_channel_send_legacy(ion_channel_t *ch, const void *value);

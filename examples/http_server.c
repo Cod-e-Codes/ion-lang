@@ -125,9 +125,9 @@ static void* ion_spawn_entry_0(void* arg) {
     if (!ctx) { ion_panic("spawn null context"); }
     int client_fd = ctx->client_fd;
     free(ctx);
-    {
-        int _result = handle_client(client_fd);
-    }
+    int _result = handle_client(client_fd);
+    goto spawn_0_epilogue;
+spawn_0_epilogue:
     return NULL;
 }
 

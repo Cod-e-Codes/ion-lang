@@ -137,6 +137,7 @@ int box_example(void) {
     int* boxed = ({ int* ptr = (int*)ion_box_alloc(sizeof(int)); if (ptr) { *ptr = value; } ptr; });
     int unwrapped = (*boxed);
     ret_val = unwrapped;
+    if (boxed) { ion_box_free(boxed); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -151,6 +152,7 @@ int vec_example(void) {
     int len = ((numbers) ? (int)((ion_vec_t*)(numbers))->len : 0);
     if (len != 3) {
         ret_val = 1;
+        if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
         goto epilogue;
     }
     Option_int match_val_0 = *((Option_int*)(ion_vec_get((ion_vec_t*)(numbers), 0, sizeof(int))));
@@ -159,11 +161,13 @@ int vec_example(void) {
             int value = match_val_0.data.variant_0.arg0;
             if (value != 10) {
                 ret_val = 2;
+                if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
                 goto epilogue;
             }
             break;
         case 1: // None
             ret_val = 3;
+            if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
             goto epilogue;
             break;
     }
@@ -174,15 +178,18 @@ int vec_example(void) {
             int value = match_val_1.data.variant_0.arg0;
             if (value != 30) {
                 ret_val = 4;
+                if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
                 goto epilogue;
             }
             break;
         case 1: // None
             ret_val = 5;
+            if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
             goto epilogue;
             break;
     }
     ret_val = 0;
+    if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -212,9 +219,11 @@ int for_loop_example(void) {
     }
     if (sum != 6) {
         ret_val = 1;
+        if (__for_container_2192) { ion_vec_free((ion_vec_t*)(__for_container_2192)); }
         goto epilogue;
     }
     ret_val = 0;
+    if (__for_container_2192) { ion_vec_free((ion_vec_t*)(__for_container_2192)); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -229,15 +238,20 @@ int string_example(void) {
     int len = ((greeting) ? (int)((ion_vec_t*)(greeting))->len : 0);
     if (len != 11) {
         ret_val = 1;
+        if (greeting) { ion_string_free(greeting); }
         goto epilogue;
     }
     ion_string_t* message = ion_string_from_literal("Welcome to Ion", 14);
     int msg_len = ((message) ? (int)((ion_vec_t*)(message))->len : 0);
     if (msg_len != 14) {
         ret_val = 2;
+        if (message) { ion_string_free(message); }
+        if (greeting) { ion_string_free(greeting); }
         goto epilogue;
     }
     ret_val = 0;
+    if (message) { ion_string_free(message); }
+    if (greeting) { ion_string_free(greeting); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -363,9 +377,11 @@ int reference_example(void) {
     ion_vec_push((ion_vec_t*)(values), &((int){y}), sizeof(int));
     if (((values) ? (int)((ion_vec_t*)(values))->len : 0) != 2) {
         ret_val = 1;
+        if (values) { ion_vec_free((ion_vec_t*)(values)); }
         goto epilogue;
     }
     ret_val = 0;
+    if (values) { ion_vec_free((ion_vec_t*)(values)); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -398,9 +414,11 @@ int generic_example(void) {
     int vec_len = ((vec) ? (int)((ion_vec_t*)(vec))->len : 0);
     if (vec_len != 2) {
         ret_val = 4;
+        if (vec) { ion_vec_free((ion_vec_t*)(vec)); }
         goto epilogue;
     }
     ret_val = 0;
+    if (vec) { ion_vec_free((ion_vec_t*)(vec)); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -428,9 +446,13 @@ int spawn_channel_example(void) {
     int result = ({ int tmp; ion_channel_recv(&rx_back_mut, &tmp); tmp; });
     if (result != 99) {
         ret_val = 1;
+        if (rx_back_mut.channel) { ion_channel_handle_drop(rx_back_mut.channel); }
+        if (tx.channel) { ion_channel_handle_drop(tx.channel); }
         goto epilogue;
     }
     ret_val = 0;
+    if (rx_back_mut.channel) { ion_channel_handle_drop(rx_back_mut.channel); }
+    if (tx.channel) { ion_channel_handle_drop(tx.channel); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -445,6 +467,7 @@ int complex_example(void) {
     int len = ((numbers) ? (int)((ion_vec_t*)(numbers))->len : 0);
     if (len != 3) {
         ret_val = 1;
+        if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
         goto epilogue;
     }
     Option_int match_val_7 = *((Option_int*)(ion_vec_get((ion_vec_t*)(numbers), 0, sizeof(int))));
@@ -453,11 +476,13 @@ int complex_example(void) {
             int value = match_val_7.data.variant_0.arg0;
             if (value != 1) {
                 ret_val = 2;
+                if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
                 goto epilogue;
             }
             break;
         case 1: // None
             ret_val = 3;
+            if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
             goto epilogue;
             break;
     }
@@ -467,11 +492,13 @@ int complex_example(void) {
             int value = match_val_8.data.variant_0.arg0;
             if (value != 3) {
                 ret_val = 4;
+                if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
                 goto epilogue;
             }
             break;
         case 1: // None
             ret_val = 5;
+            if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
             goto epilogue;
             break;
     }
@@ -480,9 +507,13 @@ int complex_example(void) {
     int desc_len = ((description) ? (int)((ion_vec_t*)(description))->len : 0);
     if (desc_len < 8) {
         ret_val = 6;
+        if (description) { ion_string_free(description); }
+        if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
         goto epilogue;
     }
     ret_val = 0;
+    if (description) { ion_string_free(description); }
+    if (numbers) { ion_vec_free((ion_vec_t*)(numbers)); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -554,11 +585,13 @@ static void* ion_spawn_entry_0(void* arg) {
     ion_receiver_t rx = ctx->rx;
     ion_sender_t tx_back = ctx->tx_back;
     free(ctx);
-    {
-        ion_receiver_t rx_mut = rx;
-        int value = ({ int tmp; ion_channel_recv(&rx_mut, &tmp); tmp; });
-        { ion_channel_send(&tx_back, &value); }
-    }
+    ion_receiver_t rx_mut = rx;
+    int value = ({ int tmp; ion_channel_recv(&rx_mut, &tmp); tmp; });
+    { ion_channel_send(&tx_back, &value); }
+    if (rx_mut.channel) { ion_channel_handle_drop(rx_mut.channel); }
+    if (tx_back.channel) { ion_channel_handle_drop(tx_back.channel); }
+    goto spawn_0_epilogue;
+spawn_0_epilogue:
     return NULL;
 }
 

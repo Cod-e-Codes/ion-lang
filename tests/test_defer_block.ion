@@ -1,0 +1,11 @@
+fn defer_block_runs() -> int {
+    let mut ran: int = 0;
+    if true {
+        defer ran = 1;
+    }
+    return ran;
+}
+
+fn main() -> int {
+    return defer_block_runs();
+}

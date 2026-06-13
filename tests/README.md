@@ -38,9 +38,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_ref_valid.ion` - Valid reference usage
 - `test_send_basic.ion` - Send/Send smoke test
 - `test_defer_basic.ion` - Defer statements
+- `test_defer_block.ion` - Block-scoped defer
+- `test_scope_drop_block.ion` - Automatic Vec drop at block exit
 - `test_channel_basic.ion` - Channel operations
 - `test_spawn_basic.ion` - Spawn statements
-- `test_spawn_channel.ion` - Cross-thread channel send/recv via spawn
+- `test_spawn_channel.ion` - Cross-thread channel send/recv via spawn (channel handle drop at scope exit)
 - `test_if_basic.ion` - If statements with else
 - `test_if_no_else.ion` - If statements without else
 - `test_struct_basic.ion` - Struct declarations

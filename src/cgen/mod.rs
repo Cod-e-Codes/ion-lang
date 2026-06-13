@@ -9,6 +9,19 @@ enum BoundsCheck {
     StringLen,
 }
 
+#[derive(Clone)]
+struct ScopeBinding {
+    name: String,
+    ty: Type,
+    dropped: bool,
+}
+
+#[derive(Clone)]
+struct ScopeFrame {
+    bindings: Vec<ScopeBinding>,
+    defers: Vec<IREexpr>,
+}
+
 pub struct Codegen {
     output: String,
     indent_level: usize,
@@ -27,6 +40,8 @@ pub struct Codegen {
     spawn_counter: usize,
     spawn_forward_decls: String,
     spawn_definitions: String,
+    scope_stack: Vec<ScopeFrame>,
+    epilogue_label: String,
 }
 
 impl Default for Codegen {
@@ -330,6 +345,8 @@ impl Codegen {
             spawn_counter: 0,
             spawn_forward_decls: String::new(),
             spawn_definitions: String::new(),
+            scope_stack: Vec::new(),
+            epilogue_label: "epilogue".to_string(),
         }
     }
 
@@ -1094,9 +1111,102 @@ impl Codegen {
         self.output.clone()
     }
 
+    fn needs_drop(&self, ty: &Type) -> bool {
+        let resolved = resolve_type_alias(ty, &self.type_aliases);
+        match resolved {
+            Type::Box { .. }
+            | Type::Vec { .. }
+            | Type::String
+            | Type::Sender { .. }
+            | Type::Receiver { .. } => true,
+            _ => false,
+        }
+    }
+
+    fn emit_drop(&mut self, name: &str, ty: &Type) {
+        let resolved = resolve_type_alias(ty, &self.type_aliases);
+        match resolved {
+            Type::Box { .. } => {
+                self.writeln(&format!("if ({name}) {{ ion_box_free({name}); }}"));
+            }
+            Type::Vec { .. } => {
+                self.writeln(&format!(
+                    "if ({name}) {{ ion_vec_free((ion_vec_t*)({name})); }}"
+                ));
+            }
+            Type::String => {
+                self.writeln(&format!("if ({name}) {{ ion_string_free({name}); }}"));
+            }
+            Type::Sender { .. } | Type::Receiver { .. } => {
+                self.writeln(&format!(
+                    "if ({name}.channel) {{ ion_channel_handle_drop({name}.channel); }}"
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    fn scope_begin(&mut self, defers: &[IREexpr]) {
+        self.scope_stack.push(ScopeFrame {
+            bindings: Vec::new(),
+            defers: defers.to_vec(),
+        });
+    }
+
+    fn scope_register_binding(&mut self, name: &str, ty: &Type) {
+        if let Some(frame) = self.scope_stack.last_mut() {
+            frame.bindings.push(ScopeBinding {
+                name: name.to_string(),
+                ty: ty.clone(),
+                dropped: false,
+            });
+        }
+    }
+
+    fn scope_mark_moved(&mut self, name: &str) {
+        for frame in self.scope_stack.iter_mut().rev() {
+            if let Some(binding) = frame.bindings.iter_mut().find(|b| b.name == name) {
+                binding.dropped = true;
+                return;
+            }
+        }
+    }
+
+    fn scope_emit_exit(&mut self) {
+        let Some(frame) = self.scope_stack.pop() else {
+            return;
+        };
+        self.emit_frame_cleanup(&frame);
+    }
+
+    /// Emit cleanup for all active scopes (innermost first) without popping the stack.
+    /// Used on `return` so sibling statements in the same function still codegen correctly.
+    fn scope_emit_return_unwind(&mut self) {
+        let frames: Vec<ScopeFrame> = self.scope_stack.iter().rev().cloned().collect();
+        for frame in frames {
+            self.emit_frame_cleanup(&frame);
+        }
+    }
+
+    fn emit_frame_cleanup(&mut self, frame: &ScopeFrame) {
+        for defer_expr in frame.defers.iter().rev() {
+            self.write_indent();
+            self.generate_expr(defer_expr);
+            self.writeln(";");
+        }
+        for binding in frame.bindings.iter().rev() {
+            if !binding.dropped && self.needs_drop(&binding.ty) {
+                self.write_indent();
+                self.emit_drop(&binding.name, &binding.ty);
+            }
+        }
+    }
+
     fn generate_function(&mut self, function: &IRFunction) {
         // Store current return type for use in return statements
         self.current_return_type = function.return_type.clone();
+        self.scope_stack.clear();
+        self.epilogue_label = "epilogue".to_string();
 
         // Store parameter types for field access resolution
         self.current_function_params.clear();
@@ -1198,16 +1308,9 @@ impl Codegen {
             self.writeln("goto epilogue;");
         }
 
-        // Epilogue: run defers in reverse order, then return.
+        // Epilogue: return (scope cleanup runs before goto via scope_unwind_all).
         self.writeln("epilogue:");
         self.indent_level += 1;
-
-        // Emit defers in LIFO order.
-        for defer_expr in function.defers.iter().rev() {
-            self.write_indent();
-            self.generate_expr(defer_expr);
-            self.writeln(";");
-        }
 
         if function.return_type.is_some() {
             self.write_indent();
@@ -1230,6 +1333,7 @@ impl Codegen {
 
         let ctx_name = format!("ion_spawn_ctx_{}", spawn_id);
         let entry_name = format!("ion_spawn_entry_{}", spawn_id);
+        let spawn_epilogue = format!("spawn_{}_epilogue", spawn_id);
 
         self.spawn_forward_decls
             .push_str(&format!("static void* {}(void* arg);\n", entry_name));
@@ -1247,7 +1351,6 @@ impl Codegen {
                 .push_str(&format!("}} {};\n", ctx_name));
         }
 
-        // Thread entry function implementation (typedef emitted in forward declarations).
         let mut def = String::new();
         def.push_str(&format!("static void* {}(void* arg) {{\n", entry_name));
         if !spawn.captures.is_empty() {
@@ -1265,26 +1368,36 @@ impl Codegen {
         } else {
             def.push_str("    (void)arg;\n");
         }
-        def.push_str("    {\n");
+
         let saved_output = std::mem::take(&mut self.output);
         let saved_indent = self.indent_level;
-        self.indent_level = 2;
-        self.generate_block(&spawn.body);
-        for defer_expr in spawn.defers.iter().rev() {
-            self.write_indent();
-            self.generate_expr(defer_expr);
-            self.writeln(";");
+        let saved_scope = std::mem::take(&mut self.scope_stack);
+        let saved_epilogue = self.epilogue_label.clone();
+        self.indent_level = 1;
+        self.scope_stack.clear();
+        self.epilogue_label = spawn_epilogue.clone();
+
+        self.scope_begin(&[]);
+        for (name, ty) in &spawn.captures {
+            self.scope_register_binding(name, ty);
         }
+        self.generate_block(&spawn.body);
+        self.scope_emit_exit();
+        self.write_indent();
+        self.writeln(&format!("goto {};", spawn_epilogue));
+
         let body_code = std::mem::take(&mut self.output);
         self.output = saved_output;
         self.indent_level = saved_indent;
+        self.scope_stack = saved_scope;
+        self.epilogue_label = saved_epilogue;
+
         def.push_str(&body_code);
-        def.push_str("    }\n");
+        def.push_str(&format!("{}:\n", spawn_epilogue));
         def.push_str("    return NULL;\n");
         def.push_str("}\n\n");
         self.spawn_definitions.push_str(&def);
 
-        // Spawn site: heap-allocate captures and start a detached thread.
         self.write_indent();
         self.writeln("{");
         self.indent_level += 1;
@@ -1306,6 +1419,7 @@ impl Codegen {
                 self.writeln(&format!("ctx->{} = {};", name, name));
                 self.write_indent();
                 self.writeln(&format!("{} = {};", name, self.zero_value_for_type(ty)));
+                self.scope_mark_moved(name);
             }
             self.write_indent();
             self.writeln(&format!(
@@ -1319,6 +1433,8 @@ impl Codegen {
     }
 
     fn generate_block(&mut self, block: &IRBlock) {
+        let depth_at_entry = self.scope_stack.len();
+        self.scope_begin(&block.defers);
         let mut i = 0;
         while i < block.statements.len() {
             // Check for consecutive channel tuple destructuring
@@ -1369,6 +1485,9 @@ impl Codegen {
                     self.write(&let2.name);
                     self.writeln(");");
 
+                    self.scope_register_binding(&let1.name, &let1.ty);
+                    self.scope_register_binding(&let2.name, &let2.ty);
+
                     // Skip both statements
                     i += 2;
                     continue;
@@ -1378,6 +1497,14 @@ impl Codegen {
             // Normal statement generation
             self.generate_stmt(&block.statements[i]);
             i += 1;
+        }
+        let ends_with_return = matches!(block.statements.last(), Some(IRStmt::Return(_)));
+        if ends_with_return {
+            while self.scope_stack.len() > depth_at_entry {
+                self.scope_stack.pop();
+            }
+        } else {
+            self.scope_emit_exit();
         }
     }
 
@@ -1578,9 +1705,17 @@ impl Codegen {
                         // Pass type context so enum/struct literals can use monomorphized names
                         self.generate_expr_with_type(init, Some(&let_stmt.ty));
                     }
+                } else if self.needs_drop(&let_stmt.ty) {
+                    self.write(" = 0");
                 }
 
                 self.writeln(";");
+                self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
+                if let Some(IREexpr::Var(src)) = &let_stmt.init {
+                    if self.needs_drop(&let_stmt.ty) {
+                        self.scope_mark_moved(src);
+                    }
+                }
             }
             IRStmt::Return(ret) => {
                 self.write_indent();
@@ -1644,8 +1779,9 @@ impl Codegen {
                         }
                     }
                 }
+                self.scope_emit_return_unwind();
                 self.write_indent();
-                self.writeln("goto epilogue;");
+                self.writeln(&format!("goto {};", self.epilogue_label));
             }
             IRStmt::Expr(expr) => {
                 // Special handling: match expressions used as statements should be blocks, not statement expressions
@@ -1691,6 +1827,9 @@ impl Codegen {
                         }
                         self.write("); }");
                         self.writeln("");
+                        if let IREexpr::Var(var_name) = value.as_ref() {
+                            self.scope_mark_moved(var_name);
+                        }
                     }
                     _ => {
                         self.write_indent();
@@ -1700,8 +1839,7 @@ impl Codegen {
                 }
             }
             IRStmt::Defer(_) => {
-                // Defers are collected at the function level and emitted
-                // in the epilogue; no direct code is generated here.
+                // Defers are attached to IRBlock and emitted at scope exit.
             }
             IRStmt::Spawn(spawn) => {
                 self.generate_spawn(spawn);

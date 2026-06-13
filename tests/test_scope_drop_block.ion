@@ -1,0 +1,12 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    if true {
+        let mut v: Vec<int> = Vec::new();
+        Vec::push(&mut v, 1);
+    }
+    return 0;
+}
