@@ -366,6 +366,11 @@ if [ -f "test_string_push_str.ion" ]; then
     test_file "test_string_push_str.ion" 0 || true
 fi
 
+if [ -f "test_string_push_byte.ion" ]; then
+    test_file "test_string_push_byte.ion" 79 || true
+    test_cgen_grep "test_string_push_byte.ion" "ion_string_push_byte" "" || true
+fi
+
 if [ -f "test_string_eq.ion" ]; then
     test_file "test_string_eq.ion" 55 || true
     test_cgen_grep "test_string_eq.ion" "ion_string_equals" "" || true

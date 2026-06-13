@@ -3493,6 +3493,28 @@ impl Codegen {
             return Some(code);
         }
 
+        // String::push_byte(s: &mut String, b: u8)
+        if callee == "String::push_byte" && args.len() == 2 {
+            let mut code = String::new();
+            let mut str_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, str_code);
+            self.generate_expr(&args[0]);
+            str_code = std::mem::replace(&mut self.output, old_output);
+            let deref_str = str_code.strip_prefix('&').unwrap_or(&str_code);
+
+            let mut byte_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, byte_code);
+            self.generate_expr(&args[1]);
+            byte_code = std::mem::replace(&mut self.output, old_output);
+
+            code.push_str("ion_string_push_byte(");
+            code.push_str(deref_str);
+            code.push_str(", (unsigned char)(");
+            code.push_str(&byte_code);
+            code.push_str("))");
+            return Some(code);
+        }
+
         None
     }
 
@@ -3750,7 +3772,7 @@ impl Codegen {
                 "set",
                 "with_capacity",
             ];
-            let string_methods = ["push_str", "len"];
+            let string_methods = ["push_str", "push_byte", "len"];
 
             if vec_methods.contains(&method_name) {
                 // Check if we have Vec types in generic_instantiations
@@ -3798,7 +3820,7 @@ impl Codegen {
 
         // Fallback: try to infer from method name alone for built-in types
         let vec_methods = ["push", "pop", "len", "capacity", "get", "set"];
-        let string_methods = ["push_str", "len"];
+        let string_methods = ["push_str", "push_byte", "len"];
 
         if vec_methods.contains(&method_name) {
             format!("Vec::{}", method_name)

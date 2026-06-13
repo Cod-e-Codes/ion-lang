@@ -480,7 +480,7 @@ Additional built-in generic types:
 - `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`)
 - `Sender<T>` and `Receiver<T>` – move-only handles for the two ends of a bounded MPSC channel
 - `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::set()`)
-- `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::push_str()`, `String::len()`)
+- `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
 - `[T; N]` – fixed-size array of `N` elements of type `T`
 - `[]T` – dynamically sized slice (fat pointer) of type `T`
 
@@ -993,6 +993,7 @@ impl String {
     fn new() -> String;
     fn from(s: &str) -> String;
     fn push_str(self: &mut String, s: &str);
+    fn push_byte(self: &mut String, b: u8);
     fn len(self: &String) -> int;
 }
 ```
@@ -1002,6 +1003,7 @@ Note that:
 - String literals can be directly assigned to `String` type: `let s: String = "hello";`
 - `String::from()` creates a heap-allocated copy of a string literal.
 - `String::push_str()` appends a string literal to an existing `String`.
+- `String::push_byte()` appends a single byte to an existing `String`.
 - `==` and `!=` compare UTF-8 byte content (value equality), not pointer identity.
 
 `&str` is always a **borrowed view** into existing UTF-8 data; it cannot be returned or stored in long-lived structures in ways that would violate the no-escape rule. The standard library intentionally avoids APIs that would expose `&str` values across function boundaries in ways that require complex lifetime reasoning (e.g., `String::as_str` methods that return borrowed views).

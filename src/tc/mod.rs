@@ -575,6 +575,39 @@ impl TypeChecker {
             });
         }
 
+        // String::push_byte(s: &mut String, b: u8)
+        if callee == "String::push_byte" {
+            if call_expr.args.len() != 2 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "2 arguments".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let str_ty = self.check_expr(&call_expr.args[0])?;
+            let byte_ty = self.check_expr(&call_expr.args[1])?;
+            if let Type::Ref {
+                inner: ref inner_ty,
+                mutable: true,
+            } = str_ty
+                && let Type::String = **inner_ty
+            {
+                if !matches!(byte_ty, Type::U8) {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "u8".to_string(),
+                        got: type_to_string(&byte_ty),
+                        span: call_expr.args[1].span(),
+                    });
+                }
+                return Ok(Some(Type::Int)); // void return
+            }
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "&mut String".to_string(),
+                got: type_to_string(&str_ty),
+                span: call_expr.args[0].span(),
+            });
+        }
+
         // channel<T>() -> (Sender<T>, Receiver<T>)
         // This should only be called with tuple destructuring, handled in check_stmt
         if callee == "channel" {
@@ -846,6 +879,13 @@ impl TypeChecker {
             }
             ("String", "String::push_str") => {
                 // String::push_str requires &mut String
+                Ok(Some(Type::Ref {
+                    inner: Box::new(Type::String),
+                    mutable: true,
+                }))
+            }
+            ("String", "String::push_byte") => {
+                // String::push_byte requires &mut String
                 Ok(Some(Type::Ref {
                     inner: Box::new(Type::String),
                     mutable: true,

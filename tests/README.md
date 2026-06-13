@@ -87,6 +87,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_string_from.ion` - String::from() function
 - `test_string_new.ion` - String::new() function
 - `test_string_push_str.ion` - String::push_str() function
+- `test_string_push_byte.ion` - String::push_byte() function
 - `test_string_eq.ion` - String `==` and `!=` value equality (exit 55)
 - `test_generic_types.ion` - Generic type system
 - `test_generic_struct.ion` - Generic struct types

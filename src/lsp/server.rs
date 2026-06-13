@@ -25,6 +25,7 @@ const BUILTINS: &[&str] = &[
     "String::from",
     "String::len",
     "String::push_str",
+    "String::push_byte",
     "Box::new",
     "Box::unwrap",
     "channel",

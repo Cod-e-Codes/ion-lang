@@ -1,0 +1,19 @@
+// Test String::push_byte()
+fn main() -> int {
+    let mut s: String = String::new();
+    String::push_byte(&mut s, 65 as u8);
+    String::push_byte(&mut s, 66 as u8);
+    String::push_byte(&mut s, 67 as u8);
+
+    let len = String::len(&s);
+    if len != 3 {
+        return 1;
+    }
+
+    let expected: String = "ABC";
+    if s != expected {
+        return 2;
+    }
+
+    return 79;
+}

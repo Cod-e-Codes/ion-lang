@@ -235,6 +235,29 @@ int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
   return 0;
 }
 
+int ion_string_push_byte(ion_string_t *s, unsigned char b) {
+  if (!s)
+    return -1;
+
+  if (s->len + 2 > s->capacity) {
+    size_t new_capacity = s->capacity;
+    while (new_capacity < s->len + 2) {
+      new_capacity *= 2;
+    }
+    char *new_data = (char *)realloc(s->data, new_capacity);
+    if (!new_data)
+      return -1;
+    s->data = new_data;
+    s->capacity = new_capacity;
+  }
+
+  s->data[s->len] = (char)b;
+  s->len += 1;
+  s->data[s->len] = '\0';
+
+  return 0;
+}
+
 int ion_string_equals(const ion_string_t *a, const ion_string_t *b) {
   if (a == b)
     return 1;

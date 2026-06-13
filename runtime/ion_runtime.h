@@ -260,6 +260,15 @@ ion_string_t *ion_string_clone(const ion_string_t *s);
 int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len);
 
 /**
+ * Appends a single byte to the end of a string.
+ *
+ * @param s String to append to
+ * @param b Byte to append
+ * @return 0 on success, non-zero on failure
+ */
+int ion_string_push_byte(ion_string_t *s, unsigned char b);
+
+/**
  * Compares two strings for UTF-8 byte equality.
  *
  * @param a First string (may be NULL)
