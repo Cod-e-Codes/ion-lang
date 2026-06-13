@@ -60,6 +60,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_scope_drop_block.ion` - Automatic Vec drop at block exit
 - `test_struct_field_drop.ion` - Struct and enum field drops at block exit (nested String fields, enum payload)
 - `test_move_call_drop.ion` - No double-drop when String is moved into a function call
+- `test_move_in_loop_ok.ion` - Borrowing a non-copy value across loop iterations (no move in body)
 - `test_scope_drop_elif.ion` - Vec drop inside an else-if branch
 - `test_channel_basic.ion` - Channel operations
 - `test_spawn_basic.ion` - Spawn statements
@@ -165,6 +166,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors
+- `test_move_in_loop.ion` - Use-after-move when a non-copy value is moved inside a loop body
 - `test_move_channel_error.ion` - Use-after-move on channel receivers
 - `test_ref_return_error.ion` - Reference escape errors
 - `test_ref_return_error2.ion` - Additional reference escape errors

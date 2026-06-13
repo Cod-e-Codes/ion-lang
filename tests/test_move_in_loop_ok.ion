@@ -1,0 +1,12 @@
+// Borrowing (not moving) a non-copy value across loop iterations is allowed.
+fn main() -> int {
+    let msg: String = String::from("hi");
+    let mut i = 0;
+    while i < 2 {
+        if String::len(&msg) != 2 {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 42;
+}

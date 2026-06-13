@@ -1580,13 +1580,42 @@ impl TypeChecker {
                         span: while_stmt.span,
                     });
                 }
-                self.variables = before;
-                // Check body
+                self.variables = before.clone();
                 self.loop_depth += 1;
                 for inner in &while_stmt.body.statements {
                     self.check_stmt(inner)?;
                 }
                 self.loop_depth -= 1;
+                let body_env = self.variables.clone();
+
+                // Merge pessimistically for repeated iteration: a variable may only stay
+                // Valid if it is Valid both before the loop and after one abstract pass
+                // through the body. If it is moved in the body, later iterations or uses
+                // after the loop would be invalid (same rule spirit as if/else merge).
+                let mut merged = before.clone();
+                for (name, prev_info) in before.iter() {
+                    let body_state = body_env
+                        .get(name)
+                        .map(|info| info.state)
+                        .unwrap_or(prev_info.state);
+
+                    let merged_state = match (prev_info.state, body_state) {
+                        (OwnershipState::Valid, OwnershipState::Valid) => OwnershipState::Valid,
+                        (OwnershipState::Moved, OwnershipState::Moved) => OwnershipState::Moved,
+                        _ => {
+                            return Err(TypeCheckError::UseAfterMove {
+                                name: name.clone(),
+                                span: while_stmt.span,
+                            });
+                        }
+                    };
+
+                    if let Some(info) = merged.get_mut(name) {
+                        info.state = merged_state;
+                    }
+                }
+
+                self.variables = merged;
             }
             Stmt::For(for_stmt) => {
                 // Desugar: for x in container { body }

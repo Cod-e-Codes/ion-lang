@@ -225,6 +225,10 @@ if [ -f "test_move_call_drop.ion" ]; then
     test_file "test_move_call_drop.ion" 42 || true
 fi
 
+if [ -f "test_move_in_loop_ok.ion" ]; then
+    test_file "test_move_in_loop_ok.ion" 42 || true
+fi
+
 if [ -f "test_scope_drop_elif.ion" ]; then
     test_file "test_scope_drop_elif.ion" 0 || true
 fi
@@ -359,6 +363,10 @@ fi
 # Run negative tests (should fail to compile)
 if [ -f "test_move_error.ion" ]; then
     test_error "test_move_error.ion" "UseAfterMove" || true
+fi
+
+if [ -f "test_move_in_loop.ion" ]; then
+    test_error "test_move_in_loop.ion" "UseAfterMove" || true
 fi
 
 if [ -f "test_move_channel_error.ion" ]; then

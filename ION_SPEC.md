@@ -1130,6 +1130,7 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 - No trait bounds on generics
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - `if`/`else` merge: a variable moved in only one branch is an error; use early return or a helper function instead
+- `while`/`for` loops: a non-copy variable moved anywhere in the loop body is an error (repeated iteration would need the binding again); copy types and borrows are unchanged
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (not defined in user source)
 
