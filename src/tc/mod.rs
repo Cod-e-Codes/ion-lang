@@ -93,6 +93,38 @@ pub enum TypeCheckError {
     Message(String),
 }
 
+impl std::fmt::Display for TypeCheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeCheckError::UndefinedVariable { name, span } => {
+                write!(
+                    f,
+                    "line {}: UndefinedVariable: undefined variable '{}'",
+                    span.line, name
+                )
+            }
+            TypeCheckError::TypeMismatch {
+                expected,
+                got,
+                span,
+            } => write!(
+                f,
+                "line {}: TypeMismatch: expected {}, got {}",
+                span.line, expected, got
+            ),
+            TypeCheckError::UseAfterMove { name, span } => write!(
+                f,
+                "line {}: UseAfterMove: variable '{}' was moved",
+                span.line, name
+            ),
+            TypeCheckError::ReferenceEscape { description, span } => {
+                write!(f, "line {}: ReferenceEscape: {}", span.line, description)
+            }
+            TypeCheckError::Message(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeCheckResult {
     pub lsp_info: LspInfo,

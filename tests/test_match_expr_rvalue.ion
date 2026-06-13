@@ -1,0 +1,20 @@
+enum Pick {
+    Low(int);
+    High(int);
+}
+
+fn pick_value(p: Pick) -> int {
+    let out: int = match p {
+        Pick::Low(n) => {
+            n;
+        },
+        Pick::High(n) => {
+            n + 10;
+        },
+    };
+    return out;
+}
+
+fn main() -> int {
+    return pick_value(Pick::Low(91));
+}

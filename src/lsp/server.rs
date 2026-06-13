@@ -236,8 +236,7 @@ impl IonLanguageServer {
         match parser.parse() {
             Ok(ast) => {
                 let mut checker = tc::TypeChecker::new();
-
-                if let Ok(file_path) = uri.to_file_path() {
+                let program = if let Ok(file_path) = uri.to_file_path() {
                     let mut compiler = compiler::Compiler::new();
                     if compiler.register_imports(&file_path, &ast.imports).is_ok() {
                         checker.set_module_exports(compiler.get_module_exports().clone());
@@ -247,10 +246,15 @@ impl IonLanguageServer {
                             module_paths.insert(import.alias.clone(), path);
                         }
                         checker.set_module_paths(module_paths);
+                        compiler.merge_modules(&ast, &file_path)
+                    } else {
+                        ast
                     }
-                }
+                } else {
+                    ast
+                };
 
-                let (result, tc_errors) = checker.check_program_collecting(&ast);
+                let (result, tc_errors) = checker.check_program_collecting(&program);
                 if tc_errors.is_empty() {
                     if let Ok(mut cache) = self.file_cache.lock() {
                         cache.insert(uri.clone(), result.lsp_info);

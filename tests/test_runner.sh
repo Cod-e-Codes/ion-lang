@@ -111,8 +111,8 @@ test_error() {
         echo -e "${YELLOW}PARTIAL${NC} - Compilation failed as expected, but error message didn't match pattern"
         echo "  Expected pattern: $expected_error"
         echo "  Actual output: $output"
-        pass_count=$((pass_count + 1))
-        return 0
+        fail_count=$((fail_count + 1))
+        return 1
     fi
 }
 

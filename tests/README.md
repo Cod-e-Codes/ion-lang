@@ -59,6 +59,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_defer_block.ion` - Block-scoped defer
 - `test_scope_drop_block.ion` - Automatic Vec drop at block exit
 - `test_struct_field_drop.ion` - Struct and enum field drops at block exit (nested String fields, enum payload)
+- `test_struct_field_drop_vec.ion` - Struct field holding `Vec<int>` drop at block exit (exit 46)
 - `test_struct_field_drop_box.ion` - Box field drop at block exit (exit 44)
 - `test_struct_enum_empty_drop.ion` - Enum drop with Empty variant only (exit 45)
 - `test_move_call_drop.ion` - No double-drop when String is moved into a function call
@@ -167,6 +168,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 
 ### Match expression types
 - `test_match_result_type.ion` - `match` infers non-`int` result type (`bool` via `-> bool` helper, exit 88)
+- `test_match_expr_rvalue.ion` - `match` as rvalue in `let` binding (exit 91)
 - `test_match_arm_type_mismatch.ion` - Mismatched arm result types (negative)
 
 ### if/else ownership merge
@@ -190,7 +192,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_io_print_int.ion` - `io::print_int` decimal output
 - `test_fmt_int_to_string.ion` - `fmt::int_to_string` conversion
 - `test_fmt_println_int.ion` - `fmt::println_int` via stdlib merge; codegen uses `io_print_int` in `fmt_print_int`
-- `test_fs_read.ion` - `fs::read_to_string` reads `fixtures/small.txt` (exit 80)
+- `test_fs_read.ion` - `fs::read_to_string_result` reads `fixtures/small.txt` (exit 80)
 
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors
@@ -241,6 +243,8 @@ test_myfeature.ion	run	42
 ```
 
    Kinds: `run` (compile+run+exit code), `error` (compile must fail; `error_pattern` greps CLI stderr), `cgen` (`must_match` / optional `must_not_match` on generated `.c`).
+
+   For `error` rows, a matching failure message is required; a wrong pattern is a harness failure (not a pass).
 
 3. Document the test in this README under the appropriate category
 

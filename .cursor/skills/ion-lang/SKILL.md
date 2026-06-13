@@ -52,10 +52,14 @@ cargo build --release --bin ion-compiler
 cd tests && ./test_runner.sh
 
 # Lint
-cargo clippy
+cargo clippy -- -D warnings
 ```
 
-**Windows:** Stop `ion-lsp` / `ion-compiler` before rebuilding if you get "Access is denied". Use Git Bash for `test_runner.sh`.
+**Windows:** Stop `ion-lsp` / `ion-compiler` before rebuilding if you get "Access is denied". Use Git Bash for `test_runner.sh`. From PowerShell:
+
+```powershell
+& 'C:\Program Files\Git\bin\bash.exe' -lc 'cd /c/Users/Cody/Projects/GitHub/Personal/Active/ion-lang && <command>'
+```
 
 **Manual compile cycle** (single-file; on Windows use `ion-compiler.exe`, `hello_world.exe`, and Git Bash or adjust paths):
 
@@ -87,6 +91,6 @@ Read these when the task matches:
 - References cannot escape functions, structs, enums, channels, or `spawn` - reject at type-check time.
 - `extern "C"` calls require `unsafe` blocks.
 - Multi-file mode: `--mode multi --output <name> <main.ion>` generates per-module `.c`/`.h`.
-- Stdlib lives in `stdlib/` (`io.ion`, `fmt.ion`); imported module functions are emitted as `{alias}_{name}` in single-file merge mode (e.g. `io::print_int` -> `io_print_int`).
+- Stdlib lives in `stdlib/` (`io.ion`, `fmt.ion`, `fs.ion`, `result.ion`); imported module functions are emitted as `{alias}_{name}` in single-file merge mode (e.g. `io::print_int` -> `io_print_int`).
 - Integration tests: add `tests/test_*.ion` plus one row in `tests/test_expectations.tsv` (see `ion-integration-tests` skill). Run `cd tests && ./test_runner.sh` to verify.
 - LSP parses the **open buffer** in memory (lexer → parser), then `register_imports` which **fully `parse_module`s imported files from disk**. Parser/tc/import changes may need LSP updates (`ion-lsp-vscode` skill).

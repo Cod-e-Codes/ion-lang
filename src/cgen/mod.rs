@@ -180,6 +180,9 @@ impl Codegen {
 
         self.generic_instantiations = resolved_instantiations;
 
+        // Vec, slice, and tuple typedefs must precede struct fields that reference them.
+        self.emit_vec_slice_tuple_typedefs(program);
+
         // Emit struct type definitions first so functions can use them.
         // Skip generic structs - they'll be generated as monomorphized versions
         for s in &program.structs {
@@ -311,8 +314,6 @@ impl Codegen {
         let mut vec_types = std::collections::HashSet::new();
         collect_vec_types_impl(program, &mut vec_types);
         for vec_type_name in &vec_types {
-            self.generate_vec_struct(vec_type_name);
-
             // Generate Option<T> for each Vec<T> since Vec::pop and Vec::get return Option<T>
             // Extract element type from Vec type name (e.g., "Vec_int" -> "int")
             if let Some(elem_type_str) = vec_type_name.strip_prefix("Vec_") {
@@ -393,20 +394,6 @@ impl Codegen {
                     );
                 }
             }
-        }
-
-        // Collect and generate slice type definitions
-        let mut slice_types = std::collections::HashSet::new();
-        collect_slice_types_impl(program, &mut slice_types);
-        for slice_type_name in &slice_types {
-            self.generate_slice_struct(slice_type_name);
-        }
-
-        let mut tuple_types: std::collections::HashMap<String, Vec<Type>> =
-            std::collections::HashMap::new();
-        collect_tuple_types_impl(program, &mut tuple_types);
-        for (tuple_name, elements) in &tuple_types {
-            self.generate_tuple_struct(tuple_name, elements);
         }
 
         // Generate extern function prototypes
@@ -521,6 +508,8 @@ impl Codegen {
         collect_generic_instantiations(program, &mut generic_instantiations_map);
         self.generic_instantiations = generic_instantiations_map.clone();
 
+        self.emit_vec_slice_tuple_typedefs(program);
+
         // Emit struct type definitions first so functions can use them.
         for s in &program.structs {
             if s.generics.is_empty() {
@@ -632,8 +621,6 @@ impl Codegen {
         let mut vec_types = std::collections::HashSet::new();
         collect_vec_types_impl(program, &mut vec_types);
         for vec_type_name in &vec_types {
-            self.generate_vec_struct(vec_type_name);
-
             // Generate Option<T> for each Vec<T> since Vec::pop and Vec::get return Option<T>
             // Extract element type from Vec type name (e.g., "Vec_int" -> "int")
             if let Some(elem_type_str) = vec_type_name.strip_prefix("Vec_") {
@@ -714,20 +701,6 @@ impl Codegen {
                     );
                 }
             }
-        }
-
-        // Collect and generate slice type definitions
-        let mut slice_types = std::collections::HashSet::new();
-        collect_slice_types_impl(program, &mut slice_types);
-        for slice_type_name in &slice_types {
-            self.generate_slice_struct(slice_type_name);
-        }
-
-        let mut tuple_types: std::collections::HashMap<String, Vec<Type>> =
-            std::collections::HashMap::new();
-        collect_tuple_types_impl(program, &mut tuple_types);
-        for (tuple_name, elements) in &tuple_types {
-            self.generate_tuple_struct(tuple_name, elements);
         }
 
         // Generate extern function prototypes (declarations only, implementations come from headers)
@@ -1652,6 +1625,24 @@ impl Codegen {
                         }
                     }
 
+                    if let IREexpr::Match {
+                        expr: match_expr,
+                        enum_type,
+                        arms,
+                    } = init
+                    {
+                        self.writeln(";");
+                        self.generate_match_block(
+                            match_expr,
+                            enum_type,
+                            arms,
+                            Some((&let_stmt.name, &let_stmt.ty)),
+                        );
+                        self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
+                        self.mark_moves_in_expr(match_expr);
+                        return;
+                    }
+
                     self.write(" = ");
                     // Special handling: if assigning String type from string literal, convert it
                     if matches!(let_stmt.ty, Type::String) {
@@ -1757,40 +1748,59 @@ impl Codegen {
                             self.writeln("ret_val = _ret_array;");
                         }
                     } else {
-                        // Assign to synthetic return variable and jump to epilogue.
-                        self.write("ret_val = ");
-
-                        // Check if this is a struct literal with array field that needs memcpy
-                        let mut needs_memcpy = false;
-                        let mut array_field_name = String::new();
-                        let mut array_var_name = String::new();
-
-                        if let IREexpr::StructLit { type_name, fields } = value
-                            && let Some(struct_decl) = self.struct_map.get(type_name)
+                        let return_ty = self.current_return_type.clone();
+                        if let IREexpr::Match {
+                            expr: match_expr,
+                            enum_type,
+                            arms,
+                        } = value
                         {
-                            for field in fields.iter() {
-                                if let IREexpr::Var(ref var_name) = field.value
-                                    && let Some(field_decl) =
-                                        struct_decl.fields.iter().find(|f| f.name == field.name)
-                                    && let Type::Array { .. } = field_decl.ty
-                                {
-                                    needs_memcpy = true;
-                                    array_field_name = field.name.clone();
-                                    array_var_name = var_name.clone();
-                                    break;
+                            if let Some(ref ty) = return_ty {
+                                self.generate_match_block(
+                                    match_expr,
+                                    enum_type,
+                                    arms,
+                                    Some(("ret_val", ty)),
+                                );
+                            } else {
+                                self.generate_match_block(match_expr, enum_type, arms, None);
+                            }
+                        } else {
+                            // Assign to synthetic return variable and jump to epilogue.
+                            self.write("ret_val = ");
+
+                            // Check if this is a struct literal with array field that needs memcpy
+                            let mut needs_memcpy = false;
+                            let mut array_field_name = String::new();
+                            let mut array_var_name = String::new();
+
+                            if let IREexpr::StructLit { type_name, fields } = value
+                                && let Some(struct_decl) = self.struct_map.get(type_name)
+                            {
+                                for field in fields.iter() {
+                                    if let IREexpr::Var(ref var_name) = field.value
+                                        && let Some(field_decl) =
+                                            struct_decl.fields.iter().find(|f| f.name == field.name)
+                                        && let Type::Array { .. } = field_decl.ty
+                                    {
+                                        needs_memcpy = true;
+                                        array_field_name = field.name.clone();
+                                        array_var_name = var_name.clone();
+                                        break;
+                                    }
                                 }
                             }
-                        }
 
-                        self.generate_expr(value);
-                        self.writeln(";");
+                            self.generate_expr_with_type(value, return_ty.as_ref());
+                            self.writeln(";");
 
-                        if needs_memcpy {
-                            self.write_indent();
-                            self.writeln(&format!(
-                                "memcpy(&ret_val.{}, &{}, sizeof(ret_val.{}));",
-                                array_field_name, array_var_name, array_field_name
-                            ));
+                            if needs_memcpy {
+                                self.write_indent();
+                                self.writeln(&format!(
+                                    "memcpy(&ret_val.{}, &{}, sizeof(ret_val.{}));",
+                                    array_field_name, array_var_name, array_field_name
+                                ));
+                            }
                         }
                     }
                 }
@@ -1821,7 +1831,7 @@ impl Codegen {
                         enum_type,
                         arms,
                     } => {
-                        self.generate_match_block(match_expr, enum_type, arms);
+                        self.generate_match_block(match_expr, enum_type, arms, None);
                         self.mark_moves_in_expr(match_expr);
                     }
                     IREexpr::Send {
@@ -2333,11 +2343,10 @@ impl Codegen {
                     enum_decl.as_ref(),
                     &match_var_name,
                     &type_params,
+                    None,
                 );
                 self.write_indent();
                 self.writeln("}");
-                // Statement expressions need a value - use 0 as dummy value
-                // (actual return statements in arms will have already returned)
                 self.write(" 0 })");
             }
             IREexpr::Call {
@@ -2991,7 +3000,13 @@ impl Codegen {
         }
     }
 
-    fn generate_match_block(&mut self, expr: &IREexpr, enum_type: &str, arms: &[IRMatchArm]) {
+    fn generate_match_block(
+        &mut self,
+        expr: &IREexpr,
+        enum_type: &str,
+        arms: &[IRMatchArm],
+        match_result: Option<(&str, &Type)>,
+    ) {
         // Generate match as a block (for statement context)
         // Get monomorphized enum name if it's generic
         let enum_decl = self.enum_map.get(enum_type).cloned();
@@ -3161,6 +3176,7 @@ impl Codegen {
             enum_decl.as_ref(),
             &match_var_name,
             &type_params,
+            match_result,
         );
         self.write_indent();
         self.writeln("}");
@@ -3173,6 +3189,7 @@ impl Codegen {
         enum_decl: Option<&EnumDecl>,
         match_var_name: &str,
         type_params: &[Type],
+        match_result: Option<(&str, &Type)>,
     ) {
         self.indent_level += 1;
         let mut grouped: std::collections::BTreeMap<usize, Vec<&IRMatchArm>> =
@@ -3196,6 +3213,7 @@ impl Codegen {
                         match_var_name,
                         type_params,
                         false,
+                        match_result,
                     );
                 }
             } else {
@@ -3204,7 +3222,7 @@ impl Codegen {
                     .map(|v| v.name.as_str())
                     .unwrap_or("variant");
                 self.write_indent();
-                self.writeln(&format!("case {}: // {}", variant_idx, variant_name));
+                self.writeln(&format!("case {}: {{ // {}", variant_idx, variant_name));
                 self.indent_level += 1;
                 if let Some(first_arm) = group_arms.first() {
                     self.generate_match_arm_payload_bindings(
@@ -3216,9 +3234,11 @@ impl Codegen {
                     );
                 }
                 for arm in group_arms {
-                    self.generate_guarded_arm_body(arm);
+                    self.generate_match_arm_body(arm, match_result);
                 }
                 self.indent_level -= 1;
+                self.write_indent();
+                self.writeln("}");
             }
         }
         self.indent_level -= 1;
@@ -3363,6 +3383,7 @@ impl Codegen {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn generate_match_arm(
         &mut self,
         arm: &IRMatchArm,
@@ -3371,13 +3392,14 @@ impl Codegen {
         match_var_name: &str,
         _type_params: &[Type],
         _grouped: bool,
+        match_result: Option<(&str, &Type)>,
     ) {
         match &arm.pattern {
             IRPattern::Wildcard => {
                 self.write_indent();
                 self.writeln("default:");
                 self.indent_level += 1;
-                self.generate_guarded_arm_body(arm);
+                self.generate_match_arm_body(arm, match_result);
                 self.indent_level -= 1;
             }
             IRPattern::Binding { name } => {
@@ -3386,7 +3408,7 @@ impl Codegen {
                 self.indent_level += 1;
                 self.write_indent();
                 self.writeln(&format!("{} {} = {};", enum_type, name, match_var_name));
-                self.generate_guarded_arm_body(arm);
+                self.generate_match_arm_body(arm, match_result);
                 self.indent_level -= 1;
             }
             IRPattern::Variant { .. } => {
@@ -3395,23 +3417,64 @@ impl Codegen {
         }
     }
 
-    fn generate_guarded_arm_body(&mut self, arm: &IRMatchArm) {
+    fn generate_match_arm_body(&mut self, arm: &IRMatchArm, match_result: Option<(&str, &Type)>) {
         if let Some(ref guard) = arm.guard {
             self.write_indent();
             self.write("if (");
             self.generate_expr(guard);
             self.writeln(") {");
             self.indent_level += 1;
-            self.generate_block(&arm.body);
+            if let Some((result_var, result_type)) = match_result {
+                self.emit_match_arm_result_stmts(&arm.body, result_var, result_type);
+            } else {
+                self.generate_block(&arm.body);
+            }
             self.indent_level -= 1;
             self.write_indent();
             self.writeln("break;");
             self.write_indent();
             self.writeln("}");
+        } else if let Some((result_var, result_type)) = match_result {
+            self.emit_match_arm_result_stmts(&arm.body, result_var, result_type);
+            self.write_indent();
+            self.writeln("break;");
         } else {
             self.generate_block(&arm.body);
             self.write_indent();
             self.writeln("break;");
+        }
+    }
+
+    fn emit_match_arm_result_stmts(
+        &mut self,
+        body: &IRBlock,
+        result_var: &str,
+        result_type: &Type,
+    ) {
+        let result_idx = body.statements.iter().rposition(|stmt| {
+            matches!(stmt, IRStmt::Return(r) if r.value.is_some())
+                || matches!(stmt, IRStmt::Expr(_))
+        });
+        let prefix_len = result_idx.unwrap_or(body.statements.len());
+        let prefix = IRBlock {
+            name: body.name.clone(),
+            statements: body.statements[..prefix_len].to_vec(),
+            defers: body.defers.clone(),
+        };
+        self.generate_block(&prefix);
+        if let Some(idx) = result_idx {
+            self.write_indent();
+            self.write(&format!("{} = ", result_var));
+            match &body.statements[idx] {
+                IRStmt::Return(ret) => {
+                    if let Some(ref value) = ret.value {
+                        self.generate_expr_with_type(value, Some(result_type));
+                    }
+                }
+                IRStmt::Expr(expr) => self.generate_expr_with_type(expr, Some(result_type)),
+                _ => {}
+            }
+            self.writeln(";");
         }
     }
 }
@@ -4074,6 +4137,27 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
 }
 
 impl Codegen {
+    fn emit_vec_slice_tuple_typedefs(&mut self, program: &IRProgram) {
+        let mut vec_types = std::collections::HashSet::new();
+        collect_vec_types_impl(program, &mut vec_types);
+        for vec_type_name in &vec_types {
+            self.generate_vec_struct(vec_type_name);
+        }
+
+        let mut slice_types = std::collections::HashSet::new();
+        collect_slice_types_impl(program, &mut slice_types);
+        for slice_type_name in &slice_types {
+            self.generate_slice_struct(slice_type_name);
+        }
+
+        let mut tuple_types: std::collections::HashMap<String, Vec<Type>> =
+            std::collections::HashMap::new();
+        collect_tuple_types_impl(program, &mut tuple_types);
+        for (tuple_name, elements) in &tuple_types {
+            self.generate_tuple_struct(tuple_name, elements);
+        }
+    }
+
     fn generate_vec_struct(&mut self, vec_type_name: &str) {
         // Generate Vec struct definition matching ion_vec_t layout
         // Format: typedef struct Vec_T { void* data; size_t len; size_t capacity; size_t elem_size; } Vec_T;

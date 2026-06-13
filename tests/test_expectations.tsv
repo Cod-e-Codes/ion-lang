@@ -102,6 +102,8 @@ test_match_result_type.ion	run	88
 test_if_else_move_ok.ion	run	60			
 test_fn_type_basic.ion	run	77			
 test_tuple_basic.ion	run	81			
+test_match_expr_rvalue.ion	run	91			
+test_struct_field_drop_vec.ion	run	46			
 test_move_error.ion	error		UseAfterMove		
 test_move_in_loop.ion	error		UseAfterMove		
 test_move_in_loop_for.ion	error		UseAfterMove		
@@ -126,6 +128,7 @@ test_struct_field_drop.ion	cgen			ion_string_free(h.label)
 test_struct_field_drop.ion	cgen			switch (p.tag)	
 test_struct_field_drop_box.ion	cgen			ion_box_free(h.b)	
 test_struct_enum_empty_drop.ion	cgen			switch (p.tag)	
+test_struct_field_drop_vec.ion	cgen			ion_vec_free((ion_vec_t*)(h.items))	
 test_string_push_byte.ion	cgen			ion_string_push_byte	
 test_string_eq.ion	cgen			ion_string_equals	
 test_array_to_slice_coercion.ion	cgen			(ion_slice_int){	

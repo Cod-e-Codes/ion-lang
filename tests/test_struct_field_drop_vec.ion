@@ -1,0 +1,14 @@
+struct Holder {
+    items: Vec<int>;
+}
+
+fn main() -> int {
+    if true {
+        let h: Holder = Holder {
+            items: Vec::new(),
+        };
+        Vec::push(&mut h.items, 1);
+        Vec::push(&mut h.items, 2);
+    }
+    return 46;
+}

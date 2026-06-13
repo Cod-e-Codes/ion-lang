@@ -11,7 +11,6 @@ package-lock.json
 # 2. Rust/Cargo
 # ------------------------------------
 target/
-Cargo.lock
 
 # ------------------------------------
 # 3. Compiled Binaries (General)

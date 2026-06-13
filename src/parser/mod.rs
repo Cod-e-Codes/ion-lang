@@ -22,6 +22,24 @@ pub enum ParseError {
     Message(String),
 }
 
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::UnexpectedToken {
+                expected,
+                got,
+                span,
+            } => write!(
+                f,
+                "line {}: unexpected token {:?}, expected {}",
+                span.line, got, expected
+            ),
+            ParseError::UnexpectedEOF => write!(f, "unexpected end of file"),
+            ParseError::Message(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Self {

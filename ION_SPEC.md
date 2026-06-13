@@ -1037,15 +1037,18 @@ See Section 7.2 for channel semantics and API.
 
 ```ion
 // stdlib/fs.ion
-pub fn read_to_string(path: String) -> String;
+pub enum ReadResult { Ok(String); Err(int); }
+pub fn read_to_string_result(path: String) -> ReadResult;
 ```
 
 - `path` is an owned `String` (typically from a string literal or `String::from`).
-- On success, returns file bytes as a `String` (raw UTF-8; no validation).
-- On failure (missing file, permission error, etc.), returns an empty `String`.
+- On success, returns `ReadResult::Ok` with file bytes as a `String` (raw UTF-8; no validation).
+- On failure: `ReadResult::Err(-1)` if `open` fails, `ReadResult::Err(-2)` if `read` fails.
 - **Platform:** POSIX and MinGW (`open`/`read`/`close`). Not available on MSVC-only toolchains without a POSIX compatibility layer.
 
-Import with `import "stdlib/fs.ion" as fs;` then `fs::read_to_string(path)`.
+Generic `Result<T, E>` lives in `stdlib/result.ion` for library authors; `fs` uses the concrete `ReadResult` enum.
+
+Import with `import "stdlib/fs.ion" as fs;` then `fs::read_to_string_result(path)`.
 
 **Deferred (not implemented):**
 
@@ -1084,7 +1087,7 @@ The stdlib provides safe wrappers in `stdlib/io.ion`, `stdlib/fmt.ion`, and `std
 - `fmt::println_int(n: int)`
 
 **`stdlib/fs.ion`:**
-- `fs::read_to_string(path: String) -> String` – read entire file (POSIX/MinGW; empty `String` on error)
+- `fs::read_to_string_result(path: String) -> ReadResult` – read entire file (POSIX/MinGW; `Err(-1)` on open failure, `Err(-2)` on read failure)
 
 All I/O functions wrap POSIX calls in safe Ion code. Import with `import "stdlib/io.ion" as io;` (or `fmt.ion`, `fs.ion`).
 
@@ -1179,10 +1182,7 @@ Build with `cargo build --release --bin ion-lsp`. Rebuild after compiler or LSP 
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (not defined in user source)
 - Function types: named functions only; no fn literals/closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
-- `fs::read_to_string`: POSIX/MinGW only; returns empty `String` on error (no `Result` yet); no write or streaming API
 - Tuple values: no nested tuples, `==` on tuples, struct fields holding tuples, or generic `(T1, T2)` parameters
-- Match expressions used as rvalues in expression position may codegen as `0` (statement-position `match` is correct)
-- Struct fields holding `Vec<T>` may not get correct drop codegen when `Vec_*` typedef ordering is wrong in generated C
 
 ### 11. Future Work (Non-Normative)
 

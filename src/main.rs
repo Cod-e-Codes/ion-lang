@@ -7,8 +7,14 @@ use std::process;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
+    if args.len() >= 2 && (args[1] == "--version" || args[1] == "-V") {
+        println!("ion-compiler {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     if args.len() < 2 {
         eprintln!("Usage: ion [--mode <single|multi>] [--output <name>] <input.ion>");
+        eprintln!("       ion --version");
         eprintln!("Compiles an Ion source file to C code.");
         process::exit(1);
     }
@@ -63,20 +69,7 @@ fn main() {
     let ast = match compiler.parse_module(input_path) {
         Ok(program) => program,
         Err(err) => {
-            match err {
-                compiler::CompileError::ParseError(parse_err) => {
-                    eprintln!("Parser error: {:?}", parse_err);
-                }
-                compiler::CompileError::ImportCycle { path } => {
-                    eprintln!("Import cycle detected involving: {:?}", path);
-                }
-                compiler::CompileError::FileNotFound { path } => {
-                    eprintln!("File not found: {:?}", path);
-                }
-                compiler::CompileError::IoError(msg) => {
-                    eprintln!("IO error: {}", msg);
-                }
-            }
+            eprintln!("{}", err);
             process::exit(1);
         }
     };
@@ -87,23 +80,11 @@ fn main() {
     let module_exports = compiler.get_module_exports().clone();
     checker.set_module_exports(module_exports);
 
-    // Type check main module
-    if let Err(err) = checker.check_program(&ast) {
-        eprintln!("Type check error: {:?}", err);
+    // Type check merged program (main + imported modules)
+    let merged_program = compiler.merge_modules(&ast, input_path);
+    if let Err(err) = checker.check_program(&merged_program) {
+        eprintln!("{}", err);
         process::exit(1);
-    }
-
-    // Type check all imported modules
-    for (module_path, module_program) in compiler.get_modules() {
-        if module_path
-            != &input_path
-                .canonicalize()
-                .unwrap_or_else(|_| input_path.to_path_buf())
-            && let Err(err) = checker.check_program(module_program)
-        {
-            eprintln!("Type check error in module {:?}: {:?}", module_path, err);
-            process::exit(1);
-        }
     }
 
     if mode == "multi" {

@@ -1,4 +1,7 @@
-// Minimal POSIX file read (Unix-first; MinGW provides open/read/close).
+pub enum ReadResult {
+    Ok(String);
+    Err(int);
+}
 
 extern "C" {
     fn open(path: *u8, flags: int) -> int;
@@ -7,28 +10,33 @@ extern "C" {
 }
 
 // Read an entire file into an owned String.
-// Returns an empty String if open or read fails.
+// Returns Err(-1) on open failure, Err(-2) on read failure, Ok(s) on success.
 // flags 0 is O_RDONLY on POSIX and MinGW.
-pub fn read_to_string(path: String) -> String {
-    let mut result: String = String::new();
+pub fn read_to_string_result(path: String) -> ReadResult {
     unsafe {
         let fd: int = open(path.data, 0);
         if fd < 0 {
-            return result;
+            return ReadResult::Err(-1);
         }
 
+        let mut text: String = String::new();
         let mut buf: [u8; 256] = [0; 256];
         let mut n: int = read(fd, &buf[0], 256);
         while n > 0 {
             let mut i: int = 0;
             while i < n {
-                String::push_byte(&mut result, buf[i]);
+                String::push_byte(&mut text, buf[i]);
                 i = i + 1;
             }
             n = read(fd, &buf[0], 256);
         }
 
+        if n < 0 {
+            let _closed: int = close(fd);
+            return ReadResult::Err(-2);
+        }
+
         let _closed: int = close(fd);
+        return ReadResult::Ok(text);
     }
-    return result;
 }

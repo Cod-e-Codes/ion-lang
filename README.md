@@ -20,7 +20,7 @@ Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 - **Control flow**: `if`/`while` (bool conditions), `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, `defer`
 - **Concurrency**: `channel<T>()` returns `(Sender<T>, Receiver<T>)`; `send(&tx, v)` and `recv(&mut rx)`; `spawn { ... }` with structural `Send`
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`
-- **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, and `stdlib/fs.ion` for stdout and file read
+- **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, and `stdlib/result.ion`
 
 Known limitations: [ION_SPEC.md section 10.2](ION_SPEC.md#102-known-limitations).
 
@@ -36,13 +36,20 @@ Known limitations: [ION_SPEC.md section 10.2](ION_SPEC.md#102-known-limitations)
 
 ### Prerequisites
 
-- Rust toolchain (stable or nightly)
-- A C compiler (GCC, Clang, or MSVC)
+- Rust stable (see `rust-toolchain.toml`)
+- A C compiler: GCC or Clang (on Windows, use MinGW GCC for generated C; MSVC is not the primary target)
+- Git Bash on Windows for `tests/test_runner.sh`
 
 ### Build the Compiler
 
 ```bash
 cargo build --release
+```
+
+Or install into your Cargo bin directory:
+
+```bash
+cargo install --path . --bin ion-compiler
 ```
 
 The binary will be at `target/release/ion-compiler` (or `target/release/ion-compiler.exe` on Windows).
@@ -78,6 +85,16 @@ Limitations: built-in methods (`Vec::push`, etc.) do not go to definition; compl
    On Cursor, use `cursor --install-extension ion-language-0.1.0.vsix` instead of `code`.
 
 3. Workspace settings (`.vscode/settings.json`) point `ion.lspPath` at `target/release/ion-lsp.exe`.
+
+**Packaging (local install, no marketplace publish):**
+
+```bash
+cd ion-vscode
+npm install
+npm run compile
+npx @vscode/vsce package --allow-missing-repository
+cursor --install-extension ion-language-0.1.0.vsix
+```
 
 ## Usage
 
@@ -189,7 +206,7 @@ Unit tests:
 cargo test
 ```
 
-Integration tests:
+Integration tests (use Git Bash on Windows, not WSL):
 
 ```bash
 cd tests && ./test_runner.sh
@@ -200,7 +217,7 @@ The runner loads `tests/test_expectations.tsv` (exit codes, error patterns, code
 ### Linting
 
 ```bash
-cargo clippy
+cargo clippy -- -D warnings
 ```
 
 ## License
