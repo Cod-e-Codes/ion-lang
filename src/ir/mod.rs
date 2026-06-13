@@ -1284,6 +1284,17 @@ fn type_name_for_mangle(ty: &Type) -> String {
             let parts: Vec<String> = elements.iter().map(type_name_for_mangle).collect();
             format!("tuple_{}", parts.join("_"))
         }
+        Type::Fn {
+            params,
+            return_type,
+        } => {
+            let param_parts: Vec<String> = params.iter().map(type_name_for_mangle).collect();
+            format!(
+                "fn_{}_ret_{}",
+                param_parts.join("_"),
+                type_name_for_mangle(return_type)
+            )
+        }
     }
 }
 
@@ -1595,6 +1606,16 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
                 .iter()
                 .map(|e| substitute_type(e, substitutions))
                 .collect(),
+        },
+        Type::Fn {
+            params,
+            return_type,
+        } => Type::Fn {
+            params: params
+                .iter()
+                .map(|p| substitute_type(p, substitutions))
+                .collect(),
+            return_type: Box::new(substitute_type(return_type, substitutions)),
         },
         Type::Int
         | Type::Bool

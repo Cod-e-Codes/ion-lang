@@ -161,6 +161,16 @@ fn substitute_type_params(
                 .map(|e| substitute_type_params(e, substitutions))
                 .collect(),
         },
+        Type::Fn {
+            params,
+            return_type,
+        } => Type::Fn {
+            params: params
+                .iter()
+                .map(|p| substitute_type_params(p, substitutions))
+                .collect(),
+            return_type: Box::new(substitute_type_params(return_type, substitutions)),
+        },
         // Primitive types don't need substitution
         Type::Int
         | Type::Bool
@@ -245,8 +255,44 @@ fn resolve_type_alias(ty: &Type, type_aliases: &HashMap<String, TypeAliasDecl>) 
         Type::Slice { inner } => Type::Slice {
             inner: Box::new(resolve_type_alias(inner, type_aliases)),
         },
+        Type::Fn {
+            params,
+            return_type,
+        } => Type::Fn {
+            params: params
+                .iter()
+                .map(|p| resolve_type_alias(p, type_aliases))
+                .collect(),
+            return_type: Box::new(resolve_type_alias(return_type, type_aliases)),
+        },
         _ => ty.clone(),
     }
+}
+
+fn fn_type_to_c_ptr(ty: &Type) -> String {
+    let Type::Fn {
+        params,
+        return_type,
+    } = ty
+    else {
+        panic!("fn_type_to_c_ptr called on non-fn type");
+    };
+    let ret = type_to_c_impl(return_type);
+    let param_strs: Vec<String> = params.iter().map(type_to_c_impl).collect();
+    format!("{} (*)({})", ret, param_strs.join(", "))
+}
+
+fn fn_type_to_c_decl(ty: &Type, name: &str) -> String {
+    let Type::Fn {
+        params,
+        return_type,
+    } = ty
+    else {
+        panic!("fn_type_to_c_decl called on non-fn type");
+    };
+    let ret = type_to_c_impl(return_type);
+    let param_strs: Vec<String> = params.iter().map(type_to_c_impl).collect();
+    format!("{} (*{})({})", ret, name, param_strs.join(", "))
 }
 
 fn type_to_c_impl(ty: &Type) -> String {
@@ -333,6 +379,7 @@ fn type_to_c_impl(ty: &Type) -> String {
             // This should not appear in normal codegen (tuples are desugared)
             "void".to_string()
         }
+        Type::Fn { .. } => fn_type_to_c_ptr(ty),
     }
 }
 
@@ -714,6 +761,9 @@ impl Codegen {
                             let base_type = self.type_to_c(inner);
                             self.write(&format!("{} {}[{}]", base_type, param.name, size));
                         }
+                        Type::Fn { .. } => {
+                            self.write(&fn_type_to_c_decl(&param.ty, &param.name));
+                        }
                         _ => {
                             self.write(&format!("{} {}", self.type_to_c(&param.ty), param.name));
                         }
@@ -1020,6 +1070,9 @@ impl Codegen {
                                 let base_type = self.type_to_c(inner);
                                 self.write(&format!("{} {}[{}]", base_type, param.name, size));
                             }
+                            Type::Fn { .. } => {
+                                self.write(&fn_type_to_c_decl(&param.ty, &param.name));
+                            }
                             _ => {
                                 self.write(&format!(
                                     "{} {}",
@@ -1134,6 +1187,9 @@ impl Codegen {
                             Type::Array { inner, size } => {
                                 let base_type = type_to_c_impl(inner);
                                 self.write(&format!("{} {}[{}]", base_type, param.name, size));
+                            }
+                            Type::Fn { .. } => {
+                                self.write(&fn_type_to_c_decl(&param.ty, &param.name));
                             }
                             _ => {
                                 self.write(&format!(
@@ -1636,6 +1692,9 @@ impl Codegen {
                         let base_type = self.type_to_c(inner);
                         self.write(&format!("{} {}[{}]", base_type, param.name, size));
                     }
+                    Type::Fn { .. } => {
+                        self.write(&fn_type_to_c_decl(&param.ty, &param.name));
+                    }
                     _ => {
                         self.write(&format!("{} {}", self.type_to_c(&param.ty), param.name));
                     }
@@ -1972,6 +2031,9 @@ impl Codegen {
                         Type::Array { inner, size } => {
                             let base_type = self.type_to_c(inner);
                             self.write(&format!("{} {}[{}]", base_type, let_stmt.name, size));
+                        }
+                        Type::Fn { .. } => {
+                            self.write(&fn_type_to_c_decl(&let_stmt.ty, &let_stmt.name));
                         }
                         _ => {
                             self.write(&format!(
@@ -3645,6 +3707,9 @@ impl Codegen {
                             let base_type = self.type_to_c(inner);
                             self.write(&format!("{} {}[{}]", base_type, param.name, size));
                         }
+                        Type::Fn { .. } => {
+                            self.write(&fn_type_to_c_decl(&param.ty, &param.name));
+                        }
                         _ => {
                             self.write(&format!("{} {}", param_c_type, param.name));
                         }
@@ -4278,6 +4343,15 @@ fn collect_slice_types_from_type(ty: &Type, slice_types: &mut std::collections::
                 collect_slice_types_from_type(elem, slice_types);
             }
         }
+        Type::Fn {
+            params,
+            return_type,
+        } => {
+            for param in params {
+                collect_slice_types_from_type(param, slice_types);
+            }
+            collect_slice_types_from_type(return_type, slice_types);
+        }
         Type::Struct(_) | Type::Enum(_) | Type::Generic { .. } => {
             // User-defined types - would need to check fields/variants
         }
@@ -4887,6 +4961,13 @@ fn type_params_are_concrete(params: &[Type]) -> bool {
         | Type::Receiver { elem_type: inner }
         | Type::RawPtr { inner } => type_params_are_concrete(std::slice::from_ref(inner)),
         Type::Tuple { elements } => type_params_are_concrete(elements),
+        Type::Fn {
+            params,
+            return_type,
+        } => {
+            type_params_are_concrete(params)
+                && type_params_are_concrete(std::slice::from_ref(return_type))
+        }
         _ => true,
     })
 }
@@ -4930,6 +5011,15 @@ fn collect_generic_from_type(
         Type::Channel { elem_type } => collect_generic_from_type(elem_type, instantiations),
         Type::Array { inner, .. } => collect_generic_from_type(inner, instantiations),
         Type::Slice { inner } => collect_generic_from_type(inner, instantiations),
+        Type::Fn {
+            params,
+            return_type,
+        } => {
+            for param in params {
+                collect_generic_from_type(param, instantiations);
+            }
+            collect_generic_from_type(return_type, instantiations);
+        }
         _ => {}
     }
 }

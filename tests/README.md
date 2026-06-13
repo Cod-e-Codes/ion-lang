@@ -172,6 +172,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_if_else_move_ok.ion` - Move in diverging branch; use after `if` (exit 60)
 - `test_if_else_move_error.ion` - Move in fall-through branch; use after `if` (negative)
 
+### Function types
+- `test_fn_type_basic.ion` - Store named function in `fn(int) -> int` variable; call through pointer (exit 77)
+- `test_fn_type_mismatch.ion` - Function signature mismatch when coercing to fn type (negative)
+
 - `test_io_print_str.ion` - Safe I/O library: `print_str()` function
 - `test_io_print.ion` - Safe I/O library: `print()` function for String
 - `test_io_println.ion` - Safe I/O library: `println()` function for String

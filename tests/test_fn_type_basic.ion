@@ -1,0 +1,8 @@
+fn add(x: int) -> int {
+    return x + 67;
+}
+
+fn main() -> int {
+    let f: fn(int) -> int = add;
+    return f(10);
+}

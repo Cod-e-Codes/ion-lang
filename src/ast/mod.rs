@@ -107,20 +107,49 @@ pub enum Type {
     U32,
     U64,
     UInt,
-    Ref { inner: Box<Type>, mutable: bool },
-    RawPtr { inner: Box<Type> },
-    Channel { elem_type: Box<Type> }, // Deprecated, use Sender/Receiver
-    Sender { elem_type: Box<Type> },
-    Receiver { elem_type: Box<Type> },
+    Ref {
+        inner: Box<Type>,
+        mutable: bool,
+    },
+    RawPtr {
+        inner: Box<Type>,
+    },
+    Channel {
+        elem_type: Box<Type>,
+    }, // Deprecated, use Sender/Receiver
+    Sender {
+        elem_type: Box<Type>,
+    },
+    Receiver {
+        elem_type: Box<Type>,
+    },
     Struct(String),
     Enum(String),
-    Generic { name: String, params: Vec<Type> },
-    Box { inner: Box<Type> },
-    Vec { elem_type: Box<Type> },
+    Generic {
+        name: String,
+        params: Vec<Type>,
+    },
+    Box {
+        inner: Box<Type>,
+    },
+    Vec {
+        elem_type: Box<Type>,
+    },
     String,
-    Array { inner: Box<Type>, size: usize },
-    Slice { inner: Box<Type> },
-    Tuple { elements: Vec<Type> }, // For (Type1, Type2, ...) - used for channel() return
+    Array {
+        inner: Box<Type>,
+        size: usize,
+    },
+    Slice {
+        inner: Box<Type>,
+    },
+    Tuple {
+        elements: Vec<Type>,
+    }, // For (Type1, Type2, ...) - used for channel() return
+    Fn {
+        params: Vec<Type>,
+        return_type: Box<Type>,
+    },
 }
 
 #[derive(Debug, Clone)]

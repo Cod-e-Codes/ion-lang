@@ -1,0 +1,8 @@
+fn add(x: int) -> int {
+    return x;
+}
+
+fn main() -> int {
+    let f: fn(bool) -> int = add;
+    return 0;
+}

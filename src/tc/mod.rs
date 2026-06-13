@@ -1033,6 +1033,16 @@ impl TypeChecker {
                     .map(|e| Self::substitute_type_params(e, substitutions))
                     .collect(),
             },
+            Type::Fn {
+                params,
+                return_type,
+            } => Type::Fn {
+                params: params
+                    .iter()
+                    .map(|p| Self::substitute_type_params(p, substitutions))
+                    .collect(),
+                return_type: Box::new(Self::substitute_type_params(return_type, substitutions)),
+            },
             _ => ty.clone(),
         }
     }
@@ -1973,24 +1983,25 @@ impl TypeChecker {
                                 module_name, item_name, module_name, item_name
                             )));
                         }
-                        // Return function type (for now, just return int as placeholder)
-                        // In a full implementation, we'd return a function type
-                        Ok(Type::Int)
+                        // Return function type for module function references
+                        let func_decl =
+                            module_exports.functions.get(item_name).ok_or_else(|| {
+                                TypeCheckError::UndefinedVariable {
+                                    name: format!("{}::{}", module_name, item_name),
+                                    span: var_expr.span,
+                                }
+                            })?;
+                        Ok(fn_type_from_signature(
+                            &func_decl.params,
+                            &func_decl.return_type,
+                        ))
                     } else {
                         Err(TypeCheckError::UndefinedVariable {
                             name: format!("{}::{}", module_name, item_name),
                             span: var_expr.span,
                         })
                     }
-                } else {
-                    // Simple variable lookup
-                    let var_info = self.variables.get(&var_expr.name).ok_or_else(|| {
-                        TypeCheckError::UndefinedVariable {
-                            name: var_expr.name.clone(),
-                            span: var_expr.span,
-                        }
-                    })?;
-
+                } else if let Some(var_info) = self.variables.get(&var_expr.name) {
                     // Check for use-after-move
                     if var_info.state == OwnershipState::Moved {
                         return Err(TypeCheckError::UseAfterMove {
@@ -2013,6 +2024,21 @@ impl TypeChecker {
                     self.lsp_info.types.insert(var_expr.span, var_ty.clone());
 
                     Ok(var_ty)
+                } else if let Some(func_decl) = self.functions.get(&var_expr.name) {
+                    Ok(fn_type_from_signature(
+                        &func_decl.params,
+                        &func_decl.return_type,
+                    ))
+                } else if let Some(extern_fn) = self.extern_functions.get(&var_expr.name) {
+                    Ok(fn_type_from_signature(
+                        &extern_fn.params,
+                        &extern_fn.return_type,
+                    ))
+                } else {
+                    Err(TypeCheckError::UndefinedVariable {
+                        name: var_expr.name.clone(),
+                        span: var_expr.span,
+                    })
                 }
             }
             Expr::Ref(ref_expr) => {
@@ -2835,6 +2861,48 @@ impl TypeChecker {
                     })?;
 
                     (func_decl.params.clone(), func_decl.return_type.clone())
+                } else if let Some(var_info) = self.variables.get(&call_expr.callee) {
+                    let resolved_ty = self.resolve_type_name(&var_info.ty)?;
+                    match resolved_ty {
+                        Type::Fn {
+                            params: fn_params,
+                            return_type,
+                        } => {
+                            if call_expr.args.len() != fn_params.len() {
+                                return Err(TypeCheckError::TypeMismatch {
+                                    expected: format!("{} arguments", fn_params.len()),
+                                    got: format!("{} arguments", call_expr.args.len()),
+                                    span: call_expr.span,
+                                });
+                            }
+                            for (arg_expr, param_ty) in call_expr.args.iter().zip(fn_params.iter())
+                            {
+                                let arg_ty = self.check_expr(arg_expr)?;
+                                let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
+                                let resolved_param_ty = self.resolve_type_name(param_ty)?;
+                                let numeric_coerced =
+                                    Self::can_coerce_numeric(&resolved_arg_ty, &resolved_param_ty);
+                                if !numeric_coerced
+                                    && !types_equal(&resolved_arg_ty, &resolved_param_ty)
+                                {
+                                    return Err(TypeCheckError::TypeMismatch {
+                                        expected: type_to_string(&resolved_param_ty),
+                                        got: type_to_string(&resolved_arg_ty),
+                                        span: arg_expr.span(),
+                                    });
+                                }
+                                self.check_expr_for_moves(arg_expr)?;
+                            }
+                            return Ok(*return_type);
+                        }
+                        _ => {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: "function type".to_string(),
+                                got: type_to_string(&var_info.ty),
+                                span: call_expr.span,
+                            });
+                        }
+                    }
                 } else {
                     // Look up function (regular or extern) and clone to avoid borrow issues
                     if let Some(func_decl) = self.functions.get(&call_expr.callee) {
@@ -3384,6 +3452,21 @@ impl TypeChecker {
             Expr::BoolLiteral(_) => Ok(()),  // Boolean literals don't move anything
             Expr::FloatLiteral(_) => Ok(()), // Float literals don't move anything
             Expr::Var(var_expr) => {
+                if self.functions.contains_key(&var_expr.name)
+                    || self.extern_functions.contains_key(&var_expr.name)
+                {
+                    return Ok(());
+                }
+                if var_expr.name.contains("::") {
+                    let parts: Vec<&str> = var_expr.name.split("::").collect();
+                    if parts.len() == 2
+                        && let Some(module_exports) = self.module_imports.get(parts[0])
+                        && module_exports.all_functions.contains_key(parts[1])
+                    {
+                        return Ok(());
+                    }
+                }
+
                 let var_info = self.variables.get_mut(&var_expr.name).ok_or_else(|| {
                     TypeCheckError::UndefinedVariable {
                         name: var_expr.name.clone(),
@@ -3523,6 +3606,7 @@ impl TypeChecker {
                 | Type::U64
                 | Type::UInt
                 | Type::Ref { .. }
+                | Type::Fn { .. }
         )
     }
 
@@ -3809,6 +3893,13 @@ impl TypeChecker {
     }
 }
 
+fn fn_type_from_signature(params: &[Param], return_type: &Option<Type>) -> Type {
+    Type::Fn {
+        params: params.iter().map(|p| p.ty.clone()).collect(),
+        return_type: Box::new(return_type.clone().unwrap_or(Type::Int)),
+    }
+}
+
 fn types_equal(a: &Type, b: &Type) -> bool {
     // Note: Type alias resolution should happen before calling types_equal
     // The caller should use resolve_type_name first
@@ -3899,6 +3990,23 @@ fn types_equal(a: &Type, b: &Type) -> bool {
                     .zip(b_params.iter())
                     .all(|(a, b)| types_equal(a, b))
         }
+        (
+            Type::Fn {
+                params: a_params,
+                return_type: a_ret,
+            },
+            Type::Fn {
+                params: b_params,
+                return_type: b_ret,
+            },
+        ) => {
+            a_params.len() == b_params.len()
+                && a_params
+                    .iter()
+                    .zip(b_params.iter())
+                    .all(|(a, b)| types_equal(a, b))
+                && types_equal(a_ret, b_ret)
+        }
         _ => false,
     }
 }
@@ -3947,6 +4055,17 @@ pub fn type_to_string(ty: &Type) -> String {
         Type::Tuple { elements } => {
             let elem_strs: Vec<String> = elements.iter().map(type_to_string).collect();
             format!("({})", elem_strs.join(", "))
+        }
+        Type::Fn {
+            params,
+            return_type,
+        } => {
+            let param_strs: Vec<String> = params.iter().map(type_to_string).collect();
+            format!(
+                "fn({}) -> {}",
+                param_strs.join(", "),
+                type_to_string(return_type)
+            )
         }
     }
 }
@@ -4011,6 +4130,13 @@ impl TypeChecker {
             Type::Sender { elem_type } => self.is_reference_containing(elem_type),
             Type::Receiver { elem_type } => self.is_reference_containing(elem_type),
             Type::Tuple { elements } => elements.iter().any(|e| self.is_reference_containing(e)),
+            Type::Fn {
+                params,
+                return_type,
+            } => {
+                params.iter().any(|p| self.is_reference_containing(p))
+                    || self.is_reference_containing(return_type)
+            }
         }
     }
 
@@ -4073,6 +4199,8 @@ impl TypeChecker {
             Type::Receiver { elem_type } => self.is_send(elem_type),
             // Tuples are Send iff all elements are Send
             Type::Tuple { elements } => elements.iter().all(|e| self.is_send(e)),
+            // Function pointers are Send (no captured stack state for named functions)
+            Type::Fn { .. } => true,
         }
     }
 

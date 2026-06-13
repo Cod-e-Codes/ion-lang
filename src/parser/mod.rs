@@ -385,6 +385,32 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Result<Type, ParseError> {
+        // Function types: fn(T1, T2, ...) -> R
+        if !self.is_at_end() && matches!(self.tokens[self.current].kind, TokenKind::Fn) {
+            self.current += 1; // consume fn
+            self.expect(TokenKind::LParen)?;
+            let mut params = Vec::new();
+            loop {
+                if !self.is_at_end() && matches!(self.tokens[self.current].kind, TokenKind::RParen)
+                {
+                    break;
+                }
+                params.push(self.parse_type()?);
+                if !self.is_at_end() && matches!(self.tokens[self.current].kind, TokenKind::Comma) {
+                    self.current += 1; // consume ,
+                } else {
+                    break;
+                }
+            }
+            self.expect(TokenKind::RParen)?;
+            self.expect(TokenKind::Arrow)?;
+            let return_type = self.parse_type()?;
+            return Ok(Type::Fn {
+                params,
+                return_type: Box::new(return_type),
+            });
+        }
+
         // Check for tuple types: (Type1, Type2, ...) (before other types)
         let tuple_idx = self.current;
         let is_tuple =
