@@ -23,6 +23,7 @@
 
 ## Type checker (`src/tc/mod.rs`)
 
+- `for` loops desugar to `While` in TC; `loop_depth` is set via the synthetic `WhileStmt`, not directly in the `For` arm
 - [ ] Move tracking updated for new bindings/expr forms
 - [ ] Borrow rules for new lvalue/rvalue paths
 - [ ] Generic instantiation consistent with existing generics
