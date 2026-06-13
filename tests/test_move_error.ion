@@ -1,7 +1,6 @@
 fn main() -> int {
-    let x = 10;
-    let y = x;  // x is moved to y
-    let z = x;  // ERROR: use after move
-    return z;
+    let x = Box::new(10);
+    let y = x; // x is moved to y
+    let z = x; // ERROR: use after move
+    return Box::unwrap(z);
 }
-

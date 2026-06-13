@@ -88,5 +88,7 @@ Read these when the task matches:
 - `extern "C"` calls require `unsafe` blocks.
 - Multi-file mode: `--mode multi --output <name> <main.ion>` generates per-module `.c`/`.h`.
 - Stdlib lives in `stdlib/` (`io.ion`, `fmt.ion`); compiler builtins may differ from stdlib surface.
+- Importing both `fmt.ion` and `io.ion` merges both into one `.c`; prefer `fmt::int_to_string` + `io::println` over `fmt::println_int` until fmt/io codegen overlap is fixed.
+- After passing a owned value to a function, cgen may still emit a drop at scope exit (double-free risk); keep parsing/consumption in one function when possible.
 - Integration tests must be registered in `test_runner.sh` - files alone are not picked up.
 - LSP parses the **open buffer** in memory (lexer → parser), then `register_imports` which **fully `parse_module`s imported files from disk**. Parser/tc/import changes may need LSP updates (`ion-lsp-vscode` skill).

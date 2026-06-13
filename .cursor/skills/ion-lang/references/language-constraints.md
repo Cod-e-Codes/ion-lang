@@ -6,7 +6,8 @@ Summarized from ION_SPEC.md §1. Read the full spec for grammar and edge cases.
 
 - Every value has exactly one owner
 - Assignment, argument passing, and `return` **move** by default
-- Use-after-move → compile error (`UseAfterMove`)
+- Primitives (`int`, `bool`, floats, fixed-width integers) and references (`&T`, `&mut T`) are **copied**, not moved (ION_SPEC section 5.2); use-after-move applies to owned heap/aggregate values
+- Use-after-move on non-copy types → compile error (`UseAfterMove`)
 
 ## No-escape borrowing
 

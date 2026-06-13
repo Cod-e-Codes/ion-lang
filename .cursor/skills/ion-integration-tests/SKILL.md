@@ -107,10 +107,10 @@ fn main() -> int {
 
 ```ion
 fn main() -> int {
-    let x = 10;
+    let x = Box::new(10);
     let y = x;
-    let z = x;  // use after move
-    return z;
+    let z = x;  // use after move (Box is not copy)
+    return Box::unwrap(z);
 }
 ```
 

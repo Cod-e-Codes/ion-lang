@@ -1,0 +1,361 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include "ion_runtime.h"
+
+static void* ion_spawn_entry_0(void* arg);
+typedef struct {
+    ion_receiver_t code_rx;
+    ion_sender_t done_tx;
+} ion_spawn_ctx_0;
+
+typedef struct HttpClass {
+    int tag;
+    union {
+    } data;
+} HttpClass;
+
+static HttpClass HttpClass_Success_new() {
+    HttpClass result = { .tag = 0, .data = { } };
+    return result;
+}
+
+static HttpClass HttpClass_ClientError_new() {
+    HttpClass result = { .tag = 1, .data = { } };
+    return result;
+}
+
+static HttpClass HttpClass_ServerError_new() {
+    HttpClass result = { .tag = 2, .data = { } };
+    return result;
+}
+
+extern int write(int fd, uint8_t* buf, int count);
+
+ion_string_t* line_at(int index);
+int parse_line_at(int index);
+int scan_logs(ion_sender_t code_tx, int expected);
+int valid_log_count(void);
+int main(void);
+void print_int(int n);
+void println_int(int n);
+ion_string_t* int_to_string(int n);
+void print(ion_string_t* s);
+void println(ion_string_t* s);
+void print_str(uint8_t* s, int len);
+ion_string_t* line_at(int index) {
+    ion_string_t* ret_val = 0;
+    if (index == 0) {
+        ret_val = ion_string_from_literal("GET /health 200 OK", 18);
+        goto epilogue;
+    } else {
+        if (index == 1) {
+            ret_val = ion_string_from_literal("POST /login 401 Unauthorized", 28);
+            goto epilogue;
+        } else {
+            if (index == 2) {
+                ret_val = ion_string_from_literal("GET /missing 404 Not Found", 26);
+                goto epilogue;
+            } else {
+                if (index == 3) {
+                    ret_val = ion_string_from_literal("GET /down 503 Service Unavailable", 33);
+                    goto epilogue;
+                } else {
+                    ret_val = ion_string_from_literal("malformed line with no status", 29);
+                    goto epilogue;
+                }
+            }
+        }
+    }
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
+int parse_line_at(int index) {
+    int ret_val = 0;
+    ion_string_t* line = line_at(index);
+    int last = 0;
+    int current = 0;
+    int in_run = 0;
+    ion_string_t* __for_container_987 = line;
+    int __for_i_987 = 0;
+    while (__for_i_987 < ((__for_container_987) ? (int)((__for_container_987)->len) : 0)) {
+        uint8_t ch = ({ int __ion_idx_0 = __for_i_987; (__ion_idx_0 >= 0 && __ion_idx_0 < __for_container_987->len) ? __for_container_987->data[__ion_idx_0] : (ion_panic("String index out of bounds"), (uint8_t)0); });
+        if ((ch >= 48) && (ch <= 57)) {
+            if (!in_run) {
+                current = 0;
+                in_run = 1;
+            }
+            current = ((current * 10) + ((int)ch - 48));
+        } else {
+            if (in_run) {
+                last = current;
+                in_run = 0;
+            }
+        }
+        __for_step_987:
+        __for_i_987 = (__for_i_987 + 1);
+    }
+    if (in_run) {
+        last = current;
+    }
+    ret_val = last;
+    if (__for_container_987) { ion_string_free(__for_container_987); }
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
+int scan_logs(ion_sender_t code_tx, int expected) {
+    int ret_val = 0;
+    int auth_failures = 0;
+    int parsed = 0;
+    int log_indices[5] = {0, 1, 2, 3, 4};
+    int __for_i_1573 = 0;
+    while (__for_i_1573 < 5) {
+        int index = ({ int __ion_idx_1 = __for_i_1573; (__ion_idx_1 >= 0 && __ion_idx_1 < 5) ? log_indices[__ion_idx_1] : (ion_panic("Array index out of bounds"), log_indices[0]); });
+        int code = parse_line_at(index);
+        if (code == 0) {
+            goto __for_step_1573;
+        }
+        if (parsed >= expected) {
+            break;
+        }
+        HttpClass kind = HttpClass_ClientError_new();
+        if ((code >= 200) && (code < 300)) {
+            kind = HttpClass_Success_new();
+        } else {
+            if ((code >= 400) && (code < 500)) {
+                kind = HttpClass_ClientError_new();
+            } else {
+                if ((code >= 500) && (code < 600)) {
+                    kind = HttpClass_ServerError_new();
+                }
+            }
+        }
+        HttpClass match_val_0 = kind;
+        switch (match_val_0.tag) {
+            case 0: // Success
+                break;
+            case 1: // ClientError
+                if ((code == 401)) {
+                    auth_failures = (auth_failures + 1);
+                break;
+                }
+                break;
+            case 2: // ServerError
+                break;
+        }
+        { ion_channel_send(&code_tx, &code); }
+        parsed = (parsed + 1);
+        __for_step_1573:
+        __for_i_1573 = (__for_i_1573 + 1);
+    }
+    ret_val = auth_failures;
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
+int valid_log_count(void) {
+    int ret_val = 0;
+    ret_val = 4;
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
+int main(void) {
+    int ret_val = 0;
+    ion_sender_t code_tx;
+    ion_receiver_t code_rx;
+    ion_channel_new(sizeof(int), 1, &code_tx, &code_rx);
+    ion_sender_t done_tx;
+    ion_receiver_t done_rx;
+    ion_channel_new(sizeof(int), 1, &done_tx, &done_rx);
+    {
+        ion_spawn_ctx_0* ctx = (ion_spawn_ctx_0*)malloc(sizeof(ion_spawn_ctx_0));
+        if (!ctx) { ion_panic("spawn allocation failed"); }
+        ctx->code_rx = code_rx;
+        code_rx = (ion_receiver_t){0};
+        ctx->done_tx = done_tx;
+        done_tx = (ion_sender_t){0};
+        if (ion_spawn(ion_spawn_entry_0, ctx) != 0) { free(ctx); ion_panic("spawn failed"); }
+    }
+    int auth_failures = scan_logs(code_tx, valid_log_count());
+    ion_receiver_t done_rx_mut = done_rx;
+    int server_errors = ({ int tmp; ion_channel_recv(&done_rx_mut, &tmp); tmp; });
+    if (server_errors != 1) {
+        ret_val = 1;
+        if (done_rx_mut.channel) { ion_channel_handle_drop(done_rx_mut.channel); }
+        if (code_tx.channel) { ion_channel_handle_drop(code_tx.channel); }
+        goto epilogue;
+    }
+    if (auth_failures != 1) {
+        ret_val = 2;
+        if (done_rx_mut.channel) { ion_channel_handle_drop(done_rx_mut.channel); }
+        if (code_tx.channel) { ion_channel_handle_drop(code_tx.channel); }
+        goto epilogue;
+    }
+    ion_string_t* server_line = int_to_string(server_errors);
+    println(server_line);
+    ion_string_t* auth_line = int_to_string(auth_failures);
+    println(auth_line);
+    ret_val = 0;
+    if (auth_line) { ion_string_free(auth_line); }
+    if (server_line) { ion_string_free(server_line); }
+    if (done_rx_mut.channel) { ion_channel_handle_drop(done_rx_mut.channel); }
+    if (code_tx.channel) { ion_channel_handle_drop(code_tx.channel); }
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
+void print_int(int n) {
+    print_int(n);
+epilogue:
+        return;
+}
+
+void println_int(int n) {
+    print_int(n);
+    {
+        int _newline = write(1, "\n", 1);
+    }
+epilogue:
+        return;
+}
+
+ion_string_t* int_to_string(int n) {
+    ion_string_t* ret_val = 0;
+    uint8_t buf[12] = {0};
+    int len = 0;
+    int negative = 0;
+    int value = n;
+    ion_string_t* result = ion_string_new();
+    if (value == 0) {
+        ret_val = ion_string_from_literal("0", 1);
+        if (result) { ion_string_free(result); }
+        goto epilogue;
+    }
+    if (value < 0) {
+        negative = 1;
+        if (value == (-2147483648)) {
+            ret_val = ion_string_from_literal("-2147483648", 11);
+            if (result) { ion_string_free(result); }
+            goto epilogue;
+        }
+        value = (0 - value);
+    }
+    while (value > 0) {
+        int digit = (value % 10);
+        buf[len] = (uint8_t)(48 + digit);
+        len = (len + 1);
+        value = (value / 10);
+    }
+    if (negative) {
+        ion_string_push_str(result, "-", 1);
+    }
+    int i = (len - 1);
+    while (i >= 0) {
+        uint8_t ch = ({ int __ion_idx_2 = i; (__ion_idx_2 >= 0 && __ion_idx_2 < 12) ? buf[__ion_idx_2] : (ion_panic("Array index out of bounds"), buf[0]); });
+        if (ch == 48) {
+            ion_string_push_str(result, "0", 1);
+        } else {
+            if (ch == 49) {
+                ion_string_push_str(result, "1", 1);
+            } else {
+                if (ch == 50) {
+                    ion_string_push_str(result, "2", 1);
+                } else {
+                    if (ch == 51) {
+                        ion_string_push_str(result, "3", 1);
+                    } else {
+                        if (ch == 52) {
+                            ion_string_push_str(result, "4", 1);
+                        } else {
+                            if (ch == 53) {
+                                ion_string_push_str(result, "5", 1);
+                            } else {
+                                if (ch == 54) {
+                                    ion_string_push_str(result, "6", 1);
+                                } else {
+                                    if (ch == 55) {
+                                        ion_string_push_str(result, "7", 1);
+                                    } else {
+                                        if (ch == 56) {
+                                            ion_string_push_str(result, "8", 1);
+                                        } else {
+                                            ion_string_push_str(result, "9", 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = (i - 1);
+    }
+    ret_val = result;
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
+void print(ion_string_t* s) {
+    {
+        int _result = write(1, s->data, (int)s->len);
+    }
+epilogue:
+        return;
+}
+
+void println(ion_string_t* s) {
+    {
+        int _result = write(1, s->data, (int)s->len);
+        int _newline = write(1, "\n", 1);
+    }
+epilogue:
+        return;
+}
+
+void print_str(uint8_t* s, int len) {
+    if (len < 0) {
+                goto epilogue;
+    }
+    {
+        int _result = write(1, s, len);
+    }
+epilogue:
+        return;
+}
+
+
+static void* ion_spawn_entry_0(void* arg) {
+    ion_spawn_ctx_0* ctx = (ion_spawn_ctx_0*)arg;
+    if (!ctx) { ion_panic("spawn null context"); }
+    ion_receiver_t code_rx = ctx->code_rx;
+    ion_sender_t done_tx = ctx->done_tx;
+    free(ctx);
+    ion_receiver_t rx = code_rx;
+    int server_errors = 0;
+    int received = 0;
+    while (received < valid_log_count()) {
+        int code = ({ int tmp; ion_channel_recv(&rx, &tmp); tmp; });
+        if (code >= 500) {
+            server_errors = (server_errors + 1);
+        }
+        received = (received + 1);
+    }
+    { ion_channel_send(&done_tx, &server_errors); }
+    if (rx.channel) { ion_channel_handle_drop(rx.channel); }
+    if (done_tx.channel) { ion_channel_handle_drop(done_tx.channel); }
+    goto spawn_0_epilogue;
+spawn_0_epilogue:
+    return NULL;
+}
+

@@ -185,7 +185,6 @@ impl TypeChecker {
                 });
             }
             let value_ty = self.check_expr(&call_expr.args[0])?;
-            self.check_expr_for_moves(&call_expr.args[0])?;
             return Ok(Some(Type::Box {
                 inner: Box::new(value_ty),
             }));
@@ -202,10 +201,7 @@ impl TypeChecker {
             }
             let box_ty = self.check_expr(&call_expr.args[0])?;
             return match box_ty {
-                Type::Box { inner } => {
-                    self.check_expr_for_moves(&call_expr.args[0])?;
-                    Ok(Some(*inner))
-                }
+                Type::Box { inner } => Ok(Some(*inner)),
                 _ => Err(TypeCheckError::TypeMismatch {
                     expected: "Box<T>".to_string(),
                     got: type_to_string(&box_ty),
@@ -328,7 +324,6 @@ impl TypeChecker {
                         span: call_expr.args[1].span(),
                     });
                 }
-                self.check_expr_for_moves(&call_expr.args[1])?;
                 return Ok(Some(Type::Int)); // void return
             }
             return Err(TypeCheckError::TypeMismatch {
@@ -450,7 +445,6 @@ impl TypeChecker {
                         span: call_expr.args[2].span(),
                     });
                 }
-                self.check_expr_for_moves(&call_expr.args[2])?;
                 return Ok(Some(Type::Int)); // 0 on success, -1 on failure
             }
             return Err(TypeCheckError::TypeMismatch {
@@ -1392,6 +1386,7 @@ impl TypeChecker {
             }
             Stmt::Expr(expr_stmt) => {
                 self.check_expr(&expr_stmt.expr)?;
+                self.check_expr_for_moves(&expr_stmt.expr)?;
             }
             Stmt::Defer(defer_stmt) => {
                 // A defer just needs its expression to be well-typed; it
@@ -1399,9 +1394,12 @@ impl TypeChecker {
                 // Any reference/no-escape issues are already enforced by
                 // `check_expr`, and move semantics are handled at the use site.
                 self.check_expr(&defer_stmt.expr)?;
+                self.check_expr_for_moves(&defer_stmt.expr)?;
             }
             Stmt::If(if_stmt) => {
-                // Check condition type
+                // Save environment before the condition: checking the condition must not
+                // consume operands (e.g. `if x != 1` only borrows `x` for comparison).
+                let before = self.variables.clone();
                 let cond_ty = self.check_expr(&if_stmt.cond)?;
                 if !types_equal(&cond_ty, &Type::Bool) {
                     return Err(TypeCheckError::TypeMismatch {
@@ -1410,9 +1408,7 @@ impl TypeChecker {
                         span: if_stmt.span,
                     });
                 }
-
-                // Save current environment
-                let before = self.variables.clone();
+                self.variables = before.clone();
 
                 // Then-branch: type-check with its own copy of the environment
                 self.variables = before.clone();
@@ -1524,7 +1520,7 @@ impl TypeChecker {
                 self.variables = parent_vars;
             }
             Stmt::While(while_stmt) => {
-                // Check condition type
+                let before = self.variables.clone();
                 let cond_ty = self.check_expr(&while_stmt.cond)?;
                 if !types_equal(&cond_ty, &Type::Bool) {
                     return Err(TypeCheckError::TypeMismatch {
@@ -1533,6 +1529,7 @@ impl TypeChecker {
                         span: while_stmt.span,
                     });
                 }
+                self.variables = before;
                 // Check body
                 self.loop_depth += 1;
                 for inner in &while_stmt.body.statements {
@@ -2255,9 +2252,6 @@ impl TypeChecker {
                     });
                 }
 
-                // Sending moves the value
-                self.check_expr_for_moves(&send_expr.value)?;
-
                 Ok(Type::Int)
             }
             Expr::Recv(recv_expr) => {
@@ -2345,7 +2339,6 @@ impl TypeChecker {
                                 span: arg_expr.span(),
                             });
                         }
-                        self.check_expr_for_moves(arg_expr)?;
                     }
 
                     // Return the function's return type
@@ -2659,7 +2652,6 @@ impl TypeChecker {
                                             span: arg_expr.span(),
                                         });
                                     }
-                                    self.check_expr_for_moves(arg_expr)?;
                                 }
 
                                 // Return the enum type
@@ -2846,8 +2838,6 @@ impl TypeChecker {
                             span: arg_expr.span(),
                         });
                     }
-                    // Mark arguments as moved
-                    self.check_expr_for_moves(arg_expr)?;
                 }
 
                 // Check if this is an extern function call - require unsafe context
@@ -3012,7 +3002,6 @@ impl TypeChecker {
                             span: arg_expr.span(),
                         });
                     }
-                    self.check_expr_for_moves(arg_expr)?;
                 }
 
                 Ok(return_type_opt.unwrap_or(Type::Int))
@@ -3157,9 +3146,6 @@ impl TypeChecker {
                             });
                         }
 
-                        // Mark value as moved
-                        self.check_expr_for_moves(&assign_expr.value)?;
-
                         // Assignment returns unit type (void) in Ion
                         Ok(Type::Int) // Using Int as placeholder for unit/void
                     }
@@ -3185,9 +3171,6 @@ impl TypeChecker {
                                     });
                                 }
 
-                                // Mark value as moved
-                                self.check_expr_for_moves(&assign_expr.value)?;
-
                                 // Assignment returns unit type
                                 Ok(Type::Int) // Using Int as placeholder for unit/void
                             }
@@ -3212,7 +3195,6 @@ impl TypeChecker {
                                             });
                                         }
 
-                                        self.check_expr_for_moves(&assign_expr.value)?;
                                         Ok(Type::Int)
                                     }
                                     _ => Err(TypeCheckError::TypeMismatch {
@@ -3261,6 +3243,11 @@ impl TypeChecker {
                         name: var_expr.name.clone(),
                         span: var_expr.span,
                     });
+                }
+
+                // Primitives and references are copied, not moved (see ION_SPEC §5.2).
+                if Self::is_copy_type(&var_info.ty) {
+                    return Ok(());
                 }
 
                 // Mark as moved
@@ -3320,9 +3307,10 @@ impl TypeChecker {
                 // Match arms don't move the matched value, they just pattern match
                 Ok(())
             }
-            Expr::Call(_call_expr) => {
-                // Function call arguments are already checked for moves in check_expr
-                // This is just for completeness - arguments are moved when passed
+            Expr::Call(call_expr) => {
+                for arg in &call_expr.args {
+                    self.check_expr_for_moves(arg)?;
+                }
                 Ok(())
             }
             Expr::MethodCall(method_call) => {
@@ -3361,6 +3349,27 @@ impl TypeChecker {
                 Ok(())
             }
         }
+    }
+
+    /// Types copied rather than moved at the ownership level (ION_SPEC §5.2).
+    fn is_copy_type(ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Int
+                | Type::Bool
+                | Type::F32
+                | Type::F64
+                | Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+                | Type::UInt
+                | Type::Ref { .. }
+        )
     }
 
     /// Check if a type is numeric (all integer and float types)
