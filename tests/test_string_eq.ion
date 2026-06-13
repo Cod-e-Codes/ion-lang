@@ -1,0 +1,16 @@
+fn main() -> int {
+    let a = String::from("hello");
+    let b = String::from("hello");
+    let c = String::from("world");
+
+    if a != b {
+        return 1;
+    }
+    if a == c {
+        return 2;
+    }
+    if a == b && a != c {
+        return 55;
+    }
+    return 3;
+}

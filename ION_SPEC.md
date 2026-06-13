@@ -998,6 +998,7 @@ Note that:
 - String literals can be directly assigned to `String` type: `let s: String = "hello";`
 - `String::from()` creates a heap-allocated copy of a string literal.
 - `String::push_str()` appends a string literal to an existing `String`.
+- `==` and `!=` compare UTF-8 byte content (value equality), not pointer identity.
 
 `&str` is always a **borrowed view** into existing UTF-8 data; it cannot be returned or stored in long-lived structures in ways that would violate the no-escape rule. The standard library intentionally avoids APIs that would expose `&str` values across function boundaries in ways that require complex lifetime reasoning (e.g., `String::as_str` methods that return borrowed views).
 

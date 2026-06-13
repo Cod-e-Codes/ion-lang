@@ -351,6 +351,10 @@ if [ -f "test_string_push_str.ion" ]; then
     test_file "test_string_push_str.ion" 0 || true
 fi
 
+if [ -f "test_string_eq.ion" ]; then
+    test_file "test_string_eq.ion" 55 || true
+fi
+
 # Modules and FFI
 if [ -f "test_module_basic.ion" ]; then
     test_file "test_module_basic.ion" 30 || true

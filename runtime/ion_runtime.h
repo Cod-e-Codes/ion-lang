@@ -260,6 +260,15 @@ ion_string_t *ion_string_clone(const ion_string_t *s);
 int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len);
 
 /**
+ * Compares two strings for UTF-8 byte equality.
+ *
+ * @param a First string (may be NULL)
+ * @param b Second string (may be NULL)
+ * @return 1 if both strings have the same length and bytes, 0 otherwise
+ */
+int ion_string_equals(const ion_string_t *a, const ion_string_t *b);
+
+/**
  * Frees a heap-allocated string.
  * Frees the data buffer and the string structure itself.
  *

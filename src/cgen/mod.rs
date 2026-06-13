@@ -1388,6 +1388,69 @@ impl Codegen {
             .or_else(|| self.current_function_params.get(name).cloned())
     }
 
+    fn infer_irexpr_type(&self, expr: &IREexpr) -> Option<Type> {
+        match expr {
+            IREexpr::Var(name) => self.lookup_var_type(name),
+            IREexpr::StringLit(_) => Some(Type::String),
+            IREexpr::AddressOf { inner, mutable } => {
+                self.infer_irexpr_type(inner).map(|inner_ty| Type::Ref {
+                    inner: Box::new(inner_ty),
+                    mutable: *mutable,
+                })
+            }
+            IREexpr::Call { callee, .. } => match callee.as_str() {
+                "String::new" | "String::from" => Some(Type::String),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn is_string_compare_operand(&self, expr: &IREexpr) -> bool {
+        match self.infer_irexpr_type(expr) {
+            Some(Type::String) => true,
+            Some(Type::Ref { inner, .. }) => matches!(*inner, Type::String),
+            _ => false,
+        }
+    }
+
+    fn emit_string_compare_operand(&mut self, expr: &IREexpr) {
+        let needs_deref = match self.infer_irexpr_type(expr) {
+            Some(Type::Ref { inner, .. }) => matches!(*inner, Type::String),
+            _ => false,
+        };
+        if needs_deref {
+            self.write("(*");
+            self.generate_expr(expr);
+            self.write(")");
+        } else {
+            self.generate_expr(expr);
+        }
+    }
+
+    fn generate_string_equality(
+        &mut self,
+        op: BinOp,
+        left: &IREexpr,
+        right: &IREexpr,
+        wrap_parens: bool,
+    ) {
+        if wrap_parens {
+            self.write("(");
+        }
+        if matches!(op, BinOp::Ne) {
+            self.write("!");
+        }
+        self.write("ion_string_equals(");
+        self.emit_string_compare_operand(left);
+        self.write(", ");
+        self.emit_string_compare_operand(right);
+        self.write(")");
+        if wrap_parens {
+            self.write(")");
+        }
+    }
+
     fn slice_struct_name_for_elem(&self, elem_ty: &Type) -> String {
         format!(
             "ion_slice_{}",
@@ -2276,10 +2339,17 @@ impl Codegen {
         // Generate expression for conditional context (if/while) without extra parentheses
         match expr {
             IREexpr::BinOp { op, left, right } => {
-                // For conditionals, don't add extra parentheses around simple comparisons
-                self.generate_expr(left);
-                self.write(&format!(" {} ", self.op_to_c(*op)));
-                self.generate_expr(right);
+                if matches!(op, BinOp::Eq | BinOp::Ne)
+                    && self.is_string_compare_operand(left)
+                    && self.is_string_compare_operand(right)
+                {
+                    self.generate_string_equality(*op, left, right, false);
+                } else {
+                    // For conditionals, don't add extra parentheses around simple comparisons
+                    self.generate_expr(left);
+                    self.write(&format!(" {} ", self.op_to_c(*op)));
+                    self.generate_expr(right);
+                }
             }
             IREexpr::UnOp { op, operand } => match op {
                 UnOp::Not => {
@@ -2320,11 +2390,18 @@ impl Codegen {
                 self.generate_expr(inner);
             }
             IREexpr::BinOp { op, left, right } => {
-                self.write("(");
-                self.generate_expr(left);
-                self.write(&format!(" {} ", self.op_to_c(*op)));
-                self.generate_expr(right);
-                self.write(")");
+                if matches!(op, BinOp::Eq | BinOp::Ne)
+                    && self.is_string_compare_operand(left)
+                    && self.is_string_compare_operand(right)
+                {
+                    self.generate_string_equality(*op, left, right, true);
+                } else {
+                    self.write("(");
+                    self.generate_expr(left);
+                    self.write(&format!(" {} ", self.op_to_c(*op)));
+                    self.generate_expr(right);
+                    self.write(")");
+                }
             }
             IREexpr::UnOp { op, operand } => match op {
                 UnOp::Not => {

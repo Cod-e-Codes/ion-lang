@@ -235,6 +235,16 @@ int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
   return 0;
 }
 
+int ion_string_equals(const ion_string_t *a, const ion_string_t *b) {
+  if (a == b)
+    return 1;
+  if (!a || !b)
+    return 0;
+  if (a->len != b->len)
+    return 0;
+  return memcmp(a->data, b->data, a->len) == 0;
+}
+
 void ion_string_free(ion_string_t *s) {
   if (!s)
     return;
