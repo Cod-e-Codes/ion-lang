@@ -1362,8 +1362,9 @@ impl Parser {
             None
         };
 
-        let name = if patterns.is_none() {
+        let (name, name_span) = if patterns.is_none() {
             let name_idx = self.current;
+            let name_span = Span::from_token(&self.tokens[name_idx]);
             let name_val = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind {
                 ident_name.clone()
             } else {
@@ -1374,9 +1375,9 @@ impl Parser {
                 });
             };
             self.current += 1; // consume identifier manually
-            name_val
+            (name_val, name_span)
         } else {
-            String::new() // Not used when patterns is Some
+            (String::new(), Span::default())
         };
 
         let colon_idx = self.current;
@@ -1403,6 +1404,7 @@ impl Parser {
 
         Ok(LetStmt {
             name,
+            name_span,
             patterns,
             mutable: is_mut,
             type_ann,
@@ -2001,6 +2003,7 @@ impl Parser {
                         });
                     }
 
+                    let method_span = Span::from_token(&self.tokens[field_idx]);
                     let field_name =
                         if let TokenKind::Ident(ref ident_name) = self.tokens[field_idx].kind {
                             ident_name.clone()
@@ -2044,6 +2047,7 @@ impl Parser {
                         expr = Expr::MethodCall(MethodCallExpr {
                             receiver: Box::new(expr),
                             method: field_name,
+                            method_span,
                             args,
                             span,
                         });
@@ -2174,6 +2178,7 @@ impl Parser {
                         span: Span::from_token(&self.tokens[func_name_idx]),
                     });
                 };
+                let callee_span = span.merge(&Span::from_token(&self.tokens[func_name_idx]));
                 self.advance(); // consume function name
 
                 // Parse arguments
@@ -2200,6 +2205,7 @@ impl Parser {
                     callee,
                     args,
                     span: call_span,
+                    callee_span,
                 }));
             }
         }
@@ -2269,6 +2275,7 @@ impl Parser {
                             callee: "channel".to_string(),
                             args,
                             span: call_span,
+                            callee_span: span,
                         }))
                     } else {
                         // channel<T> without () - this is a type, not an expression
@@ -2425,9 +2432,10 @@ impl Parser {
                     }))
                 } else if next_is_lparen || is_qualified_call {
                     // Function call - check if it's qualified (mod::func)
-                    let callee = if is_qualified_call || next_is_colon_colon {
+                    let (callee, callee_span) = if is_qualified_call || next_is_colon_colon {
                         // Qualified function call: mod::func(...)
                         let module_name = name;
+                        let module_span = span;
                         self.advance(); // consume module name
                         self.advance(); // consume first :
                         self.advance(); // consume second :
@@ -2443,12 +2451,16 @@ impl Parser {
                                 span: Span::from_token(&self.tokens[func_name_idx]),
                             });
                         };
+                        let func_span = Span::from_token(&self.tokens[func_name_idx]);
                         self.advance(); // consume function name
-                        format!("{}::{}", module_name, func_name)
+                        (
+                            format!("{}::{}", module_name, func_name),
+                            module_span.merge(&func_span),
+                        )
                     } else {
                         // Simple function call
                         self.advance(); // consume function name
-                        name
+                        (name, span)
                     };
                     self.expect(TokenKind::LParen)?;
 
@@ -2473,6 +2485,7 @@ impl Parser {
                         callee,
                         args,
                         span: call_span,
+                        callee_span,
                     }))
                 } else if next_is_lbrace && !prev_is_if && !prev_is_match {
                     // Lookahead: struct literal body must start with Ident or }

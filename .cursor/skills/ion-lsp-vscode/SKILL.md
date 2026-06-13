@@ -67,11 +67,11 @@ Adjust path for OS (no `.exe` on Linux/macOS).
 2. **`Compiler::register_imports`** - for each import, **`parse_module` on disk** (full lex+parse of dependency tree) to populate `module_exports` for qualified names
 3. **Type-check** - `tc::TypeChecker` on the buffer AST, with exports from step 2
 4. Publish diagnostics from lexer, parser, or type-check errors
-5. Hover - variable types at use sites; symbol docs at definitions
+5. Hover - variable types at use sites and `let` binding identifiers; symbol docs at fn/struct/enum definitions
 6. Completion - keywords, builtins, file symbols (no prefix filtering)
-7. Go to definition - variables only, same file
+7. Go to definition - variables, function calls (`foo`, `mod::func`), user-defined methods; cross-file for imports
 
-Known limitations (ION_SPEC §10.2): no hover on `let` bindings; function calls don't go to definition.
+Known limitations (ION_SPEC §10.2): built-in methods (`Vec::push`, etc.) do not go to definition; completion has no prefix filtering.
 
 ### CLI vs LSP error text
 

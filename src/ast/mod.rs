@@ -146,6 +146,7 @@ pub enum Stmt {
 #[derive(Debug, Clone)]
 pub struct LetStmt {
     pub name: String,                   // For single variable binding
+    pub name_span: Span,                // Span of the binding identifier (LSP hover/goto)
     pub patterns: Option<Vec<Pattern>>, // For tuple destructuring: let (a, b) = ...
     pub mutable: bool,
     pub type_ann: Option<Type>,
@@ -376,12 +377,15 @@ pub struct CallExpr {
     pub callee: String,
     pub args: Vec<Expr>,
     pub span: Span,
+    /// Span of the callee identifier(s), for LSP go-to-definition.
+    pub callee_span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct MethodCallExpr {
     pub receiver: Box<Expr>,
     pub method: String,
+    pub method_span: Span,
     pub args: Vec<Expr>,
     pub span: Span,
 }

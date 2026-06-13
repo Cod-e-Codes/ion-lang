@@ -97,28 +97,20 @@ impl LanguageServer for IonLanguageServer {
             let target_line = (position.line + 1) as usize;
             let target_column = (position.character + 1) as usize;
 
-            for (reference_span, definition_span) in &info.references {
+            for (reference_span, target) in &info.references {
                 if reference_span.line == target_line
                     && target_column >= reference_span.column
                     && target_column
                         < reference_span.column + (reference_span.end - reference_span.start)
                 {
+                    let target_uri = target
+                        .file
+                        .as_ref()
+                        .and_then(|p| Url::from_file_path(p).ok())
+                        .unwrap_or_else(|| uri.clone());
                     let location = Location {
-                        uri,
-                        range: Range {
-                            start: Position {
-                                line: (definition_span.line.saturating_sub(1)) as u32,
-                                character: (definition_span.column.saturating_sub(1)) as u32,
-                            },
-                            end: Position {
-                                line: (definition_span.line.saturating_sub(1)) as u32,
-                                character: (definition_span
-                                    .end
-                                    .saturating_sub(definition_span.start)
-                                    + definition_span.column.saturating_sub(1))
-                                    as u32,
-                            },
-                        },
+                        uri: target_uri,
+                        range: span_to_range(&target.span),
                     };
                     return Ok(Some(GotoDefinitionResponse::Scalar(location)));
                 }
@@ -157,7 +149,7 @@ impl LanguageServer for IonLanguageServer {
                         "`{}`",
                         type_to_string(ty)
                     ))),
-                    range: None,
+                    range: Some(span_to_range(span)),
                 }));
             }
         }
@@ -169,7 +161,7 @@ impl LanguageServer for IonLanguageServer {
             {
                 return Ok(Some(Hover {
                     contents: HoverContents::Scalar(MarkedString::String(doc.clone())),
-                    range: None,
+                    range: Some(span_to_range(span)),
                 }));
             }
         }
@@ -248,6 +240,12 @@ impl IonLanguageServer {
                     let mut compiler = compiler::Compiler::new();
                     if compiler.register_imports(&file_path, &ast.imports).is_ok() {
                         checker.set_module_exports(compiler.get_module_exports().clone());
+                        let mut module_paths = HashMap::new();
+                        for import in &ast.imports {
+                            let path = compiler.resolve_import_path(&import.path, &file_path);
+                            module_paths.insert(import.alias.clone(), path);
+                        }
+                        checker.set_module_paths(module_paths);
                     }
                 }
 
@@ -293,6 +291,19 @@ impl IonLanguageServer {
     }
 }
 
+fn span_to_range(span: &crate::ast::Span) -> Range {
+    Range {
+        start: Position {
+            line: (span.line.saturating_sub(1)) as u32,
+            character: (span.column.saturating_sub(1)) as u32,
+        },
+        end: Position {
+            line: (span.line.saturating_sub(1)) as u32,
+            character: (span.end.saturating_sub(span.start) + span.column.saturating_sub(1)) as u32,
+        },
+    }
+}
+
 fn diagnostic_from_tc_error(err: &TypeCheckError) -> (crate::ast::Span, String) {
     match err {
         TypeCheckError::UndefinedVariable { span, name } => {
@@ -316,17 +327,7 @@ fn diagnostic_from_tc_error(err: &TypeCheckError) -> (crate::ast::Span, String) 
 
 fn diagnostic_for_span(span: crate::ast::Span, message: String) -> Diagnostic {
     Diagnostic {
-        range: Range {
-            start: Position {
-                line: (span.line.saturating_sub(1)) as u32,
-                character: (span.column.saturating_sub(1)) as u32,
-            },
-            end: Position {
-                line: (span.line.saturating_sub(1)) as u32,
-                character: (span.end.saturating_sub(span.start) + span.column.saturating_sub(1))
-                    as u32,
-            },
-        },
+        range: span_to_range(&span),
         severity: Some(DiagnosticSeverity::ERROR),
         message,
         source: Some("ion".to_string()),

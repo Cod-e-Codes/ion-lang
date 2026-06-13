@@ -1,5 +1,6 @@
 use crate::ast::*;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 // Helper trait for getting span from expressions
 trait HasSpan {
@@ -48,12 +49,19 @@ struct VariableInfo {
 
 #[derive(Debug, Clone, Default)]
 pub struct LspInfo {
-    pub references: HashMap<Span, Span>,
+    pub references: HashMap<Span, LspTarget>,
     pub types: HashMap<Span, Type>,
     /// Hover text keyed by definition span (functions, structs, enums).
     pub hover_docs: HashMap<Span, String>,
     /// Top-level and imported symbol names for completion.
     pub completion_symbols: Vec<String>,
+}
+
+/// Go-to-definition target: span and optional file (None = current file).
+#[derive(Debug, Clone)]
+pub struct LspTarget {
+    pub span: Span,
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -92,6 +100,8 @@ pub struct TypeChecker {
     extern_functions: HashMap<String, ExternFnDecl>,
     // Module imports: maps import alias to module exports
     module_imports: HashMap<String, ModuleExports>,
+    // Import alias to source file path (for cross-file go-to-definition)
+    module_paths: HashMap<String, PathBuf>,
     // Unsafe context tracking (depth for nested unsafe blocks)
     unsafe_context_depth: usize,
     // Loop nesting depth (for break/continue validation)
@@ -129,6 +139,7 @@ impl TypeChecker {
             functions: HashMap::new(),
             extern_functions: HashMap::new(),
             module_imports: HashMap::new(),
+            module_paths: HashMap::new(),
             unsafe_context_depth: 0,
             loop_depth: 0,
             current_return_type: None,
@@ -168,6 +179,38 @@ impl TypeChecker {
     /// Set module exports for qualified name resolution
     pub fn set_module_exports(&mut self, exports: HashMap<String, ModuleExports>) {
         self.module_imports = exports;
+    }
+
+    /// Map import alias to absolute source path for cross-file LSP navigation.
+    pub fn set_module_paths(&mut self, paths: HashMap<String, PathBuf>) {
+        self.module_paths = paths;
+    }
+
+    fn record_reference(&mut self, use_span: Span, target: LspTarget) {
+        self.lsp_info.references.insert(use_span, target);
+    }
+
+    fn lookup_fn_target(&self, callee: &str) -> Option<LspTarget> {
+        if let Some(f) = self.functions.get(callee) {
+            return Some(LspTarget {
+                span: f.span,
+                file: None,
+            });
+        }
+        if let Some(f) = self.extern_functions.get(callee) {
+            return Some(LspTarget {
+                span: f.span,
+                file: None,
+            });
+        }
+        if let Some((module, func)) = callee.split_once("::") {
+            let decl = self.module_imports.get(module)?.functions.get(func)?;
+            return Some(LspTarget {
+                span: decl.span,
+                file: self.module_paths.get(module).cloned(),
+            });
+        }
+        None
     }
 
     /// Check if a call expression is to a built-in function and type-check it.
@@ -1290,11 +1333,16 @@ impl TypeChecker {
                     self.variables.insert(
                         let_stmt.name.clone(),
                         VariableInfo {
-                            ty: var_type,
+                            ty: var_type.clone(),
                             state: OwnershipState::Valid,
                             definition_span: let_stmt.span,
                         },
                     );
+                    if !let_stmt.name.is_empty() {
+                        self.lsp_info
+                            .types
+                            .insert(let_stmt.name_span, var_type);
+                    }
                 } else if let Some(ref type_ann) = let_stmt.type_ann {
                     // Resolve type annotation - convert Struct(name) to Enum(name) if it's actually an enum
                     let resolved_type = self.resolve_type_name(type_ann)?;
@@ -1313,11 +1361,16 @@ impl TypeChecker {
                     self.variables.insert(
                         let_stmt.name.clone(),
                         VariableInfo {
-                            ty: resolved_type,
+                            ty: resolved_type.clone(),
                             state: OwnershipState::Valid,
                             definition_span: let_stmt.span,
                         },
                     );
+                    if !let_stmt.name.is_empty() {
+                        self.lsp_info
+                            .types
+                            .insert(let_stmt.name_span, resolved_type);
+                    }
                 } else {
                     return Err(TypeCheckError::Message(format!(
                         "Variable '{}' must have either a type annotation or initializer",
@@ -1575,6 +1628,7 @@ impl TypeChecker {
                 // First, initialize the container variable: let container_var = container_expr;
                 let container_init_stmt = Stmt::Let(LetStmt {
                     name: container_var.clone(),
+                    name_span: index_init_span,
                     patterns: None,
                     mutable: false,
                     type_ann: None,
@@ -1589,6 +1643,7 @@ impl TypeChecker {
                 // Initialize the index variable: let mut __i = 0;
                 let index_init_stmt = Stmt::Let(LetStmt {
                     name: index_var.clone(),
+                    name_span: index_init_span,
                     patterns: None,
                     mutable: true,
                     type_ann: None,
@@ -1641,6 +1696,7 @@ impl TypeChecker {
                                     span: index_init_span,
                                 })],
                                 span: index_init_span,
+                                callee_span: index_init_span,
                             })),
                             span: index_init_span,
                         })
@@ -1664,9 +1720,11 @@ impl TypeChecker {
                                 index_var_ref.clone(),
                             ],
                             span: index_init_span,
+                            callee_span: index_init_span,
                         });
                         desugared_body.statements.push(Stmt::Let(LetStmt {
                             name: opt_var.clone(),
+                            name_span: index_init_span,
                             patterns: None,
                             mutable: false,
                             type_ann: Some(Type::Generic {
@@ -1740,6 +1798,7 @@ impl TypeChecker {
                     Type::Array { .. } | Type::String => {
                         desugared_body.statements.push(Stmt::Let(LetStmt {
                             name: for_stmt.var_name.clone(),
+                            name_span: index_init_span,
                             patterns: None,
                             mutable: false,
                             type_ann: Some(elem_type.clone()),
@@ -1866,15 +1925,20 @@ impl TypeChecker {
                         });
                     }
 
-                    // Track this reference for LSP (goto definition)
-                    self.lsp_info
-                        .references
-                        .insert(var_expr.span, var_info.definition_span);
-                    self.lsp_info
-                        .types
-                        .insert(var_expr.span, var_info.ty.clone());
+                    let def_span = var_info.definition_span;
+                    let var_ty = var_info.ty.clone();
 
-                    Ok(var_info.ty.clone())
+                    // Track this reference for LSP (goto definition)
+                    self.record_reference(
+                        var_expr.span,
+                        LspTarget {
+                            span: def_span,
+                            file: None,
+                        },
+                    );
+                    self.lsp_info.types.insert(var_expr.span, var_ty.clone());
+
+                    Ok(var_ty)
                 }
             }
             Expr::Ref(ref_expr) => {
@@ -2849,6 +2913,10 @@ impl TypeChecker {
                 }
 
                 // Return the function's return type, or int if void
+                if let Some(target) = self.lookup_fn_target(&call_expr.callee) {
+                    self.record_reference(call_expr.callee_span, target);
+                }
+
                 if let Some(ret) = return_type_opt {
                     Ok(substitute_generic_types_impl(
                         &self.resolve_type_name(&ret)?,
@@ -2911,9 +2979,10 @@ impl TypeChecker {
                 desugared_args.extend(method_call.args.clone());
 
                 let desugared_call = CallExpr {
-                    callee: qualified_name,
+                    callee: qualified_name.clone(),
                     args: desugared_args,
                     span: method_call.span,
+                    callee_span: method_call.method_span,
                 };
 
                 // Step 10: Type-check the desugared call and return its type
@@ -3002,6 +3071,10 @@ impl TypeChecker {
                             span: arg_expr.span(),
                         });
                     }
+                }
+
+                if let Some(target) = self.lookup_fn_target(&desugared_call.callee) {
+                    self.record_reference(method_call.method_span, target);
                 }
 
                 Ok(return_type_opt.unwrap_or(Type::Int))

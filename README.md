@@ -54,11 +54,11 @@ The binary will be at `target/release/ion-compiler` (or `target/release/ion-comp
 Ion has a VS Code / Cursor extension that provides:
 - Syntax highlighting
 - Real-time diagnostics (syntax and type errors)
-- Hover: variable types at use sites; symbol docs at definitions
+- Hover: variable types at use sites and `let` binding identifiers; symbol docs at fn/struct/enum definitions
 - Completion: keywords, builtins, and file symbols
-- Go to definition: variables only (same file)
+- Go to definition: variables, function calls, and user-defined methods; imported `mod::func` opens the module file
 
-Limitations: no hover on `let` bindings; function calls do not go to definition; completion has no prefix filtering. Full list in [ION_SPEC.md section 10.2](ION_SPEC.md#102-known-limitations).
+Limitations: built-in methods (`Vec::push`, etc.) do not go to definition; completion has no prefix filtering. Full list in [ION_SPEC.md section 10.2](ION_SPEC.md#102-known-limitations).
 
 **Installation:**
 

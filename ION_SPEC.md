@@ -1075,9 +1075,9 @@ The `ion-lsp` binary and VS Code/Cursor extension provide:
 
 - Syntax highlighting (TextMate grammar, no server required)
 - Parse and type diagnostics
-- Hover: variable types at **use sites**; symbol docs at definitions
+- Hover: variable types at use sites and `let` binding identifiers; symbol docs at fn/struct/enum definitions
 - Completion: keywords, builtins, and file symbols (no prefix filtering yet)
-- Go to definition: variables only (not function or method calls)
+- Go to definition: variables, function calls (`foo`, `mod::func`), and user-defined methods; builtins (`Vec::push`, etc.) have no source location
 
 Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor settings to the executable path.
 
@@ -1087,8 +1087,7 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - `if`/`else` merge: a variable moved in only one branch is an error; use early return or a helper function instead
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
-- LSP type hover on variable uses only, not `let` binding sites
-- LSP go-to-definition does not resolve function or method callees
+- LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (not defined in user source)
 
 ### 11. Future Work (Non-Normative)
 
