@@ -44,6 +44,9 @@ examples/showcase
 # ------------------------------------
 # Visual Studio Code
 .vscode/
+# Cursor: commit project skills, ignore local IDE state
+.cursor/*
+!.cursor/skills/
 # IDEs
 .idea/
 # General OS files
