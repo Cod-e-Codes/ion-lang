@@ -1,4 +1,4 @@
-// Test Phase 6: Split Channel API (Sender<T> / Receiver<T>)
+// Split Channel API (Sender<T> / Receiver<T>)
 // Test tuple destructuring, send, and recv with split channels
 fn main() -> int {
     // Test tuple destructuring with channel()

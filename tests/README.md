@@ -75,6 +75,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_match_pattern_bindings.ion` - Pattern matching with bindings
 - `test_match_complex.ion` - Complex pattern matching scenarios
 - `test_while_basic.ion` - While loops
+- `test_break_continue.ion` - `break` and `continue` in `while` and `for` loops
 - `test_call_basic.ion` - Function calls
 - `test_string_basic.ion` - String literals
 - `test_string_from.ion` - String::from() function
@@ -170,6 +171,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_module_visibility.ion` - Module visibility violations
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls
 - `test_if_bool_required.ion` - Boolean requirement for if conditions
+- `test_break_continue_error.ion` - `break` outside of a loop (negative test)
 
 ## Adding Tests
 

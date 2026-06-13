@@ -103,7 +103,7 @@ Examples: `main`, `Packet`, `_tmp1`, `read_file`.
 
 The following keywords are reserved and cannot be used as identifiers:
 
-`fn`, `let`, `mut`, `struct`, `enum`, `type`, `box`, `if`, `else`, `while`, `match`, `defer`, `return`, `spawn`, `channel`, `true`, `false`, `nil`, `import`, `as`, `pub`, `extern`, `unsafe`.
+`fn`, `let`, `mut`, `struct`, `enum`, `type`, `box`, `if`, `else`, `while`, `for`, `match`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `true`, `false`, `nil`, `import`, `as`, `pub`, `extern`, `unsafe`.
 
 Note: The `as` keyword is used both for module aliases (`import "file.ion" as name;`) and for type casting (`expr as Type`).
 
@@ -334,6 +334,8 @@ stmt             = let_stmt
                  | for_stmt
                  | match_stmt
                  | return_stmt
+                 | break_stmt
+                 | continue_stmt
                  | defer_stmt
                  | spawn_stmt
                  | unsafe_stmt
@@ -356,6 +358,10 @@ match_stmt       = "match" , expr , "{" , { match_arm } , "}" ;
 match_arm        = pattern , [ "if" , expr ] , "=>" , block ;
 
 return_stmt      = "return" , [ expr ] , ";" ;
+
+break_stmt       = "break" , ";" ;
+
+continue_stmt    = "continue" , ";" ;
 
 defer_stmt       = "defer" , expr , ";" ;
 
@@ -583,6 +589,9 @@ The inference engine is intentionally limited:
 #### 4.7 Control Flow Extensions
 
 - **`for identifier in expr`**: iterates over `Vec<T>`, `[T; N]`, or `String`. Loop variable type is `T` for vectors and arrays, `u8` for strings (raw bytes).
+- **`break`**: exits the innermost enclosing `while` or `for` loop.
+- **`continue`**: skips to the next iteration of the innermost enclosing `while` or `for` loop. In `for` loops, the step (index increment) still runs.
+- Both `break` and `continue` are compile errors outside of a loop body.
 - **Match guards**: `pattern if expr => { ... }` where `expr` must be `bool`.
 - **Struct-style enum variants**: `enum E { Ok { value: int }; }` with matching literals and patterns.
 
@@ -1076,7 +1085,6 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 
 - No trait bounds on generics
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
-- `break` and `continue` are not implemented
 - `if`/`else` merge: a variable moved in only one branch is an error; use early return or a helper function instead
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP type hover on variable uses only, not `let` binding sites

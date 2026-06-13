@@ -8,6 +8,8 @@ pub enum TokenKind {
     If,
     Else,
     Return,
+    Break,
+    Continue,
     Channel,
     Send,
     Recv,
@@ -657,6 +659,8 @@ impl Lexer {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "return" => TokenKind::Return,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
             "channel" => TokenKind::Channel,
             "send" => TokenKind::Send,
             "recv" => TokenKind::Recv,
@@ -697,6 +701,14 @@ impl Lexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_break_continue_keywords() {
+        let mut lexer = Lexer::new("break continue");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Break);
+        assert_eq!(tokens[1].kind, TokenKind::Continue);
+    }
 
     #[test]
     fn test_keywords() {

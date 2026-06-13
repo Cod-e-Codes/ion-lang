@@ -197,7 +197,7 @@ fn main() {
             input_file, executable_name
         );
     } else {
-        // Single-file mode: merge all modules and generate single .c file (Phase 2 compatible)
+        // Single-file mode: merge all modules and generate single .c file
         let merged_program = compiler.merge_modules(&ast, input_path);
 
         // Build IR from merged program

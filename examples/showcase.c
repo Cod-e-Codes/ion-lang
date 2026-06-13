@@ -211,11 +211,12 @@ int for_loop_example(void) {
             case 0: // Some
                 int v = match_val_2.data.variant_0.arg0;
                 sum = (sum + v);
-                __for_i_2192 = (__for_i_2192 + 1);
                 break;
             case 1: // None
                 break;
         }
+        __for_step_2192:
+        __for_i_2192 = (__for_i_2192 + 1);
     }
     if (sum != 6) {
         ret_val = 1;

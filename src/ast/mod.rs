@@ -132,6 +132,8 @@ pub struct Block {
 pub enum Stmt {
     Let(LetStmt),
     Return(ReturnStmt),
+    Break(BreakStmt),
+    Continue(ContinueStmt),
     Expr(ExprStmt),
     Defer(DeferStmt),
     Spawn(SpawnStmt),
@@ -154,6 +156,16 @@ pub struct LetStmt {
 #[derive(Debug, Clone)]
 pub struct ReturnStmt {
     pub value: Option<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct BreakStmt {
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContinueStmt {
     pub span: Span,
 }
 

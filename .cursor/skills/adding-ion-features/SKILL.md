@@ -111,7 +111,7 @@ cargo test lexer::
 - Breaking single-file merge path while fixing multi-file (test both)
 - Weakening no-escape or Send rules to make a test pass
 - Large parser refactors bundled with feature work
-- Forgetting to register new keywords in lexer **and** LSP keyword lists if applicable
+- Forgetting to register new keywords in lexer **and** LSP keyword lists (`src/lsp/server.rs`, `ion-vscode/syntaxes/ion.tmLanguage.json`) if applicable; rebuild `ion-lsp` after compiler changes
 
 ## Examples
 

@@ -38,6 +38,8 @@ pub struct IRBlock {
 pub enum IRStmt {
     Let(IRLetStmt),
     Return(IRReturn),
+    Break,
+    Continue,
     Expr(IREexpr),
     Defer(IREexpr),
     Spawn(IRSpawn),
@@ -50,6 +52,10 @@ pub enum IRStmt {
 pub struct IRWhile {
     pub cond: IREexpr,
     pub body: IRBlock,
+    /// For `for` loops lowered to `while`: statements run at end of each iteration.
+    pub step: Option<IRBlock>,
+    /// When set, `continue` in the loop body jumps here (the step block).
+    pub continue_label: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -409,6 +415,12 @@ impl IRBuilder {
                         .map(|e| build_expr_with_ctx(e, ctx)),
                 }));
             }
+            Stmt::Break(_) => {
+                out.push(IRStmt::Break);
+            }
+            Stmt::Continue(_) => {
+                out.push(IRStmt::Continue);
+            }
             Stmt::Expr(expr_stmt) => {
                 out.push(IRStmt::Expr(build_expr_with_ctx(&expr_stmt.expr, ctx)));
             }
@@ -452,7 +464,12 @@ impl IRBuilder {
             Stmt::While(while_stmt) => {
                 let cond = build_expr_with_ctx(&while_stmt.cond, ctx);
                 let body = Self::lower_ast_block("while_body", &while_stmt.body, ctx);
-                out.push(IRStmt::While(IRWhile { cond, body }));
+                out.push(IRStmt::While(IRWhile {
+                    cond,
+                    body,
+                    step: None,
+                    continue_label: None,
+                }));
             }
             Stmt::For(for_stmt) => {
                 let container_var = format!("__for_container_{}", for_stmt.span.start);
@@ -536,6 +553,21 @@ impl IRBuilder {
                 let mut while_body_stmts = Vec::new();
                 let mut while_defers = Vec::new();
 
+                let step_label = format!("__for_step_{}", for_stmt.span.start);
+                let step_stmt = IRStmt::Expr(IREexpr::Assign {
+                    target: index_var.clone(),
+                    value: Box::new(IREexpr::BinOp {
+                        op: BinOp::Add,
+                        left: Box::new(IREexpr::Var(index_var.clone())),
+                        right: Box::new(IREexpr::Lit(1)),
+                    }),
+                });
+                let step_block = IRBlock {
+                    name: "for_step".to_string(),
+                    statements: vec![step_stmt],
+                    defers: Vec::new(),
+                };
+
                 match &container_ty {
                     Type::Vec { .. } => {
                         let opt_var = format!("__for_opt_{}", for_stmt.span.start);
@@ -562,14 +594,6 @@ impl IRBuilder {
                         for inner in &for_stmt.body.statements {
                             Self::lower_stmt(inner, &mut match_body_stmts, &mut match_defers, ctx);
                         }
-                        match_body_stmts.push(IRStmt::Expr(IREexpr::Assign {
-                            target: index_var.clone(),
-                            value: Box::new(IREexpr::BinOp {
-                                op: BinOp::Add,
-                                left: Box::new(IREexpr::Var(index_var.clone())),
-                                right: Box::new(IREexpr::Lit(1)),
-                            }),
-                        }));
                         while_body_stmts.push(IRStmt::Expr(IREexpr::Match {
                             expr: Box::new(IREexpr::Var(opt_var)),
                             enum_type: "Option".to_string(),
@@ -622,14 +646,6 @@ impl IRBuilder {
                         for inner in &for_stmt.body.statements {
                             Self::lower_stmt(inner, &mut while_body_stmts, &mut while_defers, ctx);
                         }
-                        while_body_stmts.push(IRStmt::Expr(IREexpr::Assign {
-                            target: index_var.clone(),
-                            value: Box::new(IREexpr::BinOp {
-                                op: BinOp::Add,
-                                left: Box::new(IREexpr::Var(index_var)),
-                                right: Box::new(IREexpr::Lit(1)),
-                            }),
-                        }));
                     }
                     _ => {}
                 }
@@ -641,6 +657,8 @@ impl IRBuilder {
                         statements: while_body_stmts,
                         defers: while_defers,
                     },
+                    step: Some(step_block),
+                    continue_label: Some(step_label),
                 }));
             }
             Stmt::UnsafeBlock(unsafe_stmt) => {
@@ -953,6 +971,7 @@ fn rewrite_generic_calls_in_block(
                     rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
                 }
             }
+            IRStmt::Break | IRStmt::Continue => {}
             IRStmt::Expr(expr) => {
                 rewrite_generic_calls_in_expr(expr, generic_defs, var_types, instantiations);
             }
@@ -991,6 +1010,9 @@ fn rewrite_generic_calls_in_block(
                     var_types,
                     instantiations,
                 );
+                if let Some(ref mut step) = ir_while.step {
+                    rewrite_generic_calls_in_block(step, generic_defs, var_types, instantiations);
+                }
             }
             IRStmt::UnsafeBlock(unsafe_block) => {
                 rewrite_generic_calls_in_block(
@@ -1317,6 +1339,8 @@ fn substitute_types_in_stmt(stmt: &IRStmt, substitutions: &HashMap<String, Type>
                 .as_ref()
                 .map(|expr| substitute_types_in_expr(expr, substitutions)),
         }),
+        IRStmt::Break => IRStmt::Break,
+        IRStmt::Continue => IRStmt::Continue,
         IRStmt::Expr(expr) => IRStmt::Expr(substitute_types_in_expr(expr, substitutions)),
         IRStmt::Defer(expr) => IRStmt::Defer(substitute_types_in_expr(expr, substitutions)),
         IRStmt::Spawn(spawn) => IRStmt::Spawn(IRSpawn {
@@ -1338,6 +1362,11 @@ fn substitute_types_in_stmt(stmt: &IRStmt, substitutions: &HashMap<String, Type>
         IRStmt::While(ir_while) => IRStmt::While(IRWhile {
             cond: substitute_types_in_expr(&ir_while.cond, substitutions),
             body: substitute_types_in_block(&ir_while.body, substitutions),
+            step: ir_while
+                .step
+                .as_ref()
+                .map(|block| substitute_types_in_block(block, substitutions)),
+            continue_label: ir_while.continue_label.clone(),
         }),
         IRStmt::UnsafeBlock(unsafe_block) => IRStmt::UnsafeBlock(IRUnsafeBlock {
             body: substitute_types_in_block(&unsafe_block.body, substitutions),

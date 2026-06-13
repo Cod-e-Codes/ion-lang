@@ -1,0 +1,36 @@
+fn main() -> int {
+    let mut sum: int = 0;
+    let mut i: int = 0;
+    while i < 10 {
+        i = i + 1;
+        if i == 3 {
+            continue;
+        }
+        if i == 8 {
+            break;
+        }
+        sum = sum + i;
+    }
+
+    if sum != 25 {
+        return 1;
+    }
+
+    let arr: [int; 5] = [1, 2, 3, 4, 5];
+    let mut count: int = 0;
+    for x in arr {
+        if x == 2 || x == 4 {
+            continue;
+        }
+        if x == 5 {
+            break;
+        }
+        count = count + 1;
+    }
+
+    if count != 2 {
+        return 2;
+    }
+
+    return 27;
+}

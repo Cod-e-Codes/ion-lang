@@ -1,4 +1,4 @@
-// Test Phase 6: for...in loops
+// for...in loops
 fn main() -> int {
     // Test that for loop syntax parses correctly
     // Note: Full implementation may require runtime support for Vec::get and Option unwrapping

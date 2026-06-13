@@ -310,6 +310,8 @@ impl Parser {
             .map(|s| match s {
                 Stmt::Let(s) => s.span,
                 Stmt::Return(s) => s.span,
+                Stmt::Break(s) => s.span,
+                Stmt::Continue(s) => s.span,
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
@@ -899,6 +901,14 @@ impl Parser {
                 let stmt = self.parse_return_stmt()?;
                 Ok(Stmt::Return(stmt))
             }
+            TokenKind::Break => {
+                let stmt = self.parse_break_stmt()?;
+                Ok(Stmt::Break(stmt))
+            }
+            TokenKind::Continue => {
+                let stmt = self.parse_continue_stmt()?;
+                Ok(Stmt::Continue(stmt))
+            }
             TokenKind::Defer => {
                 let stmt = self.parse_defer_stmt()?;
                 Ok(Stmt::Defer(stmt))
@@ -942,6 +952,8 @@ impl Parser {
             .map(|s| match s {
                 Stmt::Let(s) => s.span,
                 Stmt::Return(s) => s.span,
+                Stmt::Break(s) => s.span,
+                Stmt::Continue(s) => s.span,
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
@@ -1003,6 +1015,8 @@ impl Parser {
             .map(|s| match s {
                 Stmt::Let(s) => s.span,
                 Stmt::Return(s) => s.span,
+                Stmt::Break(s) => s.span,
+                Stmt::Continue(s) => s.span,
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
@@ -1048,6 +1062,8 @@ impl Parser {
                     .map(|s| match s {
                         Stmt::Let(s) => s.span,
                         Stmt::Return(s) => s.span,
+                        Stmt::Break(s) => s.span,
+                        Stmt::Continue(s) => s.span,
                         Stmt::Expr(s) => s.expr.span(),
                         Stmt::Defer(s) => s.span,
                         Stmt::Spawn(s) => s.span,
@@ -1260,6 +1276,8 @@ impl Parser {
                 .map(|s| match s {
                     Stmt::Let(s) => s.span,
                     Stmt::Return(s) => s.span,
+                    Stmt::Break(s) => s.span,
+                    Stmt::Continue(s) => s.span,
                     Stmt::Expr(s) => s.expr.span(),
                     Stmt::Defer(s) => s.span,
                     Stmt::Spawn(s) => s.span,
@@ -1276,6 +1294,8 @@ impl Parser {
                 .map(|s| match s {
                     Stmt::Let(s) => s.span,
                     Stmt::Return(s) => s.span,
+                    Stmt::Break(s) => s.span,
+                    Stmt::Continue(s) => s.span,
                     Stmt::Expr(s) => s.expr.span(),
                     Stmt::Defer(s) => s.span,
                     Stmt::Spawn(s) => s.span,
@@ -1381,9 +1401,12 @@ impl Parser {
     fn parse_return_stmt(&mut self) -> Result<ReturnStmt, ParseError> {
         let return_token_span = Span::from_token(self.expect(TokenKind::Return)?);
 
-        let semicolon_idx = self.current;
+        // Optional return value
         let value = if !self.is_at_end()
-            && !matches!(self.tokens[semicolon_idx].kind, TokenKind::Semicolon)
+            && !matches!(
+                self.peek().kind,
+                TokenKind::Semicolon | TokenKind::RBrace
+            )
         {
             Some(self.parse_expr()?)
         } else {
@@ -1391,10 +1414,23 @@ impl Parser {
         };
 
         self.expect(TokenKind::Semicolon)?;
-
         let span = return_token_span.merge(&Span::from_token(self.previous()));
 
         Ok(ReturnStmt { value, span })
+    }
+
+    fn parse_break_stmt(&mut self) -> Result<BreakStmt, ParseError> {
+        let break_token_span = Span::from_token(self.expect(TokenKind::Break)?);
+        self.expect(TokenKind::Semicolon)?;
+        let span = break_token_span.merge(&Span::from_token(self.previous()));
+        Ok(BreakStmt { span })
+    }
+
+    fn parse_continue_stmt(&mut self) -> Result<ContinueStmt, ParseError> {
+        let continue_token_span = Span::from_token(self.expect(TokenKind::Continue)?);
+        self.expect(TokenKind::Semicolon)?;
+        let span = continue_token_span.merge(&Span::from_token(self.previous()));
+        Ok(ContinueStmt { span })
     }
 
     fn parse_defer_stmt(&mut self) -> Result<DeferStmt, ParseError> {
@@ -1423,6 +1459,8 @@ impl Parser {
             .map(|s| match s {
                 Stmt::Let(s) => s.span,
                 Stmt::Return(s) => s.span,
+                Stmt::Break(s) => s.span,
+                Stmt::Continue(s) => s.span,
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
@@ -1448,6 +1486,8 @@ impl Parser {
             .map(|s| match s {
                 Stmt::Let(s) => s.span,
                 Stmt::Return(s) => s.span,
+                Stmt::Break(s) => s.span,
+                Stmt::Continue(s) => s.span,
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
@@ -1878,8 +1918,11 @@ impl Parser {
                 // Statement-starting keywords - must stop immediately
                 TokenKind::If
                 | TokenKind::While
+                | TokenKind::For
                 | TokenKind::Let
                 | TokenKind::Return
+                | TokenKind::Break
+                | TokenKind::Continue
                 | TokenKind::Else
                 | TokenKind::Defer
                 | TokenKind::Spawn
@@ -1928,8 +1971,11 @@ impl Parser {
                         &self.tokens[field_idx].kind,
                         TokenKind::If
                             | TokenKind::While
+                            | TokenKind::For
                             | TokenKind::Let
                             | TokenKind::Return
+                            | TokenKind::Break
+                            | TokenKind::Continue
                             | TokenKind::Else
                             | TokenKind::Defer
                             | TokenKind::Spawn
@@ -2433,6 +2479,8 @@ impl Parser {
                             | TokenKind::For
                             | TokenKind::Let
                             | TokenKind::Return
+                            | TokenKind::Break
+                            | TokenKind::Continue
                             | TokenKind::Else
                             | TokenKind::Defer
                             | TokenKind::Spawn

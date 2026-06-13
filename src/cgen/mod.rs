@@ -42,6 +42,7 @@ pub struct Codegen {
     spawn_definitions: String,
     scope_stack: Vec<ScopeFrame>,
     epilogue_label: String,
+    loop_continue_label: Option<String>,
 }
 
 impl Default for Codegen {
@@ -347,6 +348,7 @@ impl Codegen {
             spawn_definitions: String::new(),
             scope_stack: Vec::new(),
             epilogue_label: "epilogue".to_string(),
+            loop_continue_label: None,
         }
     }
 
@@ -1786,6 +1788,18 @@ impl Codegen {
                 self.write_indent();
                 self.writeln(&format!("goto {};", self.epilogue_label));
             }
+            IRStmt::Break => {
+                self.write_indent();
+                self.writeln("break;");
+            }
+            IRStmt::Continue => {
+                self.write_indent();
+                if let Some(ref label) = self.loop_continue_label {
+                    self.writeln(&format!("goto {};", label));
+                } else {
+                    self.writeln("continue;");
+                }
+            }
             IRStmt::Expr(expr) => {
                 // Special handling: match expressions used as statements should be blocks, not statement expressions
                 match expr {
@@ -1869,13 +1883,22 @@ impl Codegen {
                 }
             }
             IRStmt::While(ir_while) => {
-                // Generate: while (cond) { ... }
                 self.write_indent();
                 self.write("while (");
                 self.generate_expr_conditional(&ir_while.cond);
                 self.writeln(") {");
                 self.indent_level += 1;
+                let prev_continue_label = self.loop_continue_label.take();
+                self.loop_continue_label = ir_while.continue_label.clone();
                 self.generate_block(&ir_while.body);
+                if let Some(ref step) = ir_while.step {
+                    if let Some(ref label) = ir_while.continue_label {
+                        self.write_indent();
+                        self.writeln(&format!("{}:", label));
+                    }
+                    self.generate_block(step);
+                }
+                self.loop_continue_label = prev_continue_label;
                 self.indent_level -= 1;
                 self.write_indent();
                 self.writeln("}");
@@ -3799,6 +3822,7 @@ fn collect_slice_types_from_stmt(
                 collect_slice_types_from_expr(value, slice_types);
             }
         }
+        IRStmt::Break | IRStmt::Continue => {}
         IRStmt::Expr(expr) => {
             collect_slice_types_from_expr(expr, slice_types);
         }
@@ -3825,6 +3849,11 @@ fn collect_slice_types_from_stmt(
             collect_slice_types_from_expr(&ir_while.cond, slice_types);
             for stmt in &ir_while.body.statements {
                 collect_slice_types_from_stmt(stmt, slice_types);
+            }
+            if let Some(ref step) = ir_while.step {
+                for stmt in &step.statements {
+                    collect_slice_types_from_stmt(stmt, slice_types);
+                }
             }
         }
         IRStmt::UnsafeBlock(unsafe_block) => {
@@ -3990,6 +4019,7 @@ fn collect_vec_types_from_stmt(stmt: &IRStmt, vec_types: &mut std::collections::
                 collect_vec_types_from_expr(value, vec_types);
             }
         }
+        IRStmt::Break | IRStmt::Continue => {}
         IRStmt::Expr(expr) => {
             collect_vec_types_from_expr(expr, vec_types);
         }
@@ -4008,6 +4038,11 @@ fn collect_vec_types_from_stmt(stmt: &IRStmt, vec_types: &mut std::collections::
             collect_vec_types_from_expr(&ir_while.cond, vec_types);
             for stmt in &ir_while.body.statements {
                 collect_vec_types_from_stmt(stmt, vec_types);
+            }
+            if let Some(ref step) = ir_while.step {
+                for stmt in &step.statements {
+                    collect_vec_types_from_stmt(stmt, vec_types);
+                }
             }
         }
         IRStmt::Spawn(spawn) => {
@@ -4437,6 +4472,7 @@ fn collect_generic_from_stmt(
                 collect_generic_from_expr(value, instantiations);
             }
         }
+        IRStmt::Break | IRStmt::Continue => {}
         IRStmt::Expr(expr) => collect_generic_from_expr(expr, instantiations),
         IRStmt::If(ir_if) => {
             collect_generic_from_expr(&ir_if.cond, instantiations);
@@ -4453,6 +4489,11 @@ fn collect_generic_from_stmt(
             collect_generic_from_expr(&ir_while.cond, instantiations);
             for stmt in &ir_while.body.statements {
                 collect_generic_from_stmt(stmt, instantiations);
+            }
+            if let Some(ref step) = ir_while.step {
+                for stmt in &step.statements {
+                    collect_generic_from_stmt(stmt, instantiations);
+                }
             }
         }
         IRStmt::Spawn(spawn) => {

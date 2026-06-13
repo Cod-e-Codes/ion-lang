@@ -82,7 +82,7 @@ The CLI prints `Type check error: UseAfterMove { ... }` (`{:?}` on `TypeCheckErr
 | File | Role |
 |------|------|
 | `ion-vscode/src/extension.ts` | Spawns LSP process, client config |
-| `ion-vscode/syntaxes/ion.tmLanguage.json` | Syntax highlighting |
+| `ion-vscode/syntaxes/ion.tmLanguage.json` | Syntax highlighting (keywords include `break`, `continue`) |
 | `ion-vscode/language-configuration.json` | Brackets, comments |
 | `ion-vscode/package.json` | Extension manifest, `ion.lspPath` setting |
 

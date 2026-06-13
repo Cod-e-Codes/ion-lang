@@ -1,4 +1,4 @@
-// Test Phase 6: Struct-style enum variants
+// Struct-style enum variants
 enum Result {
     Ok { value: int };
     Err { message: String };

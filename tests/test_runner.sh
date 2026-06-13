@@ -208,7 +208,7 @@ if [ -f "test_struct_basic.ion" ]; then
     test_file "test_struct_basic.ion" 7 || true
 fi
 
-# Phase 1 tests
+# Enums, matching, and control flow
 if [ -f "test_enum_basic.ion" ]; then
     test_file "test_enum_basic.ion" 0 || true
 fi
@@ -219,6 +219,10 @@ fi
 
 if [ -f "test_while_basic.ion" ]; then
     test_file "test_while_basic.ion" 0 || true
+fi
+
+if [ -f "test_break_continue.ion" ]; then
+    test_file "test_break_continue.ion" 27 || true
 fi
 
 if [ -f "test_call_basic.ion" ]; then
@@ -290,7 +294,7 @@ if [ -f "test_string_push_str.ion" ]; then
     test_file "test_string_push_str.ion" 0 || true
 fi
 
-# Phase 2 tests - Modules and FFI
+# Modules and FFI
 if [ -f "test_module_basic.ion" ]; then
     test_file "test_module_basic.ion" 30 || true
 fi
@@ -342,12 +346,12 @@ if [ -f "test_enum_ref_error.ion" ]; then
     test_error "test_enum_ref_error.ion" "ReferenceEscape" || true
 fi
 
-# Phase 2 negative tests
+# Module negative tests
 if [ -f "test_module_visibility.ion" ]; then
     test_error "test_module_visibility.ion" "Cannot access non-public" || true
 fi
 
-# Phase 3 tests - Arrays and Slices
+# Arrays and slices
 if [ -f "test_array_basic.ion" ]; then
     test_file "test_array_basic.ion" 6 || true
 fi
@@ -422,17 +426,17 @@ if [ -f "test_fmt_int_to_string.ion" ]; then
     test_file "test_fmt_int_to_string.ion" 0 || true
 fi
 
-# Phase 3 tests - Unsafe Blocks
+# Unsafe blocks
 if [ -f "test_unsafe_basic.ion" ]; then
     test_file "test_unsafe_basic.ion" 0 || true
 fi
 
-# Phase 3 negative tests
+# Unsafe negative tests
 if [ -f "test_unsafe_extern_required.ion" ]; then
     test_error "test_unsafe_extern_required.ion" "must be inside an unsafe block" || true
 fi
 
-# Phase 4 tests - Boolean Type
+# Boolean type
 if [ -f "test_bool_literal.ion" ]; then
     test_file "test_bool_literal.ion" 0 || true
 fi
@@ -445,7 +449,7 @@ if [ -f "test_bool_comparison.ion" ]; then
     test_file "test_bool_comparison.ion" 0 || true
 fi
 
-# Phase 4 tests - Floating-Point Types
+# Floating-point types
 if [ -f "test_float_literal.ion" ]; then
     test_file "test_float_literal.ion" 0 || true
 fi
@@ -462,7 +466,7 @@ if [ -f "test_float_comparison.ion" ]; then
     test_file "test_float_comparison.ion" 0 || true
 fi
 
-# Phase 4 tests - Integer Types
+# Integer types
 if [ -f "test_integer_types.ion" ]; then
     test_file "test_integer_types.ion" 0 || true
 fi
@@ -475,7 +479,7 @@ if [ -f "test_integer_signed_unsigned.ion" ]; then
     test_file "test_integer_signed_unsigned.ion" 0 || true
 fi
 
-# Phase 4 tests - Type Aliases
+# Type aliases
 if [ -f "test_type_alias_basic.ion" ]; then
     test_file "test_type_alias_basic.ion" 42 || true
 fi
@@ -488,12 +492,16 @@ if [ -f "test_type_alias_resolution.ion" ]; then
     test_file "test_type_alias_resolution.ion" 0 || true
 fi
 
-# Phase 4 negative tests
+# Type and control-flow negative tests
 if [ -f "test_if_bool_required.ion" ]; then
     test_error "test_if_bool_required.ion" "bool.*if condition\|if condition.*bool" || true
 fi
 
-# Phase 5 tests - Method Call Syntax
+if [ -f "test_break_continue_error.ion" ]; then
+    test_error "test_break_continue_error.ion" "break statement outside of loop" || true
+fi
+
+# Method call syntax
 if [ -f "test_method_call_basic.ion" ]; then
     test_file "test_method_call_basic.ion" 0 || true
 fi
@@ -510,7 +518,7 @@ if [ -f "test_method_call_chaining.ion" ]; then
     test_file "test_method_call_chaining.ion" 0 || true
 fi
 
-# Phase 6 tests - Split Channel API, Struct-style Enum Variants, for...in Loops
+# Split channels, struct enum variants, for...in loops
 if [ -f "test_channel_split.ion" ]; then
     test_file "test_channel_split.ion" 0 || true
 fi
@@ -523,7 +531,7 @@ if [ -f "test_for_loop.ion" ]; then
     test_file "test_for_loop.ion" 0 || true
 fi
 
-# Phase 7 tests - Escape sequences, Array initialization, Bitwise operators
+# Escape sequences, array initialization, bitwise operators
 if [ -f "test_escape_sequences.ion" ]; then
     test_file "test_escape_sequences.ion" 0 || true
 fi
@@ -548,7 +556,7 @@ if [ -f "test_array_assignment.ion" ]; then
     test_file "test_array_assignment.ion" 0 || true
 fi
 
-# Phase 3 tests - Multi-file compilation
+# Multi-file compilation
 if [ -f "test_multifile.ion" ] && [ -f "utils.ion" ]; then
     test_count=$((test_count + 1))
     echo -n "Testing test_multifile (multi-file mode)... "

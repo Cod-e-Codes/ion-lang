@@ -94,6 +94,8 @@ pub struct TypeChecker {
     module_imports: HashMap<String, ModuleExports>,
     // Unsafe context tracking (depth for nested unsafe blocks)
     unsafe_context_depth: usize,
+    // Loop nesting depth (for break/continue validation)
+    loop_depth: usize,
     // Current function's resolved return type (for return statement checking)
     current_return_type: Option<Type>,
     // LSP information collected during type checking
@@ -128,6 +130,7 @@ impl TypeChecker {
             extern_functions: HashMap::new(),
             module_imports: HashMap::new(),
             unsafe_context_depth: 0,
+            loop_depth: 0,
             current_return_type: None,
             lsp_info: LspInfo::default(),
             type_param_scopes: Vec::new(),
@@ -1373,6 +1376,20 @@ impl TypeChecker {
                     }
                 }
             }
+            Stmt::Break(_) => {
+                if self.loop_depth == 0 {
+                    return Err(TypeCheckError::Message(
+                        "break statement outside of loop".to_string(),
+                    ));
+                }
+            }
+            Stmt::Continue(_) => {
+                if self.loop_depth == 0 {
+                    return Err(TypeCheckError::Message(
+                        "continue statement outside of loop".to_string(),
+                    ));
+                }
+            }
             Stmt::Expr(expr_stmt) => {
                 self.check_expr(&expr_stmt.expr)?;
             }
@@ -1517,9 +1534,11 @@ impl TypeChecker {
                     });
                 }
                 // Check body
+                self.loop_depth += 1;
                 for inner in &while_stmt.body.statements {
                     self.check_stmt(inner)?;
                 }
+                self.loop_depth -= 1;
             }
             Stmt::For(for_stmt) => {
                 // Desugar: for x in container { body }
@@ -4113,6 +4132,7 @@ fn collect_block_var_refs(
                     collect_expr_var_refs(value, refs, locals);
                 }
             }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Expr(expr_stmt) => collect_expr_var_refs(&expr_stmt.expr, refs, locals),
             Stmt::Defer(defer_stmt) => collect_expr_var_refs(&defer_stmt.expr, refs, locals),
             Stmt::Spawn(spawn_stmt) => {

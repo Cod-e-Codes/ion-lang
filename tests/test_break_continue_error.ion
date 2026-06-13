@@ -1,0 +1,4 @@
+fn main() -> int {
+    break;
+    return 0;
+}
