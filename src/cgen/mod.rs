@@ -43,6 +43,8 @@ pub struct Codegen {
     scope_stack: Vec<ScopeFrame>,
     epilogue_label: String,
     loop_continue_label: Option<String>,
+    /// When true (single-file merge), module calls use `{alias}_{func}` C names.
+    mangle_merged_module_calls: bool,
 }
 
 impl Default for Codegen {
@@ -74,6 +76,23 @@ fn mangle_type_name(base: &str, params: &[Type]) -> String {
             .collect();
         format!("{}_{}", base, sanitized_params.join("_"))
     }
+}
+
+/// Map a module-qualified Ion callee (`io::print_int`) to a unique C symbol (`io_print_int`).
+/// Type-associated builtins (`Box::new`, `Vec::len`, etc.) keep their existing mangling path.
+fn mangle_module_callee(callee: &str) -> Option<String> {
+    if callee.starts_with("METHOD::") {
+        return None;
+    }
+    let parts: Vec<&str> = callee.split("::").collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let (module, func) = (parts[0], parts[1]);
+    if matches!(module, "Box" | "Vec" | "String" | "Option") {
+        return None;
+    }
+    Some(format!("{}_{}", module, func))
 }
 
 /// Substitute generic type parameters in a type using the substitution map
@@ -349,12 +368,31 @@ impl Codegen {
             scope_stack: Vec::new(),
             epilogue_label: "epilogue".to_string(),
             loop_continue_label: None,
+            mangle_merged_module_calls: false,
+        }
+    }
+
+    fn resolve_c_function_name(&self, callee: &str) -> String {
+        if self.mangle_merged_module_calls
+            && let Some(mangled) = mangle_module_callee(callee)
+        {
+            return mangled;
+        }
+        if callee.contains("::") {
+            callee
+                .split("::")
+                .last()
+                .unwrap_or(callee)
+                .to_string()
+        } else {
+            callee.to_string()
         }
     }
 
     pub fn generate(&mut self, program: &IRProgram) -> String {
         self.output.clear();
         self.indent_level = 0;
+        self.mangle_merged_module_calls = true;
         // Build enum map for variant index lookups
         self.enum_map.clear();
         for e in &program.enums {
@@ -713,6 +751,7 @@ impl Codegen {
     ) -> String {
         self.output.clear();
         self.indent_level = 0;
+        self.mangle_merged_module_calls = false;
         // Build enum map for variant index lookups
         self.enum_map.clear();
         for e in &program.enums {
@@ -2178,9 +2217,10 @@ impl Codegen {
                 // Check if this is actually a qualified function call that was mis-parsed as EnumLit
                 // If the enum_name is not in enum_map, it's likely a module function call
                 if !self.enum_map.contains_key(enum_name) {
-                    // This is actually a function call, not an enum literal
-                    // Use just the variant name as the function name (module prefix already stripped)
-                    self.write(variant);
+                    // Qualified module call misparsed as enum literal (e.g. io::print_int(...)).
+                    let qualified = format!("{}::{}", enum_name, variant);
+                    let func_name = self.resolve_c_function_name(&qualified);
+                    self.write(&func_name);
                     self.write("(");
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 {
@@ -2349,17 +2389,10 @@ impl Codegen {
                 {
                     self.write(&code);
                 } else {
-                    // Regular function call - strip module prefix if present (mod::func -> func)
-                    let func_name = if resolved_callee.contains("::") {
-                        resolved_callee
-                            .split("::")
-                            .last()
-                            .unwrap_or(&resolved_callee)
-                    } else {
-                        &resolved_callee
-                    };
+                    // Regular function call.
+                    let func_name = self.resolve_c_function_name(&resolved_callee);
 
-                    self.write(func_name);
+                    self.write(&func_name);
                     self.write("(");
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 {
@@ -2368,7 +2401,7 @@ impl Codegen {
                         // If this is an extern function expecting int by value, convert &int (immutable) arguments to int
                         // For &int -> int: just use the inner expression (the variable itself)
                         // For &mut int -> int*: keep the address-of (don't dereference)
-                        if let Some(param_types) = self.extern_functions.get(func_name)
+                        if let Some(param_types) = self.extern_functions.get(&func_name)
                             && i < param_types.len()
                             && let Type::Ref {
                                 inner: boxed_int,

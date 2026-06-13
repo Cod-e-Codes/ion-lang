@@ -38,12 +38,13 @@ int parse_line_at(int index);
 int scan_logs(ion_sender_t code_tx, int expected);
 int valid_log_count(void);
 int main(void);
-void print_int(int n);
-void println_int(int n);
-ion_string_t* int_to_string(int n);
-void print(ion_string_t* s);
-void println(ion_string_t* s);
-void print_str(uint8_t* s, int len);
+void io_print(ion_string_t* s);
+void io_println(ion_string_t* s);
+void io_print_str(uint8_t* s, int len);
+void io_print_int(int n);
+void fmt_print_int(int n);
+void fmt_println_int(int n);
+ion_string_t* fmt_int_to_string(int n);
 ion_string_t* line_at(int index) {
     ion_string_t* ret_val = 0;
     if (index == 0) {
@@ -199,10 +200,10 @@ int main(void) {
         if (code_tx.channel) { ion_channel_handle_drop(code_tx.channel); }
         goto epilogue;
     }
-    ion_string_t* server_line = int_to_string(server_errors);
-    println(server_line);
-    ion_string_t* auth_line = int_to_string(auth_failures);
-    println(auth_line);
+    ion_string_t* server_line = fmt_int_to_string(server_errors);
+    io_println(server_line);
+    ion_string_t* auth_line = fmt_int_to_string(auth_failures);
+    io_println(auth_line);
     ret_val = 0;
     if (auth_line) { ion_string_free(auth_line); }
     if (server_line) { ion_string_free(server_line); }
@@ -213,14 +214,88 @@ epilogue:
         return ret_val;
 }
 
-void print_int(int n) {
-    print_int(n);
+void io_print(ion_string_t* s) {
+    {
+        int _result = write(1, s->data, (int)s->len);
+    }
 epilogue:
         return;
 }
 
-void println_int(int n) {
-    print_int(n);
+void io_println(ion_string_t* s) {
+    {
+        int _result = write(1, s->data, (int)s->len);
+        int _newline = write(1, "\n", 1);
+    }
+epilogue:
+        return;
+}
+
+void io_print_str(uint8_t* s, int len) {
+    if (len < 0) {
+                goto epilogue;
+    }
+    {
+        int _result = write(1, s, len);
+    }
+epilogue:
+        return;
+}
+
+void io_print_int(int n) {
+    uint8_t buf[12] = {0};
+    int len = 0;
+    int negative = 0;
+    int value = n;
+    if (value == 0) {
+        {
+            int _result = write(1, "0", 1);
+        }
+                goto epilogue;
+    }
+    if (value < 0) {
+        negative = 1;
+        if (value == (-2147483648)) {
+            {
+                int _result = write(1, "-2147483648", 11);
+            }
+                        goto epilogue;
+        }
+        value = (0 - value);
+    }
+    while (value > 0) {
+        int digit = (value % 10);
+        buf[len] = (uint8_t)(48 + digit);
+        len = (len + 1);
+        value = (value / 10);
+    }
+    int i = 0;
+    while (i < (len / 2)) {
+        uint8_t tmp = ({ int __ion_idx_2 = i; (__ion_idx_2 >= 0 && __ion_idx_2 < 12) ? buf[__ion_idx_2] : (ion_panic("Array index out of bounds"), buf[0]); });
+        buf[i] = ({ int __ion_idx_3 = ((len - 1) - i); (__ion_idx_3 >= 0 && __ion_idx_3 < 12) ? buf[__ion_idx_3] : (ion_panic("Array index out of bounds"), buf[0]); });
+        buf[((len - 1) - i)] = tmp;
+        i = (i + 1);
+    }
+    if (negative) {
+        {
+            int _minus = write(1, "-", 1);
+        }
+    }
+    {
+        int _result = write(1, &buf[0], len);
+    }
+epilogue:
+        return;
+}
+
+void fmt_print_int(int n) {
+    io_print_int(n);
+epilogue:
+        return;
+}
+
+void fmt_println_int(int n) {
+    io_print_int(n);
     {
         int _newline = write(1, "\n", 1);
     }
@@ -228,7 +303,7 @@ epilogue:
         return;
 }
 
-ion_string_t* int_to_string(int n) {
+ion_string_t* fmt_int_to_string(int n) {
     ion_string_t* ret_val = 0;
     uint8_t buf[12] = {0};
     int len = 0;
@@ -260,7 +335,7 @@ ion_string_t* int_to_string(int n) {
     }
     int i = (len - 1);
     while (i >= 0) {
-        uint8_t ch = ({ int __ion_idx_2 = i; (__ion_idx_2 >= 0 && __ion_idx_2 < 12) ? buf[__ion_idx_2] : (ion_panic("Array index out of bounds"), buf[0]); });
+        uint8_t ch = ({ int __ion_idx_4 = i; (__ion_idx_4 >= 0 && __ion_idx_4 < 12) ? buf[__ion_idx_4] : (ion_panic("Array index out of bounds"), buf[0]); });
         if (ch == 48) {
             ion_string_push_str(result, "0", 1);
         } else {
@@ -304,34 +379,6 @@ ion_string_t* int_to_string(int n) {
     goto epilogue;
 epilogue:
         return ret_val;
-}
-
-void print(ion_string_t* s) {
-    {
-        int _result = write(1, s->data, (int)s->len);
-    }
-epilogue:
-        return;
-}
-
-void println(ion_string_t* s) {
-    {
-        int _result = write(1, s->data, (int)s->len);
-        int _newline = write(1, "\n", 1);
-    }
-epilogue:
-        return;
-}
-
-void print_str(uint8_t* s, int len) {
-    if (len < 0) {
-                goto epilogue;
-    }
-    {
-        int _result = write(1, s, len);
-    }
-epilogue:
-        return;
 }
 
 

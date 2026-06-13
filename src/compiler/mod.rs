@@ -169,10 +169,14 @@ impl Compiler {
             extern_blocks: main_program.extern_blocks.clone(),
         };
 
-        // Merge all imported modules' public items (skip the main program to avoid duplicates)
         let main_canonical = main_path
             .canonicalize()
             .unwrap_or_else(|_| main_path.to_path_buf());
+
+        let mut module_aliases: HashMap<PathBuf, String> = HashMap::new();
+        self.collect_module_aliases(&main_canonical, &main_program.imports, &mut module_aliases);
+
+        // Merge all imported modules' public items (skip the main program to avoid duplicates)
         for (module_path, module_program) in &self.modules {
             // Skip the main program - we already have its items
             if module_path
@@ -182,6 +186,14 @@ impl Compiler {
             {
                 continue;
             }
+
+            let canonical_module = module_path
+                .canonicalize()
+                .unwrap_or_else(|_| module_path.clone());
+            let alias = module_aliases
+                .get(&canonical_module)
+                .or_else(|| module_aliases.get(module_path));
+
             // Add public structs
             for s in &module_program.structs {
                 if s.pub_
@@ -201,15 +213,20 @@ impl Compiler {
                 }
             }
 
-            // Add public functions
-            for f in &module_program.functions {
-                if f.pub_
-                    && !merged
-                        .functions
-                        .iter()
-                        .any(|existing| existing.name == f.name)
-                {
-                    merged.functions.push(f.clone());
+            // Add public functions, prefixed with import alias to avoid name collisions
+            // (e.g. io::print_int and fmt::print_int both become distinct C symbols).
+            if let Some(alias) = alias {
+                for f in &module_program.functions {
+                    if !f.pub_ {
+                        continue;
+                    }
+                    let mangled_name = format!("{}_{}", alias, f.name);
+                    if merged.functions.iter().any(|existing| existing.name == mangled_name) {
+                        continue;
+                    }
+                    let mut f_copy = f.clone();
+                    f_copy.name = mangled_name;
+                    merged.functions.push(f_copy);
                 }
             }
 
@@ -233,6 +250,28 @@ impl Compiler {
         }
 
         merged
+    }
+
+    /// Map canonical module paths to the import alias used from the main file's import tree.
+    fn collect_module_aliases(
+        &self,
+        from_file: &Path,
+        imports: &[ImportStmt],
+        out: &mut HashMap<PathBuf, String>,
+    ) {
+        for import in imports {
+            let import_path = self.resolve_import_path(&import.path, from_file);
+            let canonical = import_path
+                .canonicalize()
+                .unwrap_or(import_path);
+            if out.contains_key(&canonical) {
+                continue;
+            }
+            out.insert(canonical.clone(), import.alias.clone());
+            if let Some(module) = self.modules.get(&canonical) {
+                self.collect_module_aliases(&canonical, &module.imports, out);
+            }
+        }
     }
 }
 
