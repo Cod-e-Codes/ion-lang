@@ -1,0 +1,11 @@
+import "../stdlib/fs.ion" as fs;
+
+fn main() -> int {
+    let path: String = "fixtures/small.txt";
+    let content: String = fs::read_to_string(path);
+    let expected: String = "hello ion\n";
+    if content != expected {
+        return 1;
+    }
+    return 80;
+}

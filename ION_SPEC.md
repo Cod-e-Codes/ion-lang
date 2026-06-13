@@ -1012,9 +1012,23 @@ Note that:
 
 See Section 7.2 for channel semantics and API.
 
-#### 8.5 Planned File I/O (not implemented)
+#### 8.5 File I/O
 
-The following file API is a design sketch only. It is **not** implemented in the compiler or stdlib today.
+**Implemented (MVP):** `stdlib/fs.ion` provides whole-file read via POSIX `open`/`read`/`close` wrapped in `unsafe` blocks.
+
+```ion
+// stdlib/fs.ion
+pub fn read_to_string(path: String) -> String;
+```
+
+- `path` is an owned `String` (typically from a string literal or `String::from`).
+- On success, returns file bytes as a `String` (raw UTF-8; no validation).
+- On failure (missing file, permission error, etc.), returns an empty `String`.
+- **Platform:** POSIX and MinGW (`open`/`read`/`close`). Not available on MSVC-only toolchains without a POSIX compatibility layer.
+
+Import with `import "stdlib/fs.ion" as fs;` then `fs::read_to_string(path)`.
+
+**Deferred (not implemented):**
 
 ```ion
 struct File { /* opaque, not Send unless specified */ }
@@ -1037,7 +1051,7 @@ File handles would typically be **not `Send`**, to avoid subtle platform-depende
 
 #### 8.6 Standard I/O Modules
 
-The stdlib provides safe wrappers in `stdlib/io.ion` and `stdlib/fmt.ion`:
+The stdlib provides safe wrappers in `stdlib/io.ion`, `stdlib/fmt.ion`, and `stdlib/fs.ion`:
 
 **`stdlib/io.ion`:**
 - `io::print(s: String)` – print string to stdout
@@ -1050,7 +1064,10 @@ The stdlib provides safe wrappers in `stdlib/io.ion` and `stdlib/fmt.ion`:
 - `fmt::print_int(n: int)`
 - `fmt::println_int(n: int)`
 
-All I/O functions wrap POSIX `write()` in safe Ion code. Import with `import "stdlib/io.ion" as io;`.
+**`stdlib/fs.ion`:**
+- `fs::read_to_string(path: String) -> String` – read entire file (POSIX/MinGW; empty `String` on error)
+
+All I/O functions wrap POSIX calls in safe Ion code. Import with `import "stdlib/io.ion" as io;` (or `fmt.ion`, `fs.ion`).
 
 `String` exposes `.data` (`*u8`) and `.len` (`int`) fields for low-level access when needed.
 
@@ -1141,6 +1158,7 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (not defined in user source)
 - Function types: named functions only; no fn literals/closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
+- `fs::read_to_string`: POSIX/MinGW only; returns empty `String` on error (no `Result` yet); no write or streaming API
 
 ### 11. Future Work (Non-Normative)
 

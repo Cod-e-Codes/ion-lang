@@ -543,6 +543,10 @@ if [ -f "test_fmt_println_int.ion" ]; then
     test_cgen_grep "test_fmt_println_int.ion" "io_print_int" '^[[:space:]]+print_int\(' || true
 fi
 
+if [ -f "test_fs_read.ion" ]; then
+    test_file "test_fs_read.ion" 80 || true
+fi
+
 # Unsafe blocks
 if [ -f "test_unsafe_basic.ion" ]; then
     test_file "test_unsafe_basic.ion" 0 || true

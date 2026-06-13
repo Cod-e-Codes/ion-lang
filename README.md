@@ -20,7 +20,7 @@ Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 - **Control flow**: `if`/`while` (bool conditions), `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, `defer`
 - **Concurrency**: `channel<T>()` returns `(Sender<T>, Receiver<T>)`; `send(&tx, v)` and `recv(&mut rx)`; `spawn { ... }` with structural `Send`
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`
-- **Stdlib**: `stdlib/io.ion` and `stdlib/fmt.ion` for safe stdout output
+- **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, and `stdlib/fs.ion` for stdout and file read
 
 Known limitations: [ION_SPEC.md section 10.2](ION_SPEC.md#102-known-limitations).
 

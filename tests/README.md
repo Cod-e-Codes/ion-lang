@@ -189,6 +189,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_io_print_int.ion` - `io::print_int` decimal output
 - `test_fmt_int_to_string.ion` - `fmt::int_to_string` conversion
 - `test_fmt_println_int.ion` - `fmt::println_int` via stdlib merge; codegen uses `io_print_int` in `fmt_print_int`
+- `test_fs_read.ion` - `fs::read_to_string` reads `fixtures/small.txt` (exit 80)
 
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors
