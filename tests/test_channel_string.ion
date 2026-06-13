@@ -1,0 +1,7 @@
+fn main() -> int {
+    let (tx, rx): (Sender<String>, Receiver<String>) = channel<String>();
+    let a = String::from("abc");
+    send(&tx, a);
+    let s: String = recv(&mut rx);
+    return s.len();
+}

@@ -19,6 +19,13 @@ enum BoundsCheck {
     SliceLen { by_ref: bool },
 }
 
+fn is_send_value_lvalue(expr: &IREexpr) -> bool {
+    matches!(
+        expr,
+        IREexpr::Var(_) | IREexpr::FieldAccess { .. } | IREexpr::Index { .. }
+    )
+}
+
 #[derive(Clone)]
 struct ScopeBinding {
     name: String,
@@ -1843,9 +1850,7 @@ impl Codegen {
                         // This avoids statement expression syntax issues with comma operator
                         self.write_indent();
                         self.write("{ ");
-                        // Create temporary variable for value if it's a literal
-                        let needs_temp =
-                            matches!(value.as_ref(), IREexpr::Lit(_) | IREexpr::BoolLiteral(_));
+                        let needs_temp = !is_send_value_lvalue(value);
                         if needs_temp {
                             self.write(&format!("{} _send_val = ", self.type_to_c(value_type)));
                             self.generate_expr(value);
@@ -2039,9 +2044,7 @@ impl Codegen {
                 // value needs to be in a variable (can't take address of literal)
                 // When used as a statement, we use a statement expression to handle temp variables
                 self.write("({ ");
-                // Create temporary variable for value if it's a literal
-                let needs_temp =
-                    matches!(value.as_ref(), IREexpr::Lit(_) | IREexpr::BoolLiteral(_));
+                let needs_temp = !is_send_value_lvalue(value);
                 if needs_temp {
                     self.write(&format!("{} _send_val = ", self.type_to_c(value_type)));
                     self.generate_expr(value);

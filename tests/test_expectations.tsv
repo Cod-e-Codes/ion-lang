@@ -86,6 +86,8 @@ test_method_call_mut.ion	run	0
 test_method_call_generic.ion	run	0			
 test_method_call_chaining.ion	run	0			
 test_channel_split.ion	run	0			
+test_channel_string.ion	run	3			
+test_channel_send_call_expr.ion	run	7			
 test_enum_struct_variant.ion	run	42			
 test_for_loop.ion	run	0			
 test_escape_sequences.ion	run	0			
@@ -134,7 +136,7 @@ test_string_eq.ion	cgen			ion_string_equals
 test_array_to_slice_coercion.ion	cgen			(ion_slice_int){	
 test_array_to_slice_let.ion	cgen			__ion_arr_slice	
 test_slice_bounds_codegen.ion	cgen			Slice index out of bounds	
-test_unsafe_slice_indexing.ion	cgen			s->data\[0\]	Slice index out of bounds
+test_unsafe_slice_indexing.ion	cgen			s->data[0]	Slice index out of bounds
 test_array_bounds_panic.ion	cgen			ion_panic("Array index out of bounds")	
 test_slice_bounds_panic.ion	cgen			ion_panic("Slice index out of bounds")	
 test_fmt_println_int.ion	cgen			io_print_int	^[[:space:]]+print_int\(

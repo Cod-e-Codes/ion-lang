@@ -731,6 +731,17 @@ impl IRBuilder {
     }
 }
 
+fn resolve_recv_elem_type(channel: &Expr, ctx: &LoweringContext) -> Type {
+    let receiver_type = match channel {
+        Expr::Ref(r) => ctx.resolve_expr_type(&r.inner),
+        _ => ctx.resolve_expr_type(channel),
+    };
+    match receiver_type {
+        Some(Type::Receiver { elem_type }) => (*elem_type).clone(),
+        _ => Type::Int,
+    }
+}
+
 fn infer_send_value_type(expr: &Expr) -> Type {
     match expr {
         Expr::Lit(_) => Type::Int,
@@ -774,7 +785,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
         }
         Expr::Recv(recv_expr) => IREexpr::Recv {
             channel: Box::new(build_expr_with_ctx(&recv_expr.channel, ctx)),
-            elem_type: Type::Int,
+            elem_type: resolve_recv_elem_type(&recv_expr.channel, ctx),
         },
         Expr::StructLit(lit) => IREexpr::StructLit {
             type_name: lit.type_name.clone(),

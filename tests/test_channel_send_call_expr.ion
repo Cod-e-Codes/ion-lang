@@ -1,0 +1,9 @@
+fn make() -> int {
+    return 7;
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    send(&tx, make());
+    return recv(&mut rx);
+}
