@@ -668,6 +668,22 @@ if [ -f "test_array_assignment.ion" ]; then
     test_file "test_array_assignment.ion" 0 || true
 fi
 
+if [ -f "test_hex_literals.ion" ]; then
+    test_file "test_hex_literals.ion" 255 || true
+fi
+
+if [ -f "test_bin_literals.ion" ]; then
+    test_file "test_bin_literals.ion" 170 || true
+fi
+
+if [ -f "test_compound_assign.ion" ]; then
+    test_file "test_compound_assign.ion" 42 || true
+fi
+
+if [ -f "test_loop_basic.ion" ]; then
+    test_file "test_loop_basic.ion" 17 || true
+fi
+
 # Multi-file compilation
 if [ -f "test_multifile.ion" ] && [ -f "utils.ion" ]; then
     test_count=$((test_count + 1))

@@ -1,0 +1,10 @@
+fn main() -> int {
+    let mut n = 0;
+    loop {
+        n += 1;
+        if n == 17 {
+            break;
+        }
+    }
+    return n;
+}

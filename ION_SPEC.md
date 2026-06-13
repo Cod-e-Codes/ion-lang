@@ -103,7 +103,7 @@ Examples: `main`, `Packet`, `_tmp1`, `read_file`.
 
 The following keywords are reserved and cannot be used as identifiers:
 
-`fn`, `let`, `mut`, `struct`, `enum`, `type`, `box`, `if`, `else`, `while`, `for`, `match`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `true`, `false`, `nil`, `import`, `as`, `pub`, `extern`, `unsafe`.
+`fn`, `let`, `mut`, `struct`, `enum`, `type`, `box`, `if`, `else`, `while`, `for`, `loop`, `match`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `true`, `false`, `nil`, `import`, `as`, `pub`, `extern`, `unsafe`.
 
 Note: The `as` keyword is used both for module aliases (`import "file.ion" as name;`) and for type casting (`expr as Type`).
 
@@ -166,7 +166,7 @@ fn main() -> int {
 
 Ion supports:
 
-- **Integer literals** (e.g., `0`, `42`) – implemented
+- **Integer literals** (e.g., `0`, `42`, `0xFF`, `0b1010`) – implemented
 - **String literals**: `"..."` with complete escape sequence support
   - `\r` (carriage return), `\n` (newline), `\t` (tab), `\0` (null)
   - `\\` (backslash), `\"` (double quote), `\'` (single quote)
@@ -184,7 +184,7 @@ Ion uses the following operators:
 - Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - Logical: `&&`, `||`, `!`
 - Bitwise: `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
-- Assignment: `=`
+- Assignment: `=`, `+=` (compound assignment desugars to `x = x + e` for supported `+` types)
 - Type casting: `as` keyword for explicit type conversions
 - Field access: `.`
 - Address-of / borrow: `&` (borrow shared) and `&mut` (borrow exclusive)
@@ -630,9 +630,10 @@ The inference engine is intentionally limited:
 
 #### 4.7 Control Flow Extensions
 
+- **`loop { ... }`**: infinite loop; use `break` to exit and `continue` for the next iteration.
 - **`for identifier in expr`**: iterates over `Vec<T>`, `[T; N]`, or `String`. Loop variable type is `T` for vectors and arrays, `u8` for strings (raw bytes).
-- **`break`**: exits the innermost enclosing `while` or `for` loop.
-- **`continue`**: skips to the next iteration of the innermost enclosing `while` or `for` loop. In `for` loops, the step (index increment) still runs.
+- **`break`**: exits the innermost enclosing `while`, `loop`, or `for` loop.
+- **`continue`**: skips to the next iteration of the innermost enclosing `while`, `loop`, or `for` loop. In `for` loops, the step (index increment) still runs.
 - Both `break` and `continue` are compile errors outside of a loop body.
 - **Match guards**: `pattern if expr => { ... }` where `expr` must be `bool`.
 - **Struct-style enum variants**: `enum E { Ok { value: int }; }` with matching literals and patterns.

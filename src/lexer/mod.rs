@@ -30,6 +30,7 @@ pub enum TokenKind {
     Mut,
     While,
     For,
+    Loop,
     Match,
     Box,
     Vec,
@@ -45,6 +46,7 @@ pub enum TokenKind {
 
     // Operators
     Plus,         // +
+    PlusEquals,   // +=
     Minus,        // -
     Star,         // *
     Slash,        // /
@@ -138,7 +140,12 @@ impl Lexer {
             let kind = match self.peek() {
                 Some('+') => {
                     self.advance();
-                    TokenKind::Plus
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        TokenKind::PlusEquals
+                    } else {
+                        TokenKind::Plus
+                    }
                 }
                 Some('-') => {
                     self.advance();
@@ -377,6 +384,22 @@ impl Lexer {
 
     fn read_number(&mut self) -> Result<TokenKind, String> {
         let start_pos = self.position;
+
+        if self.peek() == Some('0') {
+            self.advance();
+            match self.peek() {
+                Some('x') | Some('X') => {
+                    self.advance();
+                    return self.read_radix_digits(16, "hex");
+                }
+                Some('b') | Some('B') => {
+                    self.advance();
+                    return self.read_radix_digits(2, "binary");
+                }
+                _ => {}
+            }
+        }
+
         let mut integer_part = 0i64;
         let mut has_decimal = false;
         let mut fractional_part = 0.0;
@@ -483,6 +506,36 @@ impl Lexer {
         } else {
             // It's an integer
             Ok(TokenKind::Integer(integer_part))
+        }
+    }
+
+    fn read_radix_digits(&mut self, radix: u32, name: &str) -> Result<TokenKind, String> {
+        let start_pos = self.position;
+        let mut value = 0i64;
+        while let Some(c) = self.peek() {
+            if let Some(digit) = c.to_digit(radix) {
+                value = value
+                    .checked_mul(radix as i64)
+                    .and_then(|v| v.checked_add(digit as i64))
+                    .ok_or_else(|| {
+                        format!(
+                            "Integer overflow at line {}, column {}",
+                            self.line, self.column
+                        )
+                    })?;
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        if self.position == start_pos {
+            Err(format!(
+                "Expected {name} digit at line {}, column {}",
+                self.line, self.column
+            ))
+        } else {
+            Ok(TokenKind::Integer(value))
         }
     }
 
@@ -681,6 +734,7 @@ impl Lexer {
             "mut" => TokenKind::Mut,
             "while" => TokenKind::While,
             "for" => TokenKind::For,
+            "loop" => TokenKind::Loop,
             "match" => TokenKind::Match,
             "Box" => TokenKind::Box,
             "Vec" => TokenKind::Vec,
@@ -739,6 +793,23 @@ mod tests {
         assert_eq!(tokens[0].kind, TokenKind::Integer(0));
         assert_eq!(tokens[1].kind, TokenKind::Integer(42));
         assert_eq!(tokens[2].kind, TokenKind::Integer(100));
+    }
+
+    #[test]
+    fn test_hex_bin_literals() {
+        let mut lexer = Lexer::new("0xFF 0x10 0b1010 0B11");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Integer(255));
+        assert_eq!(tokens[1].kind, TokenKind::Integer(16));
+        assert_eq!(tokens[2].kind, TokenKind::Integer(10));
+        assert_eq!(tokens[3].kind, TokenKind::Integer(3));
+    }
+
+    #[test]
+    fn test_plus_equals() {
+        let mut lexer = Lexer::new("x += 1");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[1].kind, TokenKind::PlusEquals);
     }
 
     #[test]

@@ -330,6 +330,7 @@ impl Parser {
                 Stmt::Spawn(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
+                Stmt::Loop(s) => s.span,
                 Stmt::For(s) => s.span,
                 Stmt::UnsafeBlock(s) => s.span,
             })
@@ -934,6 +935,10 @@ impl Parser {
                 let stmt = self.parse_while_stmt()?;
                 Ok(Stmt::While(stmt))
             }
+            TokenKind::Loop => {
+                let stmt = self.parse_loop_stmt()?;
+                Ok(Stmt::Loop(stmt))
+            }
             TokenKind::For => {
                 let stmt = self.parse_for_stmt()?;
                 Ok(Stmt::For(stmt))
@@ -972,6 +977,7 @@ impl Parser {
                 Stmt::Spawn(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
+                Stmt::Loop(s) => s.span,
                 Stmt::For(s) => s.span,
                 Stmt::UnsafeBlock(s) => s.span,
             })
@@ -979,6 +985,33 @@ impl Parser {
         let span = while_token_span.merge(&end_span);
 
         Ok(WhileStmt { cond, body, span })
+    }
+
+    fn parse_loop_stmt(&mut self) -> Result<LoopStmt, ParseError> {
+        let loop_token_span = Span::from_token(self.expect(TokenKind::Loop)?);
+        let body = self.parse_block()?;
+
+        let end_span = body
+            .statements
+            .last()
+            .map(|s| match s {
+                Stmt::Let(s) => s.span,
+                Stmt::Return(s) => s.span,
+                Stmt::Break(s) => s.span,
+                Stmt::Continue(s) => s.span,
+                Stmt::Expr(s) => s.expr.span(),
+                Stmt::Defer(s) => s.span,
+                Stmt::Spawn(s) => s.span,
+                Stmt::If(s) => s.span,
+                Stmt::While(s) => s.span,
+                Stmt::Loop(s) => s.span,
+                Stmt::For(s) => s.span,
+                Stmt::UnsafeBlock(s) => s.span,
+            })
+            .unwrap_or(loop_token_span);
+        let span = loop_token_span.merge(&end_span);
+
+        Ok(LoopStmt { body, span })
     }
 
     fn parse_for_stmt(&mut self) -> Result<ForStmt, ParseError> {
@@ -1035,6 +1068,7 @@ impl Parser {
                 Stmt::Spawn(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
+                Stmt::Loop(s) => s.span,
                 Stmt::For(s) => s.span,
                 Stmt::UnsafeBlock(s) => s.span,
             })
@@ -1082,6 +1116,7 @@ impl Parser {
                         Stmt::Spawn(s) => s.span,
                         Stmt::If(s) => s.span,
                         Stmt::While(s) => s.span,
+                        Stmt::Loop(s) => s.span,
                         Stmt::For(s) => s.span,
                         Stmt::UnsafeBlock(s) => s.span,
                     })
@@ -1296,6 +1331,7 @@ impl Parser {
                     Stmt::Spawn(s) => s.span,
                     Stmt::If(s) => s.span,
                     Stmt::While(s) => s.span,
+                    Stmt::Loop(s) => s.span,
                     Stmt::For(s) => s.span,
                     Stmt::UnsafeBlock(s) => s.span,
                 })
@@ -1314,6 +1350,7 @@ impl Parser {
                     Stmt::Spawn(s) => s.span,
                     Stmt::If(s) => s.span,
                     Stmt::While(s) => s.span,
+                    Stmt::Loop(s) => s.span,
                     Stmt::For(s) => s.span,
                     Stmt::UnsafeBlock(s) => s.span,
                 })
@@ -1478,6 +1515,7 @@ impl Parser {
                 Stmt::Spawn(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
+                Stmt::Loop(s) => s.span,
                 Stmt::For(s) => s.span,
                 Stmt::UnsafeBlock(s) => s.span,
             })
@@ -1505,6 +1543,7 @@ impl Parser {
                 Stmt::Spawn(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
+                Stmt::Loop(s) => s.span,
                 Stmt::For(s) => s.span,
                 Stmt::UnsafeBlock(s) => s.span,
             })
@@ -1537,7 +1576,33 @@ impl Parser {
             return Ok(lhs);
         }
 
-        if matches!(self.tokens[equals_idx].kind, TokenKind::Equals) {
+        if matches!(self.tokens[equals_idx].kind, TokenKind::PlusEquals) {
+            let start_span = lhs.span();
+            self.advance(); // consume '+='
+
+            let rhs = self.parse_assignment()?;
+            let end_span = rhs.span();
+            let span = start_span.merge(&end_span);
+
+            match &lhs {
+                Expr::Var(_) | Expr::Index(_) => {
+                    let add_expr = Expr::BinOp(BinOpExpr {
+                        op: BinOp::Add,
+                        left: Box::new(lhs.clone()),
+                        right: Box::new(rhs),
+                        span,
+                    });
+                    Ok(Expr::Assign(AssignExpr {
+                        target: Box::new(lhs),
+                        value: Box::new(add_expr),
+                        span,
+                    }))
+                }
+                _ => Err(ParseError::Message(
+                    "Assignment target must be a variable or indexed expression".to_string(),
+                )),
+            }
+        } else if matches!(self.tokens[equals_idx].kind, TokenKind::Equals) {
             // This is an assignment
             let start_span = lhs.span();
             self.advance(); // consume '='
@@ -1930,6 +1995,7 @@ impl Parser {
                 // Statement-starting keywords - must stop immediately
                 TokenKind::If
                 | TokenKind::While
+                | TokenKind::Loop
                 | TokenKind::For
                 | TokenKind::Let
                 | TokenKind::Return
@@ -1983,6 +2049,7 @@ impl Parser {
                         &self.tokens[field_idx].kind,
                         TokenKind::If
                             | TokenKind::While
+                            | TokenKind::Loop
                             | TokenKind::For
                             | TokenKind::Let
                             | TokenKind::Return
@@ -2491,6 +2558,7 @@ impl Parser {
                         match &self.tokens[token_after_brace_idx].kind {
                             TokenKind::If
                             | TokenKind::While
+                            | TokenKind::Loop
                             | TokenKind::For
                             | TokenKind::Let
                             | TokenKind::Return

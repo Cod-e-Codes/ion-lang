@@ -10,8 +10,8 @@ use tower_lsp::{Client, LanguageServer};
 
 const KEYWORDS: &[&str] = &[
     "fn", "let", "mut", "struct", "enum", "if", "else", "return", "break", "continue", "while",
-    "for", "match", "spawn", "defer", "unsafe", "pub", "import", "extern", "type", "as", "true",
-    "false", "int", "bool", "String", "Vec", "Box", "channel", "send", "recv",
+    "for", "loop", "match", "spawn", "defer", "unsafe", "pub", "import", "extern", "type", "as",
+    "true", "false", "int", "bool", "String", "Vec", "Box", "channel", "send", "recv",
 ];
 
 const BUILTINS: &[&str] = &[

@@ -32,7 +32,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.ion",
-                    "match": "\\b(fn|let|mut|struct|enum|type|if|else|while|for|match|return|break|continue|defer|spawn|unsafe|pub|extern|as|in)\\b"
+                    "match": "\\b(fn|let|mut|struct|enum|type|if|else|while|for|loop|match|return|break|continue|defer|spawn|unsafe|pub|extern|as|in)\\b"
                 }
             ]
         },

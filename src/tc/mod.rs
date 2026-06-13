@@ -1617,6 +1617,40 @@ impl TypeChecker {
 
                 self.variables = merged;
             }
+            Stmt::Loop(loop_stmt) => {
+                let before = self.variables.clone();
+                self.loop_depth += 1;
+                for inner in &loop_stmt.body.statements {
+                    self.check_stmt(inner)?;
+                }
+                self.loop_depth -= 1;
+                let body_env = self.variables.clone();
+
+                let mut merged = before.clone();
+                for (name, prev_info) in before.iter() {
+                    let body_state = body_env
+                        .get(name)
+                        .map(|info| info.state)
+                        .unwrap_or(prev_info.state);
+
+                    let merged_state = match (prev_info.state, body_state) {
+                        (OwnershipState::Valid, OwnershipState::Valid) => OwnershipState::Valid,
+                        (OwnershipState::Moved, OwnershipState::Moved) => OwnershipState::Moved,
+                        _ => {
+                            return Err(TypeCheckError::UseAfterMove {
+                                name: name.clone(),
+                                span: loop_stmt.span,
+                            });
+                        }
+                    };
+
+                    if let Some(info) = merged.get_mut(name) {
+                        info.state = merged_state;
+                    }
+                }
+
+                self.variables = merged;
+            }
             Stmt::For(for_stmt) => {
                 // Desugar: for x in container { body }
                 // to:
@@ -4260,6 +4294,10 @@ fn collect_block_var_refs(
                 collect_expr_var_refs(&while_stmt.cond, refs, locals);
                 let mut body_locals = locals.clone();
                 collect_block_var_refs(&while_stmt.body, refs, &mut body_locals);
+            }
+            Stmt::Loop(loop_stmt) => {
+                let mut body_locals = locals.clone();
+                collect_block_var_refs(&loop_stmt.body, refs, &mut body_locals);
             }
             Stmt::UnsafeBlock(unsafe_stmt) => {
                 collect_block_var_refs(&unsafe_stmt.body, refs, locals);

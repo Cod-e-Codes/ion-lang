@@ -139,6 +139,7 @@ pub enum Stmt {
     Spawn(SpawnStmt),
     If(IfStmt),
     While(WhileStmt),
+    Loop(LoopStmt),
     For(ForStmt),
     UnsafeBlock(UnsafeBlockStmt),
 }
@@ -193,6 +194,12 @@ pub struct IfStmt {
 #[derive(Debug, Clone)]
 pub struct WhileStmt {
     pub cond: Expr,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoopStmt {
     pub body: Block,
     pub span: Span,
 }

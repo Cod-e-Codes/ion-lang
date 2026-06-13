@@ -157,6 +157,13 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_comparison_operators.ion` - Full comparison operators (`<=`, `>=`)
 - `test_type_cast.ion` - Type casting with `as` keyword
 - `test_array_assignment.ion` - Array element assignment (`arr[i] = value`)
+
+### Ergonomics (literals, compound assign, loop)
+- `test_hex_literals.ion` - Hex integer literals (`0xFF`)
+- `test_bin_literals.ion` - Binary integer literals (`0b10101010`)
+- `test_compound_assign.ion` - Compound assignment (`+=`)
+- `test_loop_basic.ion` - Infinite `loop { }` with `break`
+
 - `test_io_print_str.ion` - Safe I/O library: `print_str()` function
 - `test_io_print.ion` - Safe I/O library: `print()` function for String
 - `test_io_println.ion` - Safe I/O library: `println()` function for String

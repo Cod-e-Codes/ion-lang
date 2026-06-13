@@ -473,6 +473,15 @@ impl IRBuilder {
                     continue_label: None,
                 }));
             }
+            Stmt::Loop(loop_stmt) => {
+                let body = Self::lower_ast_block("loop_body", &loop_stmt.body, ctx);
+                out.push(IRStmt::While(IRWhile {
+                    cond: IREexpr::BoolLiteral(true),
+                    body,
+                    step: None,
+                    continue_label: None,
+                }));
+            }
             Stmt::For(for_stmt) => {
                 let container_var = format!("__for_container_{}", for_stmt.span.start);
                 let index_var = format!("__for_i_{}", for_stmt.span.start);
