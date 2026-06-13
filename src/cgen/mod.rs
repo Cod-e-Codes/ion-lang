@@ -1213,6 +1213,66 @@ impl Codegen {
         }
     }
 
+    fn lookup_binding_type(&self, name: &str) -> Option<Type> {
+        for frame in self.scope_stack.iter().rev() {
+            if let Some(binding) = frame.bindings.iter().find(|b| b.name == name) {
+                return Some(binding.ty.clone());
+            }
+        }
+        None
+    }
+
+    /// Mirror tc `check_expr_for_moves`: mark bindings consumed by this expression.
+    fn mark_moves_in_expr(&mut self, expr: &IREexpr) {
+        match expr {
+            IREexpr::Var(name) => {
+                if let Some(ty) = self.lookup_binding_type(name)
+                    && self.needs_drop(&ty)
+                {
+                    self.scope_mark_moved(name);
+                }
+            }
+            IREexpr::StructLit { fields, .. } => {
+                for field in fields {
+                    self.mark_moves_in_expr(&field.value);
+                }
+            }
+            IREexpr::EnumLit {
+                args,
+                named_fields,
+                ..
+            } => {
+                for arg in args {
+                    self.mark_moves_in_expr(arg);
+                }
+                if let Some(named_fields) = named_fields {
+                    for (_, value) in named_fields {
+                        self.mark_moves_in_expr(value);
+                    }
+                }
+            }
+            IREexpr::Send { value, .. } => self.mark_moves_in_expr(value),
+            IREexpr::Call { args, .. } => {
+                for arg in args {
+                    self.mark_moves_in_expr(arg);
+                }
+            }
+            IREexpr::ArrayLiteral { elements, repeat, .. } => {
+                for elem in elements {
+                    self.mark_moves_in_expr(elem);
+                }
+                if let Some((value, _)) = repeat {
+                    self.mark_moves_in_expr(value);
+                }
+            }
+            IREexpr::Cast { expr, .. } => self.mark_moves_in_expr(expr),
+            IREexpr::Assign { value, .. } => self.mark_moves_in_expr(value),
+            IREexpr::AssignIndex { value, .. } => self.mark_moves_in_expr(value),
+            IREexpr::Match { expr, .. } => self.mark_moves_in_expr(expr),
+            _ => {}
+        }
+    }
+
     fn scope_emit_exit(&mut self) {
         let Some(frame) = self.scope_stack.pop() else {
             return;
@@ -1752,10 +1812,8 @@ impl Codegen {
 
                 self.writeln(";");
                 self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
-                if let Some(IREexpr::Var(src)) = &let_stmt.init
-                    && self.needs_drop(&let_stmt.ty)
-                {
-                    self.scope_mark_moved(src);
+                if let Some(init) = &let_stmt.init {
+                    self.mark_moves_in_expr(init);
                 }
             }
             IRStmt::Return(ret) => {
@@ -1820,8 +1878,8 @@ impl Codegen {
                         }
                     }
                 }
-                if let Some(IREexpr::Var(name)) = &ret.value {
-                    self.scope_mark_moved(name);
+                if let Some(value) = &ret.value {
+                    self.mark_moves_in_expr(value);
                 }
                 self.scope_emit_return_unwind();
                 self.write_indent();
@@ -1848,6 +1906,7 @@ impl Codegen {
                         arms,
                     } => {
                         self.generate_match_block(match_expr, enum_type, arms);
+                        self.mark_moves_in_expr(match_expr);
                     }
                     IREexpr::Send {
                         channel,
@@ -1883,19 +1942,18 @@ impl Codegen {
                         }
                         self.write("); }");
                         self.writeln("");
-                        if let IREexpr::Var(var_name) = value.as_ref() {
-                            self.scope_mark_moved(var_name);
-                        }
+                        self.mark_moves_in_expr(value.as_ref());
                     }
                     _ => {
                         self.write_indent();
                         self.generate_expr(expr);
                         self.writeln(";");
+                        self.mark_moves_in_expr(expr);
                     }
                 }
             }
-            IRStmt::Defer(_) => {
-                // Defers are attached to IRBlock and emitted at scope exit.
+            IRStmt::Defer(expr) => {
+                self.mark_moves_in_expr(expr);
             }
             IRStmt::Spawn(spawn) => {
                 self.generate_spawn(spawn);

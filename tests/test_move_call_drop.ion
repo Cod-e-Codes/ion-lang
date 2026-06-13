@@ -1,0 +1,15 @@
+fn take_string(s: String) -> int {
+    if String::len(&s) != 5 {
+        return 1;
+    }
+    return 0;
+}
+
+fn main() -> int {
+    let msg: String = String::from("hello");
+    let code: int = take_string(msg);
+    if code != 0 {
+        return 10;
+    }
+    return 42;
+}

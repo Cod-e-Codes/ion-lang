@@ -34,17 +34,18 @@ static HttpClass HttpClass_ServerError_new() {
 extern int write(int fd, uint8_t* buf, int count);
 
 ion_string_t* line_at(int index);
+int parse_status_from_line(ion_string_t* line);
 int parse_line_at(int index);
 int scan_logs(ion_sender_t code_tx, int expected);
 int valid_log_count(void);
 int main(void);
-void fmt_print_int(int n);
-void fmt_println_int(int n);
-ion_string_t* fmt_int_to_string(int n);
 void io_print(ion_string_t* s);
 void io_println(ion_string_t* s);
 void io_print_str(uint8_t* s, int len);
 void io_print_int(int n);
+void fmt_print_int(int n);
+void fmt_println_int(int n);
+ion_string_t* fmt_int_to_string(int n);
 ion_string_t* line_at(int index) {
     ion_string_t* ret_val = 0;
     if (index == 0) {
@@ -74,16 +75,15 @@ epilogue:
         return ret_val;
 }
 
-int parse_line_at(int index) {
+int parse_status_from_line(ion_string_t* line) {
     int ret_val = 0;
-    ion_string_t* line = line_at(index);
     int last = 0;
     int current = 0;
     int in_run = 0;
-    ion_string_t* __for_container_987 = line;
-    int __for_i_987 = 0;
-    while (__for_i_987 < ((__for_container_987) ? (int)((__for_container_987)->len) : 0)) {
-        uint8_t ch = ({ int __ion_idx_0 = __for_i_987; (__ion_idx_0 >= 0 && __ion_idx_0 < __for_container_987->len) ? __for_container_987->data[__ion_idx_0] : (ion_panic("String index out of bounds"), (uint8_t)0); });
+    ion_string_t* __for_container_895 = line;
+    int __for_i_895 = 0;
+    while (__for_i_895 < ((__for_container_895) ? (int)((__for_container_895)->len) : 0)) {
+        uint8_t ch = ({ int __ion_idx_0 = __for_i_895; (__ion_idx_0 >= 0 && __ion_idx_0 < __for_container_895->len) ? __for_container_895->data[__ion_idx_0] : (ion_panic("String index out of bounds"), (uint8_t)0); });
         if ((ch >= 48) && (ch <= 57)) {
             if (!in_run) {
                 current = 0;
@@ -96,14 +96,23 @@ int parse_line_at(int index) {
                 in_run = 0;
             }
         }
-        __for_step_987:
-        __for_i_987 = (__for_i_987 + 1);
+        __for_step_895:
+        __for_i_895 = (__for_i_895 + 1);
     }
     if (in_run) {
         last = current;
     }
     ret_val = last;
-    if (__for_container_987) { ion_string_free(__for_container_987); }
+    if (__for_container_895) { ion_string_free(__for_container_895); }
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
+int parse_line_at(int index) {
+    int ret_val = 0;
+    ion_string_t* line = line_at(index);
+    ret_val = parse_status_from_line(line);
     goto epilogue;
 epilogue:
         return ret_val;
@@ -114,12 +123,12 @@ int scan_logs(ion_sender_t code_tx, int expected) {
     int auth_failures = 0;
     int parsed = 0;
     int log_indices[5] = {0, 1, 2, 3, 4};
-    int __for_i_1573 = 0;
-    while (__for_i_1573 < 5) {
-        int index = ({ int __ion_idx_1 = __for_i_1573; (__ion_idx_1 >= 0 && __ion_idx_1 < 5) ? log_indices[__ion_idx_1] : (ion_panic("Array index out of bounds"), log_indices[0]); });
+    int __for_i_1666 = 0;
+    while (__for_i_1666 < 5) {
+        int index = ({ int __ion_idx_1 = __for_i_1666; (__ion_idx_1 >= 0 && __ion_idx_1 < 5) ? log_indices[__ion_idx_1] : (ion_panic("Array index out of bounds"), log_indices[0]); });
         int code = parse_line_at(index);
         if (code == 0) {
-            goto __for_step_1573;
+            goto __for_step_1666;
         }
         if (parsed >= expected) {
             break;
@@ -151,8 +160,8 @@ int scan_logs(ion_sender_t code_tx, int expected) {
         }
         { ion_channel_send(&code_tx, &code); }
         parsed = (parsed + 1);
-        __for_step_1573:
-        __for_i_1573 = (__for_i_1573 + 1);
+        __for_step_1666:
+        __for_i_1666 = (__for_i_1666 + 1);
     }
     ret_val = auth_failures;
     goto epilogue;
@@ -191,13 +200,11 @@ int main(void) {
     if (server_errors != 1) {
         ret_val = 1;
         if (done_rx_mut.channel) { ion_channel_handle_drop(done_rx_mut.channel); }
-        if (code_tx.channel) { ion_channel_handle_drop(code_tx.channel); }
         goto epilogue;
     }
     if (auth_failures != 1) {
         ret_val = 2;
         if (done_rx_mut.channel) { ion_channel_handle_drop(done_rx_mut.channel); }
-        if (code_tx.channel) { ion_channel_handle_drop(code_tx.channel); }
         goto epilogue;
     }
     ion_string_t* server_line = fmt_int_to_string(server_errors);
@@ -205,103 +212,7 @@ int main(void) {
     ion_string_t* auth_line = fmt_int_to_string(auth_failures);
     io_println(auth_line);
     ret_val = 0;
-    if (auth_line) { ion_string_free(auth_line); }
-    if (server_line) { ion_string_free(server_line); }
     if (done_rx_mut.channel) { ion_channel_handle_drop(done_rx_mut.channel); }
-    if (code_tx.channel) { ion_channel_handle_drop(code_tx.channel); }
-    goto epilogue;
-epilogue:
-        return ret_val;
-}
-
-void fmt_print_int(int n) {
-    io_print_int(n);
-epilogue:
-        return;
-}
-
-void fmt_println_int(int n) {
-    io_print_int(n);
-    {
-        int _newline = write(1, "\n", 1);
-    }
-epilogue:
-        return;
-}
-
-ion_string_t* fmt_int_to_string(int n) {
-    ion_string_t* ret_val = 0;
-    uint8_t buf[12] = {0};
-    int len = 0;
-    int negative = 0;
-    int value = n;
-    ion_string_t* result = ion_string_new();
-    if (value == 0) {
-        ret_val = ion_string_from_literal("0", 1);
-        if (result) { ion_string_free(result); }
-        goto epilogue;
-    }
-    if (value < 0) {
-        negative = 1;
-        if (value == (-2147483648)) {
-            ret_val = ion_string_from_literal("-2147483648", 11);
-            if (result) { ion_string_free(result); }
-            goto epilogue;
-        }
-        value = (0 - value);
-    }
-    while (value > 0) {
-        int digit = (value % 10);
-        buf[len] = (uint8_t)(48 + digit);
-        len = (len + 1);
-        value = (value / 10);
-    }
-    if (negative) {
-        ion_string_push_str(result, "-", 1);
-    }
-    int i = (len - 1);
-    while (i >= 0) {
-        uint8_t ch = ({ int __ion_idx_2 = i; (__ion_idx_2 >= 0 && __ion_idx_2 < 12) ? buf[__ion_idx_2] : (ion_panic("Array index out of bounds"), buf[0]); });
-        if (ch == 48) {
-            ion_string_push_str(result, "0", 1);
-        } else {
-            if (ch == 49) {
-                ion_string_push_str(result, "1", 1);
-            } else {
-                if (ch == 50) {
-                    ion_string_push_str(result, "2", 1);
-                } else {
-                    if (ch == 51) {
-                        ion_string_push_str(result, "3", 1);
-                    } else {
-                        if (ch == 52) {
-                            ion_string_push_str(result, "4", 1);
-                        } else {
-                            if (ch == 53) {
-                                ion_string_push_str(result, "5", 1);
-                            } else {
-                                if (ch == 54) {
-                                    ion_string_push_str(result, "6", 1);
-                                } else {
-                                    if (ch == 55) {
-                                        ion_string_push_str(result, "7", 1);
-                                    } else {
-                                        if (ch == 56) {
-                                            ion_string_push_str(result, "8", 1);
-                                        } else {
-                                            ion_string_push_str(result, "9", 1);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        i = (i - 1);
-    }
-    ret_val = result;
     goto epilogue;
 epilogue:
         return ret_val;
@@ -364,8 +275,8 @@ void io_print_int(int n) {
     }
     int i = 0;
     while (i < (len / 2)) {
-        uint8_t tmp = ({ int __ion_idx_3 = i; (__ion_idx_3 >= 0 && __ion_idx_3 < 12) ? buf[__ion_idx_3] : (ion_panic("Array index out of bounds"), buf[0]); });
-        buf[i] = ({ int __ion_idx_4 = ((len - 1) - i); (__ion_idx_4 >= 0 && __ion_idx_4 < 12) ? buf[__ion_idx_4] : (ion_panic("Array index out of bounds"), buf[0]); });
+        uint8_t tmp = ({ int __ion_idx_2 = i; (__ion_idx_2 >= 0 && __ion_idx_2 < 12) ? buf[__ion_idx_2] : (ion_panic("Array index out of bounds"), buf[0]); });
+        buf[i] = ({ int __ion_idx_3 = ((len - 1) - i); (__ion_idx_3 >= 0 && __ion_idx_3 < 12) ? buf[__ion_idx_3] : (ion_panic("Array index out of bounds"), buf[0]); });
         buf[((len - 1) - i)] = tmp;
         i = (i + 1);
     }
@@ -379,6 +290,99 @@ void io_print_int(int n) {
     }
 epilogue:
         return;
+}
+
+void fmt_print_int(int n) {
+    io_print_int(n);
+epilogue:
+        return;
+}
+
+void fmt_println_int(int n) {
+    io_print_int(n);
+    {
+        int _newline = write(1, "\n", 1);
+    }
+epilogue:
+        return;
+}
+
+ion_string_t* fmt_int_to_string(int n) {
+    ion_string_t* ret_val = 0;
+    uint8_t buf[12] = {0};
+    int len = 0;
+    int negative = 0;
+    int value = n;
+    ion_string_t* result = ion_string_new();
+    if (value == 0) {
+        ret_val = ion_string_from_literal("0", 1);
+        if (result) { ion_string_free(result); }
+        goto epilogue;
+    }
+    if (value < 0) {
+        negative = 1;
+        if (value == (-2147483648)) {
+            ret_val = ion_string_from_literal("-2147483648", 11);
+            if (result) { ion_string_free(result); }
+            goto epilogue;
+        }
+        value = (0 - value);
+    }
+    while (value > 0) {
+        int digit = (value % 10);
+        buf[len] = (uint8_t)(48 + digit);
+        len = (len + 1);
+        value = (value / 10);
+    }
+    if (negative) {
+        ion_string_push_str(result, "-", 1);
+    }
+    int i = (len - 1);
+    while (i >= 0) {
+        uint8_t ch = ({ int __ion_idx_4 = i; (__ion_idx_4 >= 0 && __ion_idx_4 < 12) ? buf[__ion_idx_4] : (ion_panic("Array index out of bounds"), buf[0]); });
+        if (ch == 48) {
+            ion_string_push_str(result, "0", 1);
+        } else {
+            if (ch == 49) {
+                ion_string_push_str(result, "1", 1);
+            } else {
+                if (ch == 50) {
+                    ion_string_push_str(result, "2", 1);
+                } else {
+                    if (ch == 51) {
+                        ion_string_push_str(result, "3", 1);
+                    } else {
+                        if (ch == 52) {
+                            ion_string_push_str(result, "4", 1);
+                        } else {
+                            if (ch == 53) {
+                                ion_string_push_str(result, "5", 1);
+                            } else {
+                                if (ch == 54) {
+                                    ion_string_push_str(result, "6", 1);
+                                } else {
+                                    if (ch == 55) {
+                                        ion_string_push_str(result, "7", 1);
+                                    } else {
+                                        if (ch == 56) {
+                                            ion_string_push_str(result, "8", 1);
+                                        } else {
+                                            ion_string_push_str(result, "9", 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = (i - 1);
+    }
+    ret_val = result;
+    goto epilogue;
+epilogue:
+        return ret_val;
 }
 
 

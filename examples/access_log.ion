@@ -24,9 +24,7 @@ fn line_at(index: int) -> String {
     }
 }
 
-// Parse the last digit run from a log line at the given index.
-fn parse_line_at(index: int) -> int {
-    let line: String = line_at(index);
+fn parse_status_from_line(line: String) -> int {
     let mut last: int = 0;
     let mut current: int = 0;
     let mut in_run: bool = false;
@@ -48,6 +46,12 @@ fn parse_line_at(index: int) -> int {
         last = current;
     }
     return last;
+}
+
+// Parse the last digit run from a log line at the given index.
+fn parse_line_at(index: int) -> int {
+    let line: String = line_at(index);
+    return parse_status_from_line(line);
 }
 
 fn scan_logs(code_tx: Sender<int>, expected: int) -> int {

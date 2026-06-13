@@ -425,7 +425,9 @@ impl IRBuilder {
                 out.push(IRStmt::Expr(build_expr_with_ctx(&expr_stmt.expr, ctx)));
             }
             Stmt::Defer(defer_stmt) => {
-                defers.push(build_expr_with_ctx(&defer_stmt.expr, ctx));
+                let expr = build_expr_with_ctx(&defer_stmt.expr, ctx);
+                defers.push(expr.clone());
+                out.push(IRStmt::Defer(expr));
             }
             Stmt::Spawn(spawn_stmt) => {
                 let captured_names = collect_captured_vars(&spawn_stmt.body);

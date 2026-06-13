@@ -215,6 +215,10 @@ if [ -f "test_scope_drop_block.ion" ]; then
     test_file "test_scope_drop_block.ion" 0 || true
 fi
 
+if [ -f "test_move_call_drop.ion" ]; then
+    test_file "test_move_call_drop.ion" 42 || true
+fi
+
 if [ -f "test_scope_drop_elif.ion" ]; then
     test_file "test_scope_drop_elif.ion" 0 || true
 fi
