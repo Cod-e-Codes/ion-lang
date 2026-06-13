@@ -221,7 +221,11 @@ impl Compiler {
                         continue;
                     }
                     let mangled_name = format!("{}_{}", alias, f.name);
-                    if merged.functions.iter().any(|existing| existing.name == mangled_name) {
+                    if merged
+                        .functions
+                        .iter()
+                        .any(|existing| existing.name == mangled_name)
+                    {
                         continue;
                     }
                     let mut f_copy = f.clone();
@@ -261,9 +265,7 @@ impl Compiler {
     ) {
         for import in imports {
             let import_path = self.resolve_import_path(&import.path, from_file);
-            let canonical = import_path
-                .canonicalize()
-                .unwrap_or(import_path);
+            let canonical = import_path.canonicalize().unwrap_or(import_path);
             if out.contains_key(&canonical) {
                 continue;
             }

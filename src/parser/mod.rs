@@ -1418,10 +1418,7 @@ impl Parser {
 
         // Optional return value
         let value = if !self.is_at_end()
-            && !matches!(
-                self.peek().kind,
-                TokenKind::Semicolon | TokenKind::RBrace
-            )
+            && !matches!(self.peek().kind, TokenKind::Semicolon | TokenKind::RBrace)
         {
             Some(self.parse_expr()?)
         } else {
@@ -2327,16 +2324,15 @@ impl Parser {
 
                 // mod::func(...) when mod is an import alias or built-in type (Box, Vec, String).
                 // Local enum types keep Enum::Variant(...) as EnumLit.
-                let is_qualified_call = if next_is_colon_colon && self.current + 4 < self.tokens.len()
-                {
-                    let has_ident_and_paren = matches!(
-                        self.tokens[self.current + 3].kind,
-                        TokenKind::Ident(_)
-                    ) && matches!(self.tokens[self.current + 4].kind, TokenKind::LParen);
-                    has_ident_and_paren && self.is_module_or_builtin_qualified_call(&name)
-                } else {
-                    false
-                };
+                let is_qualified_call =
+                    if next_is_colon_colon && self.current + 4 < self.tokens.len() {
+                        let has_ident_and_paren =
+                            matches!(self.tokens[self.current + 3].kind, TokenKind::Ident(_))
+                                && matches!(self.tokens[self.current + 4].kind, TokenKind::LParen);
+                        has_ident_and_paren && self.is_module_or_builtin_qualified_call(&name)
+                    } else {
+                        false
+                    };
 
                 if next_is_colon_colon && !is_qualified_call {
                     // Enum literal: EnumName::VariantName(...)

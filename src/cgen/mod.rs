@@ -380,11 +380,7 @@ impl Codegen {
             return mangled;
         }
         if callee.contains("::") {
-            callee
-                .split("::")
-                .last()
-                .unwrap_or(callee)
-                .to_string()
+            callee.split("::").last().unwrap_or(callee).to_string()
         } else {
             callee.to_string()
         }
@@ -1156,9 +1152,7 @@ impl Codegen {
     fn struct_decl_for_type(&self, ty: &Type) -> Option<(&StructDecl, HashMap<String, Type>)> {
         let resolved = resolve_type_alias(ty, &self.type_aliases);
         let (base_name, params) = match &resolved {
-            Type::Struct(name) if self.struct_map.contains_key(name) => {
-                (name.as_str(), Vec::new())
-            }
+            Type::Struct(name) if self.struct_map.contains_key(name) => (name.as_str(), Vec::new()),
             Type::Generic { name, params } if self.struct_map.contains_key(name) => {
                 (name.as_str(), params.clone())
             }
@@ -1194,11 +1188,9 @@ impl Codegen {
         Some((decl, substitutions))
     }
 
-    fn substitute_field_types(
-        ty: &Type,
-        substitutions: &HashMap<String, Type>,
-    ) -> Type {
-        let refs: HashMap<String, &Type> = substitutions.iter().map(|(k, v)| (k.clone(), v)).collect();
+    fn substitute_field_types(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
+        let refs: HashMap<String, &Type> =
+            substitutions.iter().map(|(k, v)| (k.clone(), v)).collect();
         substitute_generic_types(ty, &refs)
     }
 
@@ -1310,8 +1302,7 @@ impl Codegen {
                 self.indent_level += 1;
                 for (field_name, field_ty) in fields {
                     if self.type_needs_drop(&field_ty) {
-                        let field_path =
-                            format!("{path}.data.variant_{variant_idx}.{field_name}");
+                        let field_path = format!("{path}.data.variant_{variant_idx}.{field_name}");
                         self.emit_drop_at_path(&field_path, &field_ty);
                     }
                 }
@@ -1401,9 +1392,7 @@ impl Codegen {
                 }
             }
             IREexpr::EnumLit {
-                args,
-                named_fields,
-                ..
+                args, named_fields, ..
             } => {
                 for arg in args {
                     self.mark_moves_in_expr(arg);
@@ -1420,7 +1409,9 @@ impl Codegen {
                     self.mark_moves_in_expr(arg);
                 }
             }
-            IREexpr::ArrayLiteral { elements, repeat, .. } => {
+            IREexpr::ArrayLiteral {
+                elements, repeat, ..
+            } => {
                 for elem in elements {
                     self.mark_moves_in_expr(elem);
                 }

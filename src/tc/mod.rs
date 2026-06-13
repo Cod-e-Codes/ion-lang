@@ -1339,9 +1339,7 @@ impl TypeChecker {
                         },
                     );
                     if !let_stmt.name.is_empty() {
-                        self.lsp_info
-                            .types
-                            .insert(let_stmt.name_span, var_type);
+                        self.lsp_info.types.insert(let_stmt.name_span, var_type);
                     }
                 } else if let Some(ref type_ann) = let_stmt.type_ann {
                     // Resolve type annotation - convert Struct(name) to Enum(name) if it's actually an enum
