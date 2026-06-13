@@ -1,0 +1,12 @@
+fn take(b: Box<int>) {
+}
+
+fn main() -> int {
+    let b = Box::new(60);
+    let skip: bool = false;
+    if skip {
+        take(b);
+        return 0;
+    }
+    return Box::unwrap(b);
+}

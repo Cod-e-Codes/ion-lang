@@ -168,6 +168,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_match_result_type.ion` - `match` infers non-`int` result type (`bool` via `-> bool` helper, exit 88)
 - `test_match_arm_type_mismatch.ion` - Mismatched arm result types (negative)
 
+### if/else ownership merge
+- `test_if_else_move_ok.ion` - Move in diverging branch; use after `if` (exit 60)
+- `test_if_else_move_error.ion` - Move in fall-through branch; use after `if` (negative)
+
 - `test_io_print_str.ion` - Safe I/O library: `print_str()` function
 - `test_io_print.ion` - Safe I/O library: `print()` function for String
 - `test_io_println.ion` - Safe I/O library: `println()` function for String

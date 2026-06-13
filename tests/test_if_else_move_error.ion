@@ -1,0 +1,11 @@
+fn take(b: Box<int>) {
+}
+
+fn main() -> int {
+    let b = Box::new(10);
+    let cond: bool = true;
+    if cond {
+        take(b);
+    }
+    return Box::unwrap(b);
+}

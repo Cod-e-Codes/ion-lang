@@ -679,6 +679,8 @@ By default, Ion types are **move-only**. For a small subset of primitive types (
 
 Ion does not expose a `Copy` marker to user code; whether a move is implemented as a copy is an implementation detail.
 
+After an `if` statement, ownership is merged from branches that can reach the following code. Branches that always `return`, `break`, or `continue` are omitted from the merge. If two fall-through paths disagree on whether a binding is still valid, the compiler reports an error.
+
 #### 5.3 Borrowing
 
 References provide scoped, non-owning access:
@@ -1132,7 +1134,7 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 
 - No trait bounds on generics
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
-- `if`/`else` merge: a variable moved in only one branch is an error; use early return or a helper function instead
+- `if`/`else` merge: ownership after an `if` is merged from branches that can fall through to the following code. A move in a branch that always `return`s, `break`s, or `continue`s does not block use after the `if`. If two fall-through paths disagree (one moved, one valid), it is still an error.
 - `while`/`for` loops: a non-copy variable moved anywhere in the loop body is an error (repeated iteration would need the binding again); copy types and borrows are unchanged
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (not defined in user source)

@@ -692,6 +692,14 @@ if [ -f "test_match_arm_type_mismatch.ion" ]; then
     test_error "test_match_arm_type_mismatch.ion" "TypeMismatch" || true
 fi
 
+if [ -f "test_if_else_move_ok.ion" ]; then
+    test_file "test_if_else_move_ok.ion" 60 || true
+fi
+
+if [ -f "test_if_else_move_error.ion" ]; then
+    test_error "test_if_else_move_error.ion" "UseAfterMove" || true
+fi
+
 # Multi-file compilation
 if [ -f "test_multifile.ion" ] && [ -f "utils.ion" ]; then
     test_count=$((test_count + 1))

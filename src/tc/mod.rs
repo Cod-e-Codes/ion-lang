@@ -1479,9 +1479,8 @@ impl TypeChecker {
                     before.clone()
                 };
 
-                // Merge environments conservatively: a variable may only be considered
-                // moved if it is moved in *both* branches. If it is moved in one
-                // branch but not the other, we conservatively report an error.
+                // Merge environments: only branches that can fall through to code
+                // after this `if` must agree on ownership (diverging branches are skipped).
                 let mut merged = before.clone();
                 for (name, prev_info) in before.iter() {
                     let then_state = then_env
@@ -1493,16 +1492,30 @@ impl TypeChecker {
                         .map(|info| info.state)
                         .unwrap_or(prev_info.state);
 
-                    let merged_state = match (then_state, else_state) {
-                        (OwnershipState::Valid, OwnershipState::Valid) => OwnershipState::Valid,
-                        (OwnershipState::Moved, OwnershipState::Moved) => OwnershipState::Moved,
-                        // Moved in only one branch: future use would be ambiguous.
-                        _ => {
-                            return Err(TypeCheckError::UseAfterMove {
-                                name: name.clone(),
-                                span: if_stmt.span,
-                            });
-                        }
+                    let mut reach_states: Vec<OwnershipState> = Vec::new();
+                    if if_stmt.else_block.is_none() {
+                        reach_states.push(prev_info.state);
+                    }
+                    if block_falls_through(&if_stmt.then_block) {
+                        reach_states.push(then_state);
+                    }
+                    if let Some(ref else_blk) = if_stmt.else_block
+                        && block_falls_through(else_blk)
+                    {
+                        reach_states.push(else_state);
+                    }
+
+                    let merged_state = if reach_states.is_empty() {
+                        prev_info.state
+                    } else if reach_states.iter().all(|s| *s == OwnershipState::Valid) {
+                        OwnershipState::Valid
+                    } else if reach_states.iter().all(|s| *s == OwnershipState::Moved) {
+                        OwnershipState::Moved
+                    } else {
+                        return Err(TypeCheckError::UseAfterMove {
+                            name: name.clone(),
+                            span: if_stmt.span,
+                        });
                     };
 
                     if let Some(info) = merged.get_mut(name) {
@@ -4193,6 +4206,24 @@ impl TypeChecker {
                 Ok(())
             }
         }
+    }
+}
+
+/// True when control flow can leave this block and continue at the enclosing merge point.
+fn block_falls_through(block: &Block) -> bool {
+    if block.statements.is_empty() {
+        return true;
+    }
+    match block.statements.last().unwrap() {
+        Stmt::Return(_) | Stmt::Break(_) | Stmt::Continue(_) => false,
+        Stmt::If(if_stmt) => {
+            let then_ft = block_falls_through(&if_stmt.then_block);
+            match &if_stmt.else_block {
+                Some(else_blk) => then_ft || block_falls_through(else_blk),
+                None => true,
+            }
+        }
+        _ => true,
     }
 }
 
