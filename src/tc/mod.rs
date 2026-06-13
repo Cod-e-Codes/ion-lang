@@ -2687,14 +2687,19 @@ impl TypeChecker {
                         }
                     }
 
-                    // Type-check the arm body and ensure all arms return the same type
+                    // Type-check the arm body and unify arm result types
                     for stmt in &arm.body.statements {
                         self.check_stmt(stmt)?;
                     }
+                    let arm_ty = self.infer_block_result_type(&arm.body, arm.span)?;
+                    match &match_result_type {
+                        None => match_result_type = Some(arm_ty),
+                        Some(prev) => {
+                            match_result_type =
+                                Some(self.unify_match_arm_types(prev, &arm_ty, arm.span)?);
+                        }
+                    }
                     self.variables = prev_vars;
-
-                    // For now, assume match returns int (will be improved later)
-                    match_result_type = Some(Type::Int);
                 }
 
                 // Check exhaustiveness
@@ -2707,7 +2712,9 @@ impl TypeChecker {
                     }
                 }
 
-                Ok(match_result_type.unwrap_or(Type::Int))
+                Ok(match_result_type.ok_or_else(|| {
+                    TypeCheckError::Message("Match expression has no arms".to_string())
+                })?)
             }
             Expr::Call(call_expr) => {
                 // Check if this is a built-in function first
@@ -3638,6 +3645,59 @@ impl TypeChecker {
                 span: *span,
             }),
         }
+    }
+
+    /// Infer the value type produced by a match arm block (trailing expression or return value).
+    fn infer_block_result_type(
+        &mut self,
+        block: &Block,
+        _span: Span,
+    ) -> Result<Type, TypeCheckError> {
+        for stmt in block.statements.iter().rev() {
+            match stmt {
+                Stmt::Return(ret) => {
+                    if let Some(ref value) = ret.value {
+                        return self.check_expr(value);
+                    }
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "return value in match arm".to_string(),
+                        got: "no return value".to_string(),
+                        span: ret.span,
+                    });
+                }
+                Stmt::Expr(expr_stmt) => {
+                    return self.check_expr(&expr_stmt.expr);
+                }
+                _ => {}
+            }
+        }
+        // Arms that only run statements (e.g. empty None branch, if guards) produce unit.
+        Ok(Type::Int)
+    }
+
+    /// Unify types from match arms; numeric coercion follows assignment rules.
+    fn unify_match_arm_types(
+        &mut self,
+        prev: &Type,
+        next: &Type,
+        span: Span,
+    ) -> Result<Type, TypeCheckError> {
+        let prev = self.resolve_type_name(prev)?;
+        let next = self.resolve_type_name(next)?;
+        if types_equal(&prev, &next) {
+            return Ok(prev);
+        }
+        if Self::can_coerce_numeric(&next, &prev) {
+            return Ok(prev);
+        }
+        if Self::can_coerce_numeric(&prev, &next) {
+            return Ok(next);
+        }
+        Err(TypeCheckError::TypeMismatch {
+            expected: type_to_string(&prev),
+            got: type_to_string(&next),
+            span,
+        })
     }
 
     /// Check if a numeric type can be coerced to another numeric type

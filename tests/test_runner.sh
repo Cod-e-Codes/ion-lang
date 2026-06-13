@@ -684,6 +684,14 @@ if [ -f "test_loop_basic.ion" ]; then
     test_file "test_loop_basic.ion" 17 || true
 fi
 
+if [ -f "test_match_result_type.ion" ]; then
+    test_file "test_match_result_type.ion" 88 || true
+fi
+
+if [ -f "test_match_arm_type_mismatch.ion" ]; then
+    test_error "test_match_arm_type_mismatch.ion" "TypeMismatch" || true
+fi
+
 # Multi-file compilation
 if [ -f "test_multifile.ion" ] && [ -f "utils.ion" ]; then
     test_count=$((test_count + 1))

@@ -608,6 +608,7 @@ Ion supports a **local, Hindley–Milner-inspired inference**:
 
 - Function parameter and return types **must be annotated** (no inference across function boundaries).
 - Generic type parameters on functions and types must be explicit at declaration sites, but may usually be inferred at call sites when unambiguous.
+- `match` expressions: all arms must produce the same type. Each arm's result is the type of its trailing expression statement or `return` value. Arm types are unified with the same numeric coercion rules as assignment.
 
 The inference engine is intentionally limited:
 

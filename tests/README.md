@@ -164,6 +164,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_compound_assign.ion` - Compound assignment (`+=`)
 - `test_loop_basic.ion` - Infinite `loop { }` with `break`
 
+### Match expression types
+- `test_match_result_type.ion` - `match` infers non-`int` result type (`bool` via `-> bool` helper, exit 88)
+- `test_match_arm_type_mismatch.ion` - Mismatched arm result types (negative)
+
 - `test_io_print_str.ion` - Safe I/O library: `print_str()` function
 - `test_io_print.ion` - Safe I/O library: `print()` function for String
 - `test_io_println.ion` - Safe I/O library: `println()` function for String

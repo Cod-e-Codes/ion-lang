@@ -1,0 +1,22 @@
+enum E {
+    A(bool);
+    B(bool);
+}
+
+fn to_bool(e: E) -> bool {
+    match e {
+        E::A(a) => {
+            return a;
+        },
+        E::B(b) => {
+            return b;
+        },
+    };
+}
+
+fn main() -> int {
+    if to_bool(E::A(true)) {
+        return 88;
+    }
+    return 0;
+}
