@@ -2272,24 +2272,6 @@ impl Codegen {
                 args,
                 named_fields,
             } => {
-                // Check if this is actually a qualified function call that was mis-parsed as EnumLit
-                // If the enum_name is not in enum_map, it's likely a module function call
-                if !self.enum_map.contains_key(enum_name) {
-                    // Qualified module call misparsed as enum literal (e.g. io::print_int(...)).
-                    let qualified = format!("{}::{}", enum_name, variant);
-                    let func_name = self.resolve_c_function_name(&qualified);
-                    self.write(&func_name);
-                    self.write("(");
-                    for (i, arg) in args.iter().enumerate() {
-                        if i > 0 {
-                            self.write(", ");
-                        }
-                        self.generate_expr(arg);
-                    }
-                    self.write(")");
-                    return;
-                }
-
                 // Generate enum constructor call: EnumName_VariantName_new(arg1, arg2, ...)
                 // Use type context to get monomorphized name if it's a generic type
                 let monomorphized_enum_name = if let Some(context_ty) = type_context {

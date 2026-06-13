@@ -24,6 +24,7 @@
 ### 3. Parser (`src/parser/mod.rs`)
 
 - Builds `ast::Program` from tokens
+- `Ident::Ident(` disambiguation: import aliases and builtins (`Box`, `Vec`, `String`) become `Expr::Call`; local enum names stay `Expr::EnumLit`
 - Largest source file - follow existing parsing helpers and error style (`ParseError`)
 
 ### 4. AST (`src/ast/mod.rs`)
