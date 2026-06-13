@@ -176,6 +176,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 ### Function types
 - `test_fn_type_basic.ion` - Store named function in `fn(int) -> int` variable; call through pointer (exit 77)
 - `test_fn_type_mismatch.ion` - Function signature mismatch when coercing to fn type (negative)
+- `test_tuple_basic.ion` - Tuple literals, `.0`/`.1` access, and destructuring (exit 81)
 
 - `test_io_print_str.ion` - Safe I/O library: `print_str()` function
 - `test_io_print.ion` - Safe I/O library: `print()` function for String

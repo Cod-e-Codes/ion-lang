@@ -27,6 +27,7 @@ impl HasSpan for Expr {
             Expr::MethodCall(e) => e.span,
             Expr::StringLit(e) => e.span,
             Expr::ArrayLiteral(e) => e.span,
+            Expr::TupleLit(e) => e.span,
             Expr::Index(e) => e.span,
             Expr::Cast(e) => e.span,
             Expr::Assign(e) => e.span,
@@ -1154,15 +1155,9 @@ impl TypeChecker {
             Stmt::Let(let_stmt) => {
                 // Handle tuple destructuring: let (a, b) = expr
                 if let Some(ref patterns) = let_stmt.patterns {
-                    if patterns.len() != 2 {
-                        return Err(TypeCheckError::Message(format!(
-                            "Tuple destructuring currently only supports exactly 2 patterns (for channel split), got {}",
-                            patterns.len()
-                        )));
-                    }
-
-                    // Check if this is a channel() call
-                    if let Some(ref init) = let_stmt.init
+                    // channel() tuple destructuring: let (tx, rx): (Sender<T>, Receiver<T>) = channel<T>();
+                    if patterns.len() == 2
+                        && let Some(ref init) = let_stmt.init
                         && let Expr::Call(call_expr) = init
                         && call_expr.callee == "channel"
                     {
@@ -1273,10 +1268,62 @@ impl TypeChecker {
                         }
                     }
 
-                    return Err(TypeCheckError::Message(
-                        "Tuple destructuring is currently only supported for channel() calls"
-                            .to_string(),
-                    ));
+                    // General tuple destructuring: let (a, b, ...) = tuple_expr;
+                    let init = let_stmt.init.as_ref().ok_or_else(|| {
+                        TypeCheckError::Message(
+                            "tuple destructuring requires an initializer".to_string(),
+                        )
+                    })?;
+                    let init_type = self.check_expr(init)?;
+                    let tuple_type = if let Some(ref type_ann) = let_stmt.type_ann {
+                        let resolved = self.resolve_type_name(type_ann)?;
+                        if !types_equal(&resolved, &init_type) {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: type_to_string(&resolved),
+                                got: type_to_string(&init_type),
+                                span: let_stmt.span,
+                            });
+                        }
+                        resolved
+                    } else {
+                        init_type
+                    };
+                    let Type::Tuple { elements } = tuple_type else {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: "tuple type for destructuring".to_string(),
+                            got: type_to_string(&tuple_type),
+                            span: let_stmt.span,
+                        });
+                    };
+                    if patterns.len() != elements.len() {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: format!("{} tuple patterns", elements.len()),
+                            got: format!("{} patterns", patterns.len()),
+                            span: let_stmt.span,
+                        });
+                    }
+                    for (pattern, elem_ty) in patterns.iter().zip(elements.iter()) {
+                        match pattern {
+                            Pattern::Binding { name, .. } => {
+                                self.variables.insert(
+                                    name.clone(),
+                                    VariableInfo {
+                                        ty: elem_ty.clone(),
+                                        state: OwnershipState::Valid,
+                                        definition_span: let_stmt.span,
+                                    },
+                                );
+                            }
+                            _ => {
+                                return Err(TypeCheckError::Message(
+                                    "tuple destructuring patterns must be variable bindings"
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                    }
+                    self.check_expr_for_moves(init)?;
+                    return Ok(());
                 }
 
                 if let Some(ref init) = let_stmt.init {
@@ -2288,6 +2335,27 @@ impl TypeChecker {
                             span: acc.span,
                         }),
                     },
+                    Type::Tuple { elements } => {
+                        let index: usize =
+                            acc.field
+                                .parse()
+                                .map_err(|_| TypeCheckError::TypeMismatch {
+                                    expected: "numeric tuple field index".to_string(),
+                                    got: acc.field.clone(),
+                                    span: acc.span,
+                                })?;
+                        if index >= elements.len() {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: format!(
+                                    "tuple field index 0..{}",
+                                    elements.len().saturating_sub(1)
+                                ),
+                                got: acc.field.clone(),
+                                span: acc.span,
+                            });
+                        }
+                        Ok(elements[index].clone())
+                    }
                     other => Err(TypeCheckError::TypeMismatch {
                         expected: "struct value for field access".to_string(),
                         got: type_to_string(&other),
@@ -3268,6 +3336,20 @@ impl TypeChecker {
 
                 Ok(return_type_opt.unwrap_or(Type::Int))
             }
+            Expr::TupleLit(tuple_lit) => {
+                if tuple_lit.elements.is_empty() {
+                    return Err(TypeCheckError::Message(
+                        "empty tuple literal is not supported".to_string(),
+                    ));
+                }
+                let mut elem_types = Vec::with_capacity(tuple_lit.elements.len());
+                for elem in &tuple_lit.elements {
+                    elem_types.push(self.check_expr(elem)?);
+                }
+                Ok(Type::Tuple {
+                    elements: elem_types,
+                })
+            }
             Expr::ArrayLiteral(arr_lit) => {
                 // Handle [value; count] syntax
                 if let Some((ref value_expr, count)) = arr_lit.repeat {
@@ -3541,6 +3623,12 @@ impl TypeChecker {
                 // Moving a struct literal moves each of its value expressions.
                 for field in &lit.fields {
                     self.check_expr_for_moves(&field.value)?;
+                }
+                Ok(())
+            }
+            Expr::TupleLit(tuple_lit) => {
+                for elem in &tuple_lit.elements {
+                    self.check_expr_for_moves(elem)?;
                 }
                 Ok(())
             }
@@ -4587,6 +4675,11 @@ fn collect_expr_var_refs(
         Expr::StructLit(lit) => {
             for field in &lit.fields {
                 collect_expr_var_refs(&field.value, refs, locals);
+            }
+        }
+        Expr::TupleLit(tuple_lit) => {
+            for elem in &tuple_lit.elements {
+                collect_expr_var_refs(elem, refs, locals);
             }
         }
         Expr::FieldAccess(acc) => collect_expr_var_refs(&acc.base, refs, locals),

@@ -1,0 +1,19 @@
+fn main() -> int {
+    let t: (int, int) = (10, 20);
+    if t.0 != 10 {
+        return 1;
+    }
+    if t.1 != 20 {
+        return 2;
+    }
+
+    let (a, b) = t;
+    if a != 10 {
+        return 3;
+    }
+    if b != 20 {
+        return 4;
+    }
+
+    return 81;
+}

@@ -271,6 +271,7 @@ pub enum Expr {
     MethodCall(MethodCallExpr),
     StringLit(StringLitExpr),
     ArrayLiteral(ArrayLiteralExpr),
+    TupleLit(TupleLitExpr),
     Index(IndexExpr),
     Cast(CastExpr),
     Assign(AssignExpr),
@@ -436,6 +437,12 @@ pub struct StringLitExpr {
 pub struct ArrayLiteralExpr {
     pub elements: Vec<Expr>,
     pub repeat: Option<(Box<Expr>, usize)>, // For [value; count] syntax: (value, count)
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct TupleLitExpr {
+    pub elements: Vec<Expr>,
     pub span: Span,
 }
 

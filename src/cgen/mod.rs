@@ -80,6 +80,11 @@ fn mangle_type_name(base: &str, params: &[Type]) -> String {
     }
 }
 
+fn tuple_type_name(elements: &[Type]) -> String {
+    let parts: Vec<String> = elements.iter().map(type_to_c_impl).collect();
+    format!("tuple_{}", parts.join("_"))
+}
+
 /// Map a module-qualified Ion callee (`io::print_int`) to a unique C symbol (`io_print_int`).
 /// Type-associated builtins (`Box::new`, `Vec::len`, etc.) keep their existing mangling path.
 fn mangle_module_callee(callee: &str) -> Option<String> {
@@ -374,11 +379,7 @@ fn type_to_c_impl(ty: &Type) -> String {
             // Receiver<T> is a struct value (ion_receiver_t), not a pointer
             "ion_receiver_t".to_string()
         }
-        Type::Tuple { elements: _ } => {
-            // Tuples are not directly representable in C, they'll be handled specially
-            // This should not appear in normal codegen (tuples are desugared)
-            "void".to_string()
-        }
+        Type::Tuple { elements } => tuple_type_name(elements),
         Type::Fn { .. } => fn_type_to_c_ptr(ty),
     }
 }
@@ -732,6 +733,13 @@ impl Codegen {
             self.generate_slice_struct(slice_type_name);
         }
 
+        let mut tuple_types: std::collections::HashMap<String, Vec<Type>> =
+            std::collections::HashMap::new();
+        collect_tuple_types_impl(program, &mut tuple_types);
+        for (tuple_name, elements) in &tuple_types {
+            self.generate_tuple_struct(tuple_name, elements);
+        }
+
         // Generate extern function prototypes
         for extern_block in &program.extern_blocks {
             self.generate_extern_block(extern_block);
@@ -1044,6 +1052,13 @@ impl Codegen {
         collect_slice_types_impl(program, &mut slice_types);
         for slice_type_name in &slice_types {
             self.generate_slice_struct(slice_type_name);
+        }
+
+        let mut tuple_types: std::collections::HashMap<String, Vec<Type>> =
+            std::collections::HashMap::new();
+        collect_tuple_types_impl(program, &mut tuple_types);
+        for (tuple_name, elements) in &tuple_types {
+            self.generate_tuple_struct(tuple_name, elements);
         }
 
         // Generate extern function prototypes (declarations only, implementations come from headers)
@@ -1580,6 +1595,11 @@ impl Codegen {
             IREexpr::StructLit { fields, .. } => {
                 for field in fields {
                     self.mark_moves_in_expr(&field.value);
+                }
+            }
+            IREexpr::TupleLit { elements, .. } => {
+                for elem in elements {
+                    self.mark_moves_in_expr(elem);
                 }
             }
             IREexpr::EnumLit {
@@ -2876,6 +2896,21 @@ impl Codegen {
                     .replace('\r', "\\r") // Escape carriage returns
                     .replace('\t', "\\t"); // Escape tabs
                 self.write(&format!("\"{}\"", escaped));
+            }
+            IREexpr::TupleLit {
+                elements,
+                elem_types,
+            } => {
+                let name = tuple_type_name(elem_types);
+                self.write(&format!("({}){{", name));
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&format!(".f{} = ", i));
+                    self.generate_expr(elem);
+                }
+                self.write("}");
             }
             IREexpr::ArrayLiteral { elements, repeat } => {
                 if let Some((value_expr, count)) = repeat {
@@ -4522,6 +4557,219 @@ fn collect_slice_types_from_expr(
             collect_slice_types_from_expr(index, slice_types);
             collect_slice_types_from_expr(value, slice_types);
         }
+        IREexpr::TupleLit { .. } => {}
+    }
+}
+
+fn collect_tuple_types_impl(
+    program: &IRProgram,
+    tuple_types: &mut std::collections::HashMap<String, Vec<Type>>,
+) {
+    for function in &program.functions {
+        if let Some(ref ret_ty) = function.return_type {
+            collect_tuple_types_from_type(ret_ty, tuple_types);
+        }
+        for param in &function.params {
+            collect_tuple_types_from_type(&param.ty, tuple_types);
+        }
+        for block in &function.blocks {
+            for stmt in &block.statements {
+                collect_tuple_types_from_stmt(stmt, tuple_types);
+            }
+        }
+    }
+    for s in &program.structs {
+        for field in &s.fields {
+            collect_tuple_types_from_type(&field.ty, tuple_types);
+        }
+    }
+}
+
+fn collect_tuple_types_from_type(
+    ty: &Type,
+    tuple_types: &mut std::collections::HashMap<String, Vec<Type>>,
+) {
+    if let Type::Tuple { elements } = ty {
+        tuple_types.insert(tuple_type_name(elements), elements.clone());
+        for elem in elements {
+            collect_tuple_types_from_type(elem, tuple_types);
+        }
+        return;
+    }
+    match ty {
+        Type::Ref { inner, .. } => collect_tuple_types_from_type(inner, tuple_types),
+        Type::RawPtr { inner } => collect_tuple_types_from_type(inner, tuple_types),
+        Type::Box { inner } => collect_tuple_types_from_type(inner, tuple_types),
+        Type::Vec { elem_type } => collect_tuple_types_from_type(elem_type, tuple_types),
+        Type::Channel { elem_type } => collect_tuple_types_from_type(elem_type, tuple_types),
+        Type::Sender { elem_type } => collect_tuple_types_from_type(elem_type, tuple_types),
+        Type::Receiver { elem_type } => collect_tuple_types_from_type(elem_type, tuple_types),
+        Type::Array { inner, .. } => collect_tuple_types_from_type(inner, tuple_types),
+        Type::Slice { inner } => collect_tuple_types_from_type(inner, tuple_types),
+        Type::Fn {
+            params,
+            return_type,
+        } => {
+            for param in params {
+                collect_tuple_types_from_type(param, tuple_types);
+            }
+            collect_tuple_types_from_type(return_type, tuple_types);
+        }
+        _ => {}
+    }
+}
+
+fn collect_tuple_types_from_stmt(
+    stmt: &IRStmt,
+    tuple_types: &mut std::collections::HashMap<String, Vec<Type>>,
+) {
+    match stmt {
+        IRStmt::Let(let_stmt) => {
+            collect_tuple_types_from_type(&let_stmt.ty, tuple_types);
+            if let Some(ref init) = let_stmt.init {
+                collect_tuple_types_from_expr(init, tuple_types);
+            }
+        }
+        IRStmt::Return(ret) => {
+            if let Some(ref value) = ret.value {
+                collect_tuple_types_from_expr(value, tuple_types);
+            }
+        }
+        IRStmt::Break | IRStmt::Continue => {}
+        IRStmt::Expr(expr) => collect_tuple_types_from_expr(expr, tuple_types),
+        IRStmt::Defer(expr) => collect_tuple_types_from_expr(expr, tuple_types),
+        IRStmt::Spawn(spawn) => {
+            for stmt in &spawn.body.statements {
+                collect_tuple_types_from_stmt(stmt, tuple_types);
+            }
+        }
+        IRStmt::If(ir_if) => {
+            collect_tuple_types_from_expr(&ir_if.cond, tuple_types);
+            for stmt in &ir_if.then_block.statements {
+                collect_tuple_types_from_stmt(stmt, tuple_types);
+            }
+            if let Some(ref else_block) = ir_if.else_block {
+                for stmt in &else_block.statements {
+                    collect_tuple_types_from_stmt(stmt, tuple_types);
+                }
+            }
+        }
+        IRStmt::While(ir_while) => {
+            collect_tuple_types_from_expr(&ir_while.cond, tuple_types);
+            for stmt in &ir_while.body.statements {
+                collect_tuple_types_from_stmt(stmt, tuple_types);
+            }
+            if let Some(ref step) = ir_while.step {
+                for stmt in &step.statements {
+                    collect_tuple_types_from_stmt(stmt, tuple_types);
+                }
+            }
+        }
+        IRStmt::UnsafeBlock(unsafe_block) => {
+            for stmt in &unsafe_block.body.statements {
+                collect_tuple_types_from_stmt(stmt, tuple_types);
+            }
+        }
+    }
+}
+
+fn collect_tuple_types_from_expr(
+    expr: &IREexpr,
+    tuple_types: &mut std::collections::HashMap<String, Vec<Type>>,
+) {
+    match expr {
+        IREexpr::AddressOf { inner, .. } => collect_tuple_types_from_expr(inner, tuple_types),
+        IREexpr::BinOp { left, right, .. } => {
+            collect_tuple_types_from_expr(left, tuple_types);
+            collect_tuple_types_from_expr(right, tuple_types);
+        }
+        IREexpr::UnOp { operand, .. } => collect_tuple_types_from_expr(operand, tuple_types),
+        IREexpr::Send { channel, value, .. } => {
+            collect_tuple_types_from_expr(channel, tuple_types);
+            collect_tuple_types_from_expr(value, tuple_types);
+        }
+        IREexpr::Recv { channel, .. } => collect_tuple_types_from_expr(channel, tuple_types),
+        IREexpr::StructLit { fields, .. } => {
+            for field in fields {
+                collect_tuple_types_from_expr(&field.value, tuple_types);
+            }
+        }
+        IREexpr::FieldAccess { base, .. } => collect_tuple_types_from_expr(base, tuple_types),
+        IREexpr::EnumLit {
+            args, named_fields, ..
+        } => {
+            for arg in args {
+                collect_tuple_types_from_expr(arg, tuple_types);
+            }
+            if let Some(named_fields) = named_fields {
+                for (_, value) in named_fields {
+                    collect_tuple_types_from_expr(value, tuple_types);
+                }
+            }
+        }
+        IREexpr::Match { expr, arms, .. } => {
+            collect_tuple_types_from_expr(expr, tuple_types);
+            for arm in arms {
+                if let Some(ref guard) = arm.guard {
+                    collect_tuple_types_from_expr(guard, tuple_types);
+                }
+                for stmt in &arm.body.statements {
+                    collect_tuple_types_from_stmt(stmt, tuple_types);
+                }
+            }
+        }
+        IREexpr::Call {
+            return_type, args, ..
+        } => {
+            if let Some(ret_ty) = return_type {
+                collect_tuple_types_from_type(ret_ty, tuple_types);
+            }
+            for arg in args {
+                collect_tuple_types_from_expr(arg, tuple_types);
+            }
+        }
+        IREexpr::TupleLit {
+            elements,
+            elem_types,
+        } => {
+            tuple_types.insert(tuple_type_name(elem_types), elem_types.clone());
+            for elem in elements {
+                collect_tuple_types_from_expr(elem, tuple_types);
+            }
+        }
+        IREexpr::ArrayLiteral { elements, repeat } => {
+            for elem in elements {
+                collect_tuple_types_from_expr(elem, tuple_types);
+            }
+            if let Some((value_expr, _)) = repeat {
+                collect_tuple_types_from_expr(value_expr, tuple_types);
+            }
+        }
+        IREexpr::Index { target, index, .. } => {
+            collect_tuple_types_from_expr(target, tuple_types);
+            collect_tuple_types_from_expr(index, tuple_types);
+        }
+        IREexpr::Cast {
+            expr, target_type, ..
+        } => {
+            collect_tuple_types_from_type(target_type, tuple_types);
+            collect_tuple_types_from_expr(expr, tuple_types);
+        }
+        IREexpr::Assign { value, .. } => collect_tuple_types_from_expr(value, tuple_types),
+        IREexpr::AssignIndex {
+            target,
+            index,
+            value,
+        } => {
+            collect_tuple_types_from_expr(target, tuple_types);
+            collect_tuple_types_from_expr(index, tuple_types);
+            collect_tuple_types_from_expr(value, tuple_types);
+        }
+        IREexpr::Lit(_)
+        | IREexpr::BoolLiteral(_)
+        | IREexpr::FloatLiteral(_)
+        | IREexpr::Var(_)
+        | IREexpr::StringLit(_) => {}
     }
 }
 
@@ -4688,6 +4936,11 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
                 collect_vec_types_from_expr(arg, vec_types);
             }
         }
+        IREexpr::TupleLit { elements, .. } => {
+            for elem in elements {
+                collect_vec_types_from_expr(elem, vec_types);
+            }
+        }
         IREexpr::ArrayLiteral { elements, repeat } => {
             for elem in elements {
                 collect_vec_types_from_expr(elem, vec_types);
@@ -4762,6 +5015,22 @@ impl Codegen {
         self.indent_level -= 1;
         self.writeln(&format!("}} {};", slice_type_name));
         self.writeln("");
+    }
+
+    fn generate_tuple_struct(&mut self, tuple_name: &str, elements: &[Type]) {
+        if self.generated_types.contains_key(tuple_name) {
+            return;
+        }
+        self.write(&format!("typedef struct {} {{\n", tuple_name));
+        self.indent_level += 1;
+        for (i, elem) in elements.iter().enumerate() {
+            self.write_indent();
+            self.writeln(&format!("{} f{};", self.type_to_c(elem), i));
+        }
+        self.indent_level -= 1;
+        self.writeln(&format!("}} {};", tuple_name));
+        self.writeln("");
+        self.generated_types.insert(tuple_name.to_string(), true);
     }
 
     fn generate_monomorphized_struct(&mut self, decl: &StructDecl, params: &[Type]) {
@@ -5199,6 +5468,11 @@ fn collect_generic_from_expr(
             }
             for arg in args {
                 collect_generic_from_expr(arg, instantiations);
+            }
+        }
+        IREexpr::TupleLit { elements, .. } => {
+            for elem in elements {
+                collect_generic_from_expr(elem, instantiations);
             }
         }
         IREexpr::ArrayLiteral { elements, repeat } => {

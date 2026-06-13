@@ -114,6 +114,13 @@ pub struct Lexer {
     column: usize,
 }
 
+fn can_have_field_access(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Ident(_) | TokenKind::RParen | TokenKind::RBracket
+    )
+}
+
 impl Lexer {
     pub fn new(input: &str) -> Self {
         Self {
@@ -170,8 +177,16 @@ impl Lexer {
                         self.advance(); // consume third .
                         TokenKind::Ellipsis
                     } else if let Some(next_char) = self.peek_next() {
-                        // Check if next character is a digit - if so, parse as float literal starting with .
-                        if next_char.is_ascii_digit() {
+                        // `.5` at expression start is a float; `expr.0` is field access.
+                        if next_char.is_ascii_digit()
+                            && tokens
+                                .last()
+                                .map(|t: &Token| can_have_field_access(&t.kind))
+                                .unwrap_or(false)
+                        {
+                            self.advance();
+                            TokenKind::Dot
+                        } else if next_char.is_ascii_digit() {
                             // Parse float literal starting with decimal point (e.g., .5)
                             self.advance(); // consume the .
                             self.read_float_from_dot()?

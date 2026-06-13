@@ -143,6 +143,10 @@ pub enum IREexpr {
         tuple_destructure_index: Option<usize>, // For tuple destructuring: Some(0) = first element, Some(1) = second, etc.
     },
     StringLit(String),
+    TupleLit {
+        elements: Vec<IREexpr>,
+        elem_types: Vec<Type>,
+    },
     ArrayLiteral {
         elements: Vec<IREexpr>,
         repeat: Option<(Box<IREexpr>, usize)>, // For [value; count] syntax: (value, count)
@@ -176,6 +180,7 @@ pub struct IRMatchArm {
 
 struct LoweringContext {
     var_types: HashMap<String, Type>,
+    tuple_temp_counter: usize,
 }
 
 impl LoweringContext {
@@ -184,13 +189,19 @@ impl LoweringContext {
         for p in params {
             var_types.insert(p.name.clone(), p.ty.clone());
         }
-        Self { var_types }
+        Self {
+            var_types,
+            tuple_temp_counter: 0,
+        }
     }
 
     fn resolve_expr_type(&self, expr: &Expr) -> Option<Type> {
         match expr {
             Expr::Var(v) => self.var_types.get(&v.name).cloned(),
             Expr::Ref(r) => self.resolve_expr_type(&r.inner),
+            Expr::TupleLit(t) => Some(Type::Tuple {
+                elements: t.elements.iter().map(infer_type_from_expr).collect(),
+            }),
             _ => Some(infer_type_from_expr(expr)),
         }
     }
@@ -366,6 +377,46 @@ impl IRBuilder {
                             ctx.record_binding(rx_name, &elements[1]);
                             return;
                         }
+                    }
+                }
+
+                // General tuple destructuring: let (a, b) = expr;
+                if let Some(ref patterns) = let_stmt.patterns
+                    && let Some(ref init) = let_stmt.init
+                {
+                    let tuple_ty = if let Some(ref type_ann) = let_stmt.type_ann {
+                        type_ann.clone()
+                    } else {
+                        ctx.resolve_expr_type(init)
+                            .unwrap_or_else(|| infer_type_from_expr(init))
+                    };
+                    if let Type::Tuple { elements } = tuple_ty
+                        && patterns.len() == elements.len()
+                    {
+                        let temp = format!("__ion_tuple_{}", ctx.tuple_temp_counter);
+                        ctx.tuple_temp_counter += 1;
+                        out.push(IRStmt::Let(IRLetStmt {
+                            name: temp.clone(),
+                            ty: Type::Tuple {
+                                elements: elements.clone(),
+                            },
+                            init: Some(build_expr_with_ctx(init, ctx)),
+                        }));
+                        for (i, pattern) in patterns.iter().enumerate() {
+                            if let Pattern::Binding { name, .. } = pattern {
+                                out.push(IRStmt::Let(IRLetStmt {
+                                    name: name.clone(),
+                                    ty: elements[i].clone(),
+                                    init: Some(IREexpr::FieldAccess {
+                                        base: Box::new(IREexpr::Var(temp.clone())),
+                                        field: format!("f{}", i),
+                                        is_pointer: false,
+                                    }),
+                                }));
+                                ctx.record_binding(name, &elements[i]);
+                            }
+                        }
+                        return;
                     }
                 }
 
@@ -736,11 +787,26 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 })
                 .collect(),
         },
-        Expr::FieldAccess(acc) => IREexpr::FieldAccess {
-            base: Box::new(build_expr_with_ctx(&acc.base, ctx)),
-            field: acc.field.clone(),
-            is_pointer: false,
-        },
+        Expr::FieldAccess(acc) => {
+            let field = if let Some(Type::Tuple { elements }) = ctx.resolve_expr_type(&acc.base) {
+                if let Ok(idx) = acc.field.parse::<usize>() {
+                    if idx < elements.len() {
+                        format!("f{}", idx)
+                    } else {
+                        acc.field.clone()
+                    }
+                } else {
+                    acc.field.clone()
+                }
+            } else {
+                acc.field.clone()
+            };
+            IREexpr::FieldAccess {
+                base: Box::new(build_expr_with_ctx(&acc.base, ctx)),
+                field,
+                is_pointer: false,
+            }
+        }
         Expr::EnumLit(enum_lit) => IREexpr::EnumLit {
             enum_name: enum_lit.enum_name.clone(),
             variant: enum_lit.variant.clone(),
@@ -767,6 +833,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     let mut arm_defers = Vec::new();
                     let mut arm_ctx = LoweringContext {
                         var_types: ctx.var_types.clone(),
+                        tuple_temp_counter: ctx.tuple_temp_counter,
                     };
                     for stmt in &arm.body.statements {
                         IRBuilder::lower_stmt(stmt, &mut body_stmts, &mut arm_defers, &mut arm_ctx);
@@ -827,6 +894,21 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             }
         }
         Expr::StringLit(string_lit) => IREexpr::StringLit(string_lit.value.clone()),
+        Expr::TupleLit(tuple_lit) => {
+            let elem_types: Vec<Type> = tuple_lit
+                .elements
+                .iter()
+                .map(infer_type_from_expr)
+                .collect();
+            IREexpr::TupleLit {
+                elements: tuple_lit
+                    .elements
+                    .iter()
+                    .map(|e| build_expr_with_ctx(e, ctx))
+                    .collect(),
+                elem_types,
+            }
+        }
         Expr::ArrayLiteral(arr_lit) => IREexpr::ArrayLiteral {
             elements: arr_lit
                 .elements
@@ -876,6 +958,9 @@ fn infer_type_from_expr(expr: &Expr) -> Type {
             infer_type_from_call(&call_expr.callee, &call_expr.args).unwrap_or(Type::Int)
         }
         Expr::StringLit(_) => Type::String,
+        Expr::TupleLit(t) => Type::Tuple {
+            elements: t.elements.iter().map(infer_type_from_expr).collect(),
+        },
         Expr::Ref(ref_expr) => Type::Ref {
             inner: Box::new(infer_type_from_expr(&ref_expr.inner)),
             mutable: ref_expr.mutable,
@@ -1146,6 +1231,11 @@ fn rewrite_generic_calls_in_expr(
                     &mut arm_vars,
                     instantiations,
                 );
+            }
+        }
+        IREexpr::TupleLit { elements, .. } => {
+            for element in elements {
+                rewrite_generic_calls_in_expr(element, generic_defs, var_types, instantiations);
             }
         }
         IREexpr::ArrayLiteral { elements, repeat } => {
@@ -1515,6 +1605,19 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
                         .map(|g| substitute_types_in_expr(g, substitutions)),
                     body: substitute_types_in_block(&arm.body, substitutions),
                 })
+                .collect(),
+        },
+        IREexpr::TupleLit {
+            elements,
+            elem_types,
+        } => IREexpr::TupleLit {
+            elements: elements
+                .iter()
+                .map(|element| substitute_types_in_expr(element, substitutions))
+                .collect(),
+            elem_types: elem_types
+                .iter()
+                .map(|ty| substitute_type(ty, substitutions))
                 .collect(),
         },
         IREexpr::ArrayLiteral { elements, repeat } => IREexpr::ArrayLiteral {

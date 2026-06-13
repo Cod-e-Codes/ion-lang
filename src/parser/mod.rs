@@ -2094,17 +2094,20 @@ impl Parser {
                     }
 
                     let method_span = Span::from_token(&self.tokens[field_idx]);
-                    let field_name =
-                        if let TokenKind::Ident(ref ident_name) = self.tokens[field_idx].kind {
-                            ident_name.clone()
-                        } else {
+                    let field_name = match &self.tokens[field_idx].kind {
+                        TokenKind::Ident(ident_name) => ident_name.clone(),
+                        TokenKind::Integer(idx) if *idx >= 0 => {
+                            idx.to_string()
+                        }
+                        _ => {
                             return Err(ParseError::UnexpectedToken {
-                                expected: "field name".to_string(),
+                                expected: "field name or tuple index".to_string(),
                                 got: self.tokens[field_idx].kind.clone(),
                                 span: Span::from_token(&self.tokens[field_idx]),
                             });
-                        };
-                    self.current += 1; // consume identifier
+                        }
+                    };
+                    self.current += 1; // consume field name / index
 
                     // Check if this is a method call (field_name followed by '(')
                     let is_method_call = if !self.is_at_end() {
@@ -2732,10 +2735,34 @@ impl Parser {
                 }))
             }
             TokenKind::LParen => {
+                let start_span = span;
                 self.advance(); // consume (
-                let expr = self.parse_expr()?;
+                if !self.is_at_end() && matches!(self.peek().kind, TokenKind::RParen) {
+                    return Err(ParseError::Message(
+                        "empty tuple literal '()' is not supported".to_string(),
+                    ));
+                }
+                let first_expr = self.parse_expr()?;
+                if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Comma) {
+                    let mut elements = vec![first_expr];
+                    while !self.is_at_end() && matches!(self.peek().kind, TokenKind::Comma) {
+                        self.advance(); // consume ,
+                        if !self.is_at_end() && matches!(self.peek().kind, TokenKind::RParen) {
+                            return Err(ParseError::Message(
+                                "trailing comma in tuple literal is not allowed".to_string(),
+                            ));
+                        }
+                        elements.push(self.parse_expr()?);
+                    }
+                    self.expect(TokenKind::RParen)?;
+                    let end_span = elements.last().map(|e| e.span()).unwrap_or(start_span);
+                    return Ok(Expr::TupleLit(TupleLitExpr {
+                        elements,
+                        span: start_span.merge(&end_span),
+                    }));
+                }
                 self.expect(TokenKind::RParen)?;
-                Ok(expr)
+                Ok(first_expr)
             }
             TokenKind::LBracket => {
                 // Array literal: [expr, expr, ...] or [expr; count]
@@ -2893,6 +2920,7 @@ impl HasSpan for Expr {
             Expr::MethodCall(e) => e.span,
             Expr::StringLit(e) => e.span,
             Expr::ArrayLiteral(e) => e.span,
+            Expr::TupleLit(e) => e.span,
             Expr::Index(e) => e.span,
             Expr::Cast(e) => e.span,
             Expr::Assign(e) => e.span,

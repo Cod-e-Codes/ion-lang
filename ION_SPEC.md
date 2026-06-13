@@ -483,6 +483,24 @@ Additional built-in generic types:
 - `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
 - `[T; N]` – fixed-size array of `N` elements of type `T`
 - `[]T` – dynamically sized slice (fat pointer) of type `T`
+- `(T1, T2, ...)` – fixed-size tuple value type (see §4.1.2)
+
+#### 4.1.2 Tuple Values
+
+Tuple types `(T1, T2, ...)` describe anonymous product types with positional fields `f0`, `f1`, ... accessed in source as `.0`, `.1`, etc.
+
+```ion
+let t: (int, int) = (10, 20);
+let x: int = t.0;
+let (a, b) = t; // destructure by move
+```
+
+Rules:
+
+- Tuple literals `(expr1, expr2, ...)` require at least one element; empty `()` is not supported.
+- Field indices are 0-based; out-of-range access is a compile error.
+- Moving a tuple moves all non-copy fields together; destructuring `let (a, b) = t` moves each bound field out of `t`.
+- Nested tuples, tuple equality (`==`), tuples in struct fields, and generic tuple types are not supported in the current compiler.
 
 #### 4.1.1 Array Safety
 
@@ -912,6 +930,7 @@ The `Send` property marks types that are safe to transfer to another thread by v
 - `Option<T>` is `Send` if `T: Send`.
 - `Result<T, E>` is `Send` if both `T: Send` and `E: Send`.
 - `Sender<T>` and `Receiver<T>` are `Send` if `T: Send`.
+- `(T1, T2, ...)` is `Send` if every element type is `Send`.
 - Any type containing a reference (`&T`, `&mut T`) is **not** `Send`.
 
 User-defined `struct` and `enum` types are `Send` if and only if **all of their fields / payloads are `Send`**. For generic types, this rule is applied **per instantiation**: e.g., `Wrapper<int>` may be `Send` while `Wrapper<NonSend>` is not, depending on the fields.
@@ -1159,6 +1178,7 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (not defined in user source)
 - Function types: named functions only; no fn literals/closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
 - `fs::read_to_string`: POSIX/MinGW only; returns empty `String` on error (no `Result` yet); no write or streaming API
+- Tuple values: no nested tuples, `==` on tuples, struct fields holding tuples, or generic `(T1, T2)` parameters
 
 ### 11. Future Work (Non-Normative)
 

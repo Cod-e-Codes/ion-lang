@@ -717,6 +717,10 @@ if [ -f "test_fn_type_mismatch.ion" ]; then
     test_error "test_fn_type_mismatch.ion" "TypeMismatch" || true
 fi
 
+if [ -f "test_tuple_basic.ion" ]; then
+    test_file "test_tuple_basic.ion" 81 || true
+fi
+
 # Multi-file compilation
 if [ -f "test_multifile.ion" ] && [ -f "utils.ion" ]; then
     test_count=$((test_count + 1))
