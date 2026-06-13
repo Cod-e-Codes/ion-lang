@@ -32,19 +32,34 @@
 - Node definitions for items, expressions, types, patterns
 - Extend AST types before adding parser branches that build them (lexer first if new tokens are needed)
 
-### 5. Type checker (`src/tc/mod.rs`)
+### 5. Type checker (`src/tc/`)
+
+| File | Role |
+|------|------|
+| `mod.rs` | `TypeChecker`, `check_program`, `check_program_collecting`, main stmt/expr checking |
+| `ownership.rs` | `check_expr_for_moves`, `is_copy_type` |
+| `builtins.rs` | `check_builtin_call` |
+| `types.rs` | `types_equal`, `type_to_string`, `resolve_type_name`, method type helpers |
 
 - Ownership, moves, borrows, no-escape rule
 - `Send` checking for channels and `spawn`
 - Module visibility (`pub`), generics, method resolution
-- Errors via `TypeCheckError` enum - match existing variants for consistency
+- Errors via `TypeCheckError` enum
+- CLI: `check_program` returns first error; LSP: `check_program_collecting` gathers multiple independent errors
 
 ### 6. IR (`src/ir/mod.rs`)
 
 - `IRBuilder::build` lowers AST to IR for codegen
 - Used in both single-file (merged program) and multi-file modes
 
-### 7. C codegen (`src/cgen/mod.rs`)
+### 7. C codegen (`src/cgen/`)
+
+| File | Role |
+|------|------|
+| `mod.rs` | `Codegen`, `generate`, stmt/expr emission |
+| `types.rs` | `type_to_c_impl`, mangling, alias resolution |
+| `builtins.rs` | `generate_builtin_call` |
+| `drop.rs` | `emit_drop`, `type_needs_drop` |
 
 - `Codegen::generate` - single merged `.c`
 - `generate_module_source` / `generate_module_header` - multi-file `.c`/`.h`
@@ -58,4 +73,4 @@
 
 ## LSP path (`src/lsp/server.rs`)
 
-Differs from the CLI for the **current file**: lexer → parser on buffer text (not reading the file from disk). Then `register_imports` runs `parse_module` recursively for each imported file on disk to build `module_exports`, then the type checker runs on the buffer AST. See `ion-lsp-vscode` skill.
+Differs from the CLI for the **current file**: lexer → parser on buffer text (not reading the file from disk). Then `register_imports` runs `parse_module` recursively for each imported file on disk to build `module_exports`, then `check_program_collecting` runs on the buffer AST. Multiple type-check diagnostics are published in one LSP notification when errors are independent (e.g. per function). See `ion-lsp-vscode` skill.

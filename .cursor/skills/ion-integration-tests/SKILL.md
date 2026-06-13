@@ -15,11 +15,7 @@ paths:
 
 End-to-end tests: Ion → C → gcc → run executable → assert exit code (or assert compile failure).
 
-The harness runs tests under `tests/` only. Files in `examples/` are documented demos - compile and run them manually (see [README.md](../../../README.md)); they are not registered in `test_runner.sh`.
-
-## Tests are not auto-discovered
-
-Creating `tests/test_foo.ion` does **nothing** until you add a matching `if [ -f "test_foo.ion" ]; then ... fi` block in `tests/test_runner.sh`. Every new test requires both the `.ion` file **and** harness registration. Update `tests/README.md` too.
+The harness runs tests under `tests/` only. Files in `examples/` are documented demos - compile and run them manually (see [README.md](../../../README.md)); they are not in the integration manifest.
 
 ## Run tests
 
@@ -38,28 +34,39 @@ COMPILER=../target/debug/ion-compiler CC=clang ./test_runner.sh
 
 **Windows:** Use Git Bash, not WSL. Rebuild release after compiler changes. Stop `ion-lsp` if build fails with "Access is denied".
 
+## Manifest (`test_expectations.tsv`)
+
+Tab-separated columns:
+
+| Column | `run` | `error` | `cgen` |
+|--------|-------|---------|--------|
+| `file` | `.ion` path | same | same |
+| `kind` | `run` | `error` | `cgen` |
+| `exit` | expected exit code | empty | empty |
+| `error_pattern` | empty | grep on CLI stderr | empty |
+| `must_match` | empty | empty | required substring in `.c` |
+| `must_not_match` | empty | empty | optional forbidden substring |
+
+`test_runner.sh` loops the manifest and calls `test_file`, `test_error`, or `test_cgen_grep`. Special cases stay explicit: `test_multifile` (multi-file mode), panic tests (codegen-only rows; manual runtime documented in [tests/README.md](../../../tests/README.md)).
+
 ## Add a positive test
 
 1. Create `tests/test_<feature>.ion` with `fn main() -> int { ... }`
 2. Return a distinct integer as exit code (e.g. `return 42;`)
-3. Register in `tests/test_runner.sh`:
+3. Add one line to `tests/test_expectations.tsv`:
 
-```bash
-if [ -f "test_myfeature.ion" ]; then
-    test_file "test_myfeature.ion" 42 || true
-fi
+```
+test_myfeature.ion	run	42
 ```
 
 4. Document in `tests/README.md` under the appropriate category
 
 ## Add a negative test
 
-Program should **fail to compile**. Register:
+Program should **fail to compile**. Add to manifest:
 
-```bash
-if [ -f "test_myfeature_error.ion" ]; then
-    test_error "test_myfeature_error.ion" "ExpectedSubstring" || true
-fi
+```
+test_myfeature_error.ion	error		UseAfterMove
 ```
 
 The harness greps **compiler CLI stderr** for the pattern (not LSP diagnostic text). Use stable substrings from `ion-compiler` output:
@@ -91,7 +98,7 @@ If compilation fails but the grep pattern does **not** match, the harness prints
 
 ## Multi-file test
 
-Special-case in `test_runner.sh` (see `test_multifile` block): uses `--mode multi --output test_multifile test_multifile.ion`, checks `.c`/`.h` generation, compiles objects, expects exit code 27.
+`test_multifile.ion` + `utils.ion`: harness block `test_multifile` uses `--mode multi --output test_multifile`, expects exit code 27.
 
 ## Examples
 
@@ -118,7 +125,7 @@ fn main() -> int {
 
 - Rust unit tests - use `cargo test` for lexer/parser unit tests
 - stdout output - harness only checks process exit code
-- `test_array_bounds_panic.ion` - panic/abort; skipped by harness (manual only)
+- `test_array_bounds_panic.ion` / `test_slice_bounds_panic.ion` - panic/abort at runtime; harness checks generated C only (manual run in tests/README.md)
 
 ## After adding tests
 
@@ -127,4 +134,4 @@ cargo build --release --bin ion-compiler
 cd tests && ./test_runner.sh
 ```
 
-Update `tests/README.md` catalog entry. Do not hardcode pass/fail totals in docs.
+Update `tests/README.md` catalog entry. Verify with `./test_runner.sh`; do not hardcode pass totals in docs.

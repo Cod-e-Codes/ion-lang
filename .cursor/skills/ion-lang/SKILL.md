@@ -27,7 +27,7 @@ Ion is a move-only, no-GC systems language transpiled to C. This skill orients y
 .ion → compiler::parse_module (imports/cycles, then lex+parse per file) → type checker → IR → cgen → .c → gcc + runtime → executable
 ```
 
-Rust modules in `src/`: `lexer`, `parser`, `ast`, `compiler` (module resolution), `tc`, `ir`, `cgen`, `lsp`.
+Rust modules in `src/`: `lexer`, `parser`, `ast`, `compiler` (module resolution), `tc` (`mod.rs`, `ownership.rs`, `builtins.rs`, `types.rs`), `ir`, `cgen` (`mod.rs`, `types.rs`, `builtins.rs`, `drop.rs`), `lsp`.
 
 ## Non-negotiable language constraints
 
@@ -88,5 +88,5 @@ Read these when the task matches:
 - `extern "C"` calls require `unsafe` blocks.
 - Multi-file mode: `--mode multi --output <name> <main.ion>` generates per-module `.c`/`.h`.
 - Stdlib lives in `stdlib/` (`io.ion`, `fmt.ion`); imported module functions are emitted as `{alias}_{name}` in single-file merge mode (e.g. `io::print_int` -> `io_print_int`).
-- Integration tests must be registered in `test_runner.sh` - files alone are not picked up.
+- Integration tests: add `tests/test_*.ion` plus one row in `tests/test_expectations.tsv` (see `ion-integration-tests` skill). Run `cd tests && ./test_runner.sh` to verify.
 - LSP parses the **open buffer** in memory (lexer → parser), then `register_imports` which **fully `parse_module`s imported files from disk**. Parser/tc/import changes may need LSP updates (`ion-lsp-vscode` skill).

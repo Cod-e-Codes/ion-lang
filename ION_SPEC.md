@@ -1161,12 +1161,14 @@ Each such pattern must produce a clear, actionable compiler error.
 The `ion-lsp` binary and VS Code/Cursor extension provide:
 
 - Syntax highlighting (TextMate grammar, no server required)
-- Parse and type diagnostics
+- Parse and type diagnostics (multiple type-check errors per file when independent, e.g. one per function)
 - Hover: variable types at use sites and `let` binding identifiers; symbol docs at fn/struct/enum definitions
 - Completion: keywords, builtins, and file symbols (no prefix filtering yet)
 - Go to definition: variables, function calls (`foo`, `mod::func`), and user-defined methods; builtins (`Vec::push`, etc.) have no source location
 
-Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor settings to the executable path.
+The CLI `ion-compiler` still reports the first type-check error only. The LSP uses `TypeChecker::check_program_collecting` to gather multiple diagnostics in one `publish_diagnostics` call.
+
+Build with `cargo build --release --bin ion-lsp`. Rebuild after compiler or LSP changes; reload the editor window so `ion.lspPath` picks up the new binary. Set `ion.lspPath` in editor settings to the executable path.
 
 #### 10.2 Known limitations
 
@@ -1179,6 +1181,8 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 - Function types: named functions only; no fn literals/closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
 - `fs::read_to_string`: POSIX/MinGW only; returns empty `String` on error (no `Result` yet); no write or streaming API
 - Tuple values: no nested tuples, `==` on tuples, struct fields holding tuples, or generic `(T1, T2)` parameters
+- Match expressions used as rvalues in expression position may codegen as `0` (statement-position `match` is correct)
+- Struct fields holding `Vec<T>` may not get correct drop codegen when `Vec_*` typedef ordering is wrong in generated C
 
 ### 11. Future Work (Non-Normative)
 

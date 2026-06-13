@@ -21,7 +21,12 @@
 - [ ] Imports: `import "file.ion" as name;` syntax
 - [ ] If imports/exports/multi-file behavior changes: update `src/compiler/mod.rs` (`parse_module`, `ModuleExports`, `merge_modules`)
 
-## Type checker (`src/tc/mod.rs`)
+## Type checker (`src/tc/`)
+
+- `mod.rs` - `check_program`, stmt/expr checking
+- `ownership.rs` - moves, `is_copy_type`
+- `builtins.rs` - builtin calls
+- `types.rs` - `types_equal`, `type_to_string`, `resolve_type_name`
 
 - `for` loops desugar to `While` in TC; `loop_depth` is set via the synthetic `WhileStmt`, not directly in the `For` arm
 - [ ] Move tracking updated for new bindings/expr forms
@@ -34,7 +39,12 @@
 - [ ] New `Inst` or expr variants
 - [ ] `IRBuilder` covers all AST paths for the feature
 
-## Codegen (`src/cgen/mod.rs`)
+## Codegen (`src/cgen/`)
+
+- `mod.rs` - main emission
+- `types.rs` - C type mangling
+- `builtins.rs` - builtin call codegen
+- `drop.rs` - drop/defer paths
 
 - [ ] Valid C99-ish output
 - [ ] Includes and forward decls for multi-file headers

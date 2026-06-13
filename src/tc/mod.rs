@@ -1,6 +1,12 @@
+mod builtins;
+mod ownership;
+mod types;
+
 use crate::ast::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
+pub use types::type_to_string;
+pub(crate) use types::{fn_type_from_signature, types_equal};
 
 // Helper trait for getting span from expressions
 trait HasSpan {
@@ -214,421 +220,23 @@ impl TypeChecker {
         None
     }
 
-    /// Check if a call expression is to a built-in function and type-check it.
-    /// Returns Some(return_type) if it's a built-in, None otherwise.
-    fn check_builtin_call(&mut self, call_expr: &CallExpr) -> Result<Option<Type>, TypeCheckError> {
-        let callee = &call_expr.callee;
-
-        // Box::new<T>(value: T) -> Box<T>
-        if callee.starts_with("Box::new") {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let value_ty = self.check_expr(&call_expr.args[0])?;
-            return Ok(Some(Type::Box {
-                inner: Box::new(value_ty),
-            }));
+    pub fn check_program(&mut self, program: &Program) -> Result<TypeCheckResult, TypeCheckError> {
+        let (result, errors) = self.check_program_collecting(program);
+        if let Some(err) = errors.into_iter().next() {
+            Err(err)
+        } else {
+            Ok(result)
         }
-
-        // Box::unwrap<T>(box: Box<T>) -> T
-        if callee == "Box::unwrap" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let box_ty = self.check_expr(&call_expr.args[0])?;
-            return match box_ty {
-                Type::Box { inner } => Ok(Some(*inner)),
-                _ => Err(TypeCheckError::TypeMismatch {
-                    expected: "Box<T>".to_string(),
-                    got: type_to_string(&box_ty),
-                    span: call_expr.span,
-                }),
-            };
-        }
-
-        // Vec::new<T>() -> Vec<T>
-        // Note: We can't infer T from empty args, so this requires type annotation
-        // For now, we'll return Vec<Int> as a default and let codegen handle it
-        if callee == "Vec::new" {
-            if !call_expr.args.is_empty() {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "0 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            // Return Vec<Int> as default - actual type should come from context
-            return Ok(Some(Type::Vec {
-                elem_type: Box::new(Type::Int),
-            }));
-        }
-
-        // Vec::with_capacity<T>(cap: int) -> Vec<T>
-        if callee == "Vec::with_capacity" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let cap_ty = self.check_expr(&call_expr.args[0])?;
-            if !types_equal(&cap_ty, &Type::Int) {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "int".to_string(),
-                    got: type_to_string(&cap_ty),
-                    span: call_expr.args[0].span(),
-                });
-            }
-            // Return Vec<Int> as default
-            return Ok(Some(Type::Vec {
-                elem_type: Box::new(Type::Int),
-            }));
-        }
-
-        // Vec::len<T>(vec: &Vec<T>) -> int
-        if callee == "Vec::len" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let vec_ty = self.check_expr(&call_expr.args[0])?;
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: false,
-            } = vec_ty
-                && let Type::Vec { .. } = **inner_ty
-            {
-                return Ok(Some(Type::Int));
-            }
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&Vec<T>".to_string(),
-                got: type_to_string(&vec_ty),
-                span: call_expr.args[0].span(),
-            });
-        }
-
-        // Vec::capacity<T>(vec: &Vec<T>) -> int
-        if callee == "Vec::capacity" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let vec_ty = self.check_expr(&call_expr.args[0])?;
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: false,
-            } = vec_ty
-                && let Type::Vec { .. } = **inner_ty
-            {
-                return Ok(Some(Type::Int));
-            }
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&Vec<T>".to_string(),
-                got: type_to_string(&vec_ty),
-                span: call_expr.args[0].span(),
-            });
-        }
-
-        // Vec::push<T>(vec: &mut Vec<T>, value: T)
-        if callee == "Vec::push" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let vec_ty = self.check_expr(&call_expr.args[0])?;
-            let value_ty = self.check_expr(&call_expr.args[1])?;
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: true,
-            } = vec_ty
-                && let Type::Vec { ref elem_type } = **inner_ty
-            {
-                if !types_equal(&value_ty, elem_type) {
-                    return Err(TypeCheckError::TypeMismatch {
-                        expected: type_to_string(elem_type),
-                        got: type_to_string(&value_ty),
-                        span: call_expr.args[1].span(),
-                    });
-                }
-                return Ok(Some(Type::Int)); // void return
-            }
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&mut Vec<T>".to_string(),
-                got: type_to_string(&vec_ty),
-                span: call_expr.args[0].span(),
-            });
-        }
-
-        // Vec::pop<T>(vec: &mut Vec<T>) -> Option<T>
-        if callee == "Vec::pop" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let vec_ty = self.check_expr(&call_expr.args[0])?;
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: true,
-            } = vec_ty
-                && let Type::Vec { ref elem_type } = **inner_ty
-            {
-                // Check if Option<T> enum exists
-                if self.enums.contains_key("Option") {
-                    return Ok(Some(Type::Generic {
-                        name: "Option".to_string(),
-                        params: vec![(**elem_type).clone()],
-                    }));
-                } else {
-                    // Return Option<Int> as fallback
-                    return Ok(Some(Type::Generic {
-                        name: "Option".to_string(),
-                        params: vec![Type::Int],
-                    }));
-                }
-            }
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&mut Vec<T>".to_string(),
-                got: type_to_string(&vec_ty),
-                span: call_expr.args[0].span(),
-            });
-        }
-
-        // Vec::get<T>(vec: &Vec<T>, index: int) -> Option<T>
-        if callee == "Vec::get" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let vec_ty = self.check_expr(&call_expr.args[0])?;
-            let index_ty = self.check_expr(&call_expr.args[1])?;
-            if !types_equal(&index_ty, &Type::Int) {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "int".to_string(),
-                    got: type_to_string(&index_ty),
-                    span: call_expr.args[1].span(),
-                });
-            }
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: false,
-            } = vec_ty
-                && let Type::Vec { ref elem_type } = **inner_ty
-            {
-                if self.enums.contains_key("Option") {
-                    return Ok(Some(Type::Generic {
-                        name: "Option".to_string(),
-                        params: vec![(**elem_type).clone()],
-                    }));
-                } else {
-                    return Ok(Some(Type::Generic {
-                        name: "Option".to_string(),
-                        params: vec![Type::Int],
-                    }));
-                }
-            }
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&Vec<T>".to_string(),
-                got: type_to_string(&vec_ty),
-                span: call_expr.args[0].span(),
-            });
-        }
-
-        // Vec::set<T>(vec: &mut Vec<T>, index: int, value: T) -> int
-        if callee == "Vec::set" {
-            if call_expr.args.len() != 3 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "3 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let vec_ty = self.check_expr(&call_expr.args[0])?;
-            let index_ty = self.check_expr(&call_expr.args[1])?;
-            let value_ty = self.check_expr(&call_expr.args[2])?;
-            if !types_equal(&index_ty, &Type::Int) {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "int".to_string(),
-                    got: type_to_string(&index_ty),
-                    span: call_expr.args[1].span(),
-                });
-            }
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: true,
-            } = vec_ty
-                && let Type::Vec { ref elem_type } = **inner_ty
-            {
-                if !types_equal(&value_ty, elem_type) {
-                    return Err(TypeCheckError::TypeMismatch {
-                        expected: type_to_string(elem_type),
-                        got: type_to_string(&value_ty),
-                        span: call_expr.args[2].span(),
-                    });
-                }
-                return Ok(Some(Type::Int)); // 0 on success, -1 on failure
-            }
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&mut Vec<T>".to_string(),
-                got: type_to_string(&vec_ty),
-                span: call_expr.args[0].span(),
-            });
-        }
-
-        // String::new() -> String
-        if callee == "String::new" {
-            if !call_expr.args.is_empty() {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "0 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            return Ok(Some(Type::String));
-        }
-
-        // String::from(s: &str) -> String
-        // Note: &str is not a real type in Ion yet, so we'll accept String for now
-        if callee == "String::from" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let _arg_ty = self.check_expr(&call_expr.args[0])?;
-            // Accept any type for now (String or string literal)
-            return Ok(Some(Type::String));
-        }
-
-        // String::len(s: &String) -> int
-        if callee == "String::len" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let str_ty = self.check_expr(&call_expr.args[0])?;
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: false,
-            } = str_ty
-                && let Type::String = **inner_ty
-            {
-                return Ok(Some(Type::Int));
-            }
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&String".to_string(),
-                got: type_to_string(&str_ty),
-                span: call_expr.args[0].span(),
-            });
-        }
-
-        // String::push_str(s: &mut String, other: &str)
-        if callee == "String::push_str" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let str_ty = self.check_expr(&call_expr.args[0])?;
-            let _other_ty = self.check_expr(&call_expr.args[1])?;
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: true,
-            } = str_ty
-                && let Type::String = **inner_ty
-            {
-                return Ok(Some(Type::Int)); // void return
-            }
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&mut String".to_string(),
-                got: type_to_string(&str_ty),
-                span: call_expr.args[0].span(),
-            });
-        }
-
-        // String::push_byte(s: &mut String, b: u8)
-        if callee == "String::push_byte" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            let str_ty = self.check_expr(&call_expr.args[0])?;
-            let byte_ty = self.check_expr(&call_expr.args[1])?;
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: true,
-            } = str_ty
-                && let Type::String = **inner_ty
-            {
-                if !matches!(byte_ty, Type::U8) {
-                    return Err(TypeCheckError::TypeMismatch {
-                        expected: "u8".to_string(),
-                        got: type_to_string(&byte_ty),
-                        span: call_expr.args[1].span(),
-                    });
-                }
-                return Ok(Some(Type::Int)); // void return
-            }
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&mut String".to_string(),
-                got: type_to_string(&str_ty),
-                span: call_expr.args[0].span(),
-            });
-        }
-
-        // channel<T>() -> (Sender<T>, Receiver<T>)
-        // This should only be called with tuple destructuring, handled in check_stmt
-        if callee == "channel" {
-            if !call_expr.args.is_empty() {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "0 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
-            // channel() needs type context from tuple destructuring
-            // Return None so it can be handled in tuple destructuring context
-            return Ok(None);
-        }
-
-        // Not a built-in function
-        Ok(None)
     }
 
-    pub fn check_program(&mut self, program: &Program) -> Result<TypeCheckResult, TypeCheckError> {
+    /// Type-check the program and collect all independent errors (e.g. per-function).
+    /// Used by the LSP to publish multiple diagnostics in one pass.
+    pub fn check_program_collecting(
+        &mut self,
+        program: &Program,
+    ) -> (TypeCheckResult, Vec<TypeCheckError>) {
+        let mut errors = Vec::new();
+
         // Record struct declarations
         self.structs.clear();
         for s in &program.structs {
@@ -666,7 +274,7 @@ impl TypeChecker {
         for s in &program.structs {
             for field in &s.fields {
                 if self.is_reference_containing(&field.ty) {
-                    return Err(TypeCheckError::ReferenceEscape {
+                    errors.push(TypeCheckError::ReferenceEscape {
                         description: format!(
                             "Struct '{}' field '{}' cannot have reference type '{}' (violates no-escape rule)",
                             s.name,
@@ -684,7 +292,7 @@ impl TypeChecker {
             for variant in &e.variants {
                 for payload_ty in &variant.payload_types {
                     if self.is_reference_containing(payload_ty) {
-                        return Err(TypeCheckError::ReferenceEscape {
+                        errors.push(TypeCheckError::ReferenceEscape {
                             description: format!(
                                 "Enum '{}' variant '{}' cannot have reference type '{}' in payload (violates no-escape rule)",
                                 e.name,
@@ -753,83 +361,17 @@ impl TypeChecker {
                     ret
                 ),
             );
-            self.check_function(function)?;
+            if let Err(e) = self.check_function(function) {
+                errors.push(e);
+            }
         }
 
-        // Return the collected LSP information
-        Ok(TypeCheckResult {
-            lsp_info: self.lsp_info.clone(),
-        })
-    }
-
-    /// Resolve a type name - if it's Type::Struct(name) but name is actually an enum, convert to Type::Enum(name)
-    /// Also resolves type aliases transparently
-    fn resolve_type_name(&self, ty: &Type) -> Result<Type, TypeCheckError> {
-        match ty {
-            Type::Struct(name) => {
-                // Check if this is actually a type alias
-                if let Some(alias) = self.type_aliases.get(name) {
-                    // Resolve the alias (recursively in case of nested aliases)
-                    let resolved = self.resolve_type_name(&alias.target)?;
-                    return Ok(resolved);
-                }
-                // Check if this is actually an enum
-                if self.enums.contains_key(name) {
-                    Ok(Type::Enum(name.clone()))
-                } else {
-                    Ok(ty.clone())
-                }
-            }
-            Type::Generic { name, params } => {
-                // Check if this is a generic type alias
-                if let Some(alias) = self.type_aliases.get(name)
-                    && !alias.generics.is_empty()
-                    && alias.generics.len() == params.len()
-                {
-                    // Substitute generic parameters in the target type
-                    let substitutions: HashMap<String, &Type> = alias
-                        .generics
-                        .iter()
-                        .zip(params.iter())
-                        .map(|(gen_name, param_ty)| (gen_name.clone(), param_ty))
-                        .collect();
-                    let resolved = Self::substitute_type_params(&alias.target, &substitutions);
-                    return self.resolve_type_name(&resolved);
-                }
-                Ok(ty.clone())
-            }
-            _ => Ok(ty.clone()),
-        }
-    }
-
-    /// Extract the base type name for method lookup from a resolved type.
-    /// Returns (type_name, is_reference, is_mutable_ref).
-    /// For example:
-    ///   Vec<int> -> ("Vec", false, false)
-    ///   &Vec<int> -> ("Vec", true, false)
-    ///   &mut Vec<int> -> ("Vec", true, true)
-    fn extract_type_name_for_method(ty: &Type) -> Result<(String, bool, bool), TypeCheckError> {
-        match ty {
-            Type::Ref { inner, mutable } => {
-                // Extract type name from reference
-                let (name, _, _) = Self::extract_type_name_for_method(inner)?;
-                Ok((name, true, *mutable))
-            }
-            Type::Vec { .. } => {
-                // For generic types, we need to construct the qualified name with type params
-                // But for method lookup, we just use "Vec"
-                Ok(("Vec".to_string(), false, false))
-            }
-            Type::String => Ok(("String".to_string(), false, false)),
-            Type::Box { .. } => Ok(("Box".to_string(), false, false)),
-            Type::Struct(name) => Ok((name.clone(), false, false)),
-            Type::Enum(name) => Ok((name.clone(), false, false)),
-            Type::Generic { name, .. } => Ok((name.clone(), false, false)),
-            _ => Err(TypeCheckError::Message(format!(
-                "Cannot call methods on primitive type '{}'",
-                type_to_string(ty)
-            ))),
-        }
+        (
+            TypeCheckResult {
+                lsp_info: self.lsp_info.clone(),
+            },
+            errors,
+        )
     }
 
     /// Get the required receiver type for a built-in method.
@@ -3565,179 +3107,6 @@ impl TypeChecker {
         }
     }
 
-    /// Check expression for moves and mark variables as Moved.
-    /// This is called before using an expression in contexts that move ownership
-    /// (assignment, return, function call arguments).
-    fn check_expr_for_moves(&mut self, expr: &Expr) -> Result<(), TypeCheckError> {
-        match expr {
-            Expr::Lit(_) => Ok(()),          // Literals don't move anything
-            Expr::BoolLiteral(_) => Ok(()),  // Boolean literals don't move anything
-            Expr::FloatLiteral(_) => Ok(()), // Float literals don't move anything
-            Expr::Var(var_expr) => {
-                if self.functions.contains_key(&var_expr.name)
-                    || self.extern_functions.contains_key(&var_expr.name)
-                {
-                    return Ok(());
-                }
-                if var_expr.name.contains("::") {
-                    let parts: Vec<&str> = var_expr.name.split("::").collect();
-                    if parts.len() == 2
-                        && let Some(module_exports) = self.module_imports.get(parts[0])
-                        && module_exports.all_functions.contains_key(parts[1])
-                    {
-                        return Ok(());
-                    }
-                }
-
-                let var_info = self.variables.get_mut(&var_expr.name).ok_or_else(|| {
-                    TypeCheckError::UndefinedVariable {
-                        name: var_expr.name.clone(),
-                        span: var_expr.span,
-                    }
-                })?;
-
-                // Check for use-after-move
-                if var_info.state == OwnershipState::Moved {
-                    return Err(TypeCheckError::UseAfterMove {
-                        name: var_expr.name.clone(),
-                        span: var_expr.span,
-                    });
-                }
-
-                // Primitives and references are copied, not moved (see ION_SPEC §5.2).
-                if Self::is_copy_type(&var_info.ty) {
-                    return Ok(());
-                }
-
-                // Mark as moved
-                var_info.state = OwnershipState::Moved;
-                Ok(())
-            }
-            Expr::Ref(ref_expr) => {
-                // Reference expressions (&x, &mut x) borrow, they don't move
-                // Just check the inner expression is valid
-                self.check_expr(&ref_expr.inner)?;
-                Ok(())
-            }
-            Expr::StructLit(lit) => {
-                // Moving a struct literal moves each of its value expressions.
-                for field in &lit.fields {
-                    self.check_expr_for_moves(&field.value)?;
-                }
-                Ok(())
-            }
-            Expr::TupleLit(tuple_lit) => {
-                for elem in &tuple_lit.elements {
-                    self.check_expr_for_moves(elem)?;
-                }
-                Ok(())
-            }
-            Expr::FieldAccess(acc) => {
-                // Field access reads from the base but does not move the entire struct.
-                self.check_expr(&acc.base)?;
-                Ok(())
-            }
-            Expr::BinOp(bin_op_expr) => {
-                // Binary operations use their operands (read), but don't move them
-                // They only read the values
-                self.check_expr(&bin_op_expr.left)?;
-                self.check_expr(&bin_op_expr.right)?;
-                Ok(())
-            }
-            Expr::UnOp(un_op_expr) => {
-                // Unary operations use their operand (read), but don't move it
-                self.check_expr(&un_op_expr.operand)?;
-                Ok(())
-            }
-            Expr::Send(send_expr) => {
-                // Sending moves the value operand; the channel itself is only read.
-                self.check_expr_for_moves(&send_expr.value)
-            }
-            Expr::Recv(recv_expr) => {
-                // Receiving from a channel does not move any existing variable;
-                // it produces a fresh value.
-                self.check_expr(&recv_expr.channel)?;
-                Ok(())
-            }
-            Expr::EnumLit(enum_lit) => {
-                // Check moves in enum literal arguments
-                for arg in &enum_lit.args {
-                    self.check_expr_for_moves(arg)?;
-                }
-                Ok(())
-            }
-            Expr::Match(match_expr) => {
-                // Check moves in match expression
-                self.check_expr_for_moves(&match_expr.expr)?;
-                // Match arms don't move the matched value, they just pattern match
-                Ok(())
-            }
-            Expr::Call(call_expr) => {
-                for arg in &call_expr.args {
-                    self.check_expr_for_moves(arg)?;
-                }
-                Ok(())
-            }
-            Expr::MethodCall(method_call) => {
-                // Method calls need to check moves in receiver and arguments
-                // The receiver might be moved or borrowed depending on method signature
-                // For now, just check the receiver is valid (will be handled in desugaring)
-                self.check_expr(&method_call.receiver)?;
-                for arg in &method_call.args {
-                    self.check_expr_for_moves(arg)?;
-                }
-                Ok(())
-            }
-            Expr::StringLit(_) => Ok(()), // String literals don't move anything
-            Expr::ArrayLiteral(arr_lit) => {
-                // Array literals move their elements
-                for elem in &arr_lit.elements {
-                    self.check_expr_for_moves(elem)?;
-                }
-                Ok(())
-            }
-            Expr::Index(index_expr) => {
-                // Indexing reads from the target but doesn't move it
-                self.check_expr(&index_expr.target)?;
-                self.check_expr(&index_expr.index)?;
-                Ok(())
-            }
-            Expr::Cast(cast_expr) => {
-                // Casting moves the expression
-                self.check_expr_for_moves(&cast_expr.expr)?;
-                Ok(())
-            }
-            Expr::Assign(assign_expr) => {
-                // Assignment moves the value, but not the target
-                self.check_expr(&assign_expr.target)?; // Check target is valid
-                self.check_expr_for_moves(&assign_expr.value)?; // Move the value
-                Ok(())
-            }
-        }
-    }
-
-    /// Types copied rather than moved at the ownership level (ION_SPEC §5.2).
-    fn is_copy_type(ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::Int
-                | Type::Bool
-                | Type::F32
-                | Type::F64
-                | Type::I8
-                | Type::I16
-                | Type::I32
-                | Type::I64
-                | Type::U8
-                | Type::U16
-                | Type::U32
-                | Type::U64
-                | Type::UInt
-                | Type::Ref { .. }
-                | Type::Fn { .. }
-        )
-    }
-
     /// Check if a type is numeric (all integer and float types)
     fn is_numeric_type(&self, ty: &Type) -> bool {
         matches!(
@@ -4017,183 +3386,6 @@ impl TypeChecker {
             | (Type::UInt, Type::UInt) => true,
 
             _ => false,
-        }
-    }
-}
-
-fn fn_type_from_signature(params: &[Param], return_type: &Option<Type>) -> Type {
-    Type::Fn {
-        params: params.iter().map(|p| p.ty.clone()).collect(),
-        return_type: Box::new(return_type.clone().unwrap_or(Type::Int)),
-    }
-}
-
-fn types_equal(a: &Type, b: &Type) -> bool {
-    // Note: Type alias resolution should happen before calling types_equal
-    // The caller should use resolve_type_name first
-    match (a, b) {
-        (Type::Int, Type::Int) => true,
-        (Type::Bool, Type::Bool) => true,
-        (Type::F32, Type::F32) => true,
-        (Type::F64, Type::F64) => true,
-        (Type::I8, Type::I8) => true,
-        (Type::I16, Type::I16) => true,
-        (Type::I32, Type::I32) => true,
-        (Type::I64, Type::I64) => true,
-        (Type::U8, Type::U8) => true,
-        (Type::U16, Type::U16) => true,
-        (Type::U32, Type::U32) => true,
-        (Type::U64, Type::U64) => true,
-        (Type::UInt, Type::UInt) => true,
-        (
-            Type::Ref {
-                inner: a_inner,
-                mutable: a_mut,
-            },
-            Type::Ref {
-                inner: b_inner,
-                mutable: b_mut,
-            },
-        ) => a_mut == b_mut && types_equal(a_inner, b_inner),
-        (Type::RawPtr { inner: a_inner }, Type::RawPtr { inner: b_inner }) => {
-            types_equal(a_inner, b_inner)
-        }
-        (Type::Channel { elem_type: a_elem }, Type::Channel { elem_type: b_elem }) => {
-            types_equal(a_elem, b_elem)
-        }
-        (Type::Struct(a_name), Type::Struct(b_name)) => a_name == b_name,
-        (Type::Enum(a_name), Type::Enum(b_name)) => a_name == b_name,
-        // Allow base struct/enum types to match generic instantiations with same base name
-        (Type::Struct(a_name), Type::Generic { name: b_name, .. }) => a_name == b_name,
-        (Type::Generic { name: a_name, .. }, Type::Struct(b_name)) => a_name == b_name,
-        (Type::Enum(a_name), Type::Generic { name: b_name, .. }) => a_name == b_name,
-        (Type::Generic { name: a_name, .. }, Type::Enum(b_name)) => a_name == b_name,
-        (Type::String, Type::String) => true,
-        (Type::Box { inner: a_inner }, Type::Box { inner: b_inner }) => {
-            types_equal(a_inner, b_inner)
-        }
-        (Type::Vec { elem_type: a_elem }, Type::Vec { elem_type: b_elem }) => {
-            types_equal(a_elem, b_elem)
-        }
-        (
-            Type::Array {
-                inner: a_inner,
-                size: a_size,
-            },
-            Type::Array {
-                inner: b_inner,
-                size: b_size,
-            },
-        ) => a_size == b_size && types_equal(a_inner, b_inner),
-        (Type::Slice { inner: a_inner }, Type::Slice { inner: b_inner }) => {
-            types_equal(a_inner, b_inner)
-        }
-        (Type::Sender { elem_type: a_elem }, Type::Sender { elem_type: b_elem }) => {
-            types_equal(a_elem, b_elem)
-        }
-        (Type::Receiver { elem_type: a_elem }, Type::Receiver { elem_type: b_elem }) => {
-            types_equal(a_elem, b_elem)
-        }
-        (Type::Tuple { elements: a_elems }, Type::Tuple { elements: b_elems }) => {
-            a_elems.len() == b_elems.len()
-                && a_elems
-                    .iter()
-                    .zip(b_elems.iter())
-                    .all(|(a, b)| types_equal(a, b))
-        }
-        (
-            Type::Generic {
-                name: a_name,
-                params: a_params,
-            },
-            Type::Generic {
-                name: b_name,
-                params: b_params,
-            },
-        ) => {
-            a_name == b_name
-                && a_params.len() == b_params.len()
-                && a_params
-                    .iter()
-                    .zip(b_params.iter())
-                    .all(|(a, b)| types_equal(a, b))
-        }
-        (
-            Type::Fn {
-                params: a_params,
-                return_type: a_ret,
-            },
-            Type::Fn {
-                params: b_params,
-                return_type: b_ret,
-            },
-        ) => {
-            a_params.len() == b_params.len()
-                && a_params
-                    .iter()
-                    .zip(b_params.iter())
-                    .all(|(a, b)| types_equal(a, b))
-                && types_equal(a_ret, b_ret)
-        }
-        _ => false,
-    }
-}
-
-pub fn type_to_string(ty: &Type) -> String {
-    match ty {
-        Type::Int => "int".to_string(),
-        Type::Bool => "bool".to_string(),
-        Type::F32 => "f32".to_string(),
-        Type::F64 => "f64".to_string(),
-        Type::I8 => "i8".to_string(),
-        Type::I16 => "i16".to_string(),
-        Type::I32 => "i32".to_string(),
-        Type::I64 => "i64".to_string(),
-        Type::U8 => "u8".to_string(),
-        Type::U16 => "u16".to_string(),
-        Type::U32 => "u32".to_string(),
-        Type::U64 => "u64".to_string(),
-        Type::UInt => "uint".to_string(),
-        Type::Ref { inner, mutable } => {
-            if *mutable {
-                format!("&mut {}", type_to_string(inner))
-            } else {
-                format!("&{}", type_to_string(inner))
-            }
-        }
-        Type::RawPtr { inner } => {
-            format!("*{}", type_to_string(inner))
-        }
-        Type::Channel { elem_type } => {
-            format!("channel<{}>", type_to_string(elem_type))
-        }
-        Type::Struct(name) => name.clone(),
-        Type::Enum(name) => name.clone(),
-        Type::Generic { name, params } => {
-            let param_strs: Vec<String> = params.iter().map(type_to_string).collect();
-            format!("{}<{}>", name, param_strs.join(", "))
-        }
-        Type::Box { inner } => format!("Box<{}>", type_to_string(inner)),
-        Type::Vec { elem_type } => format!("Vec<{}>", type_to_string(elem_type)),
-        Type::String => "String".to_string(),
-        Type::Array { inner, size } => format!("[{}; {}]", type_to_string(inner), size),
-        Type::Slice { inner } => format!("[]{}", type_to_string(inner)),
-        Type::Sender { elem_type } => format!("Sender<{}>", type_to_string(elem_type)),
-        Type::Receiver { elem_type } => format!("Receiver<{}>", type_to_string(elem_type)),
-        Type::Tuple { elements } => {
-            let elem_strs: Vec<String> = elements.iter().map(type_to_string).collect();
-            format!("({})", elem_strs.join(", "))
-        }
-        Type::Fn {
-            params,
-            return_type,
-        } => {
-            let param_strs: Vec<String> = params.iter().map(type_to_string).collect();
-            format!(
-                "fn({}) -> {}",
-                param_strs.join(", "),
-                type_to_string(return_type)
-            )
         }
     }
 }
@@ -4732,5 +3924,38 @@ fn collect_expr_var_refs(
             collect_expr_var_refs(&assign_expr.target, refs, locals);
             collect_expr_var_refs(&assign_expr.value, refs, locals);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser;
+
+    #[test]
+    fn check_program_collecting_reports_multiple_function_errors() {
+        let src = r#"
+fn bad_a() -> int {
+    let x = Box::new(1);
+    let y = x;
+    return Box::unwrap(x);
+}
+
+fn bad_b() -> int {
+    let a = Box::new(2);
+    let b = a;
+    return Box::unwrap(a);
+}
+"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = parser::Parser::new(tokens).parse().unwrap();
+        let mut checker = TypeChecker::new();
+        let (_result, errors) = checker.check_program_collecting(&program);
+        assert_eq!(errors.len(), 2);
+        assert!(
+            errors
+                .iter()
+                .all(|e| matches!(e, TypeCheckError::UseAfterMove { .. }))
+        );
     }
 }

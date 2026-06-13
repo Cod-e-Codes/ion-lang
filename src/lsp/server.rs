@@ -250,23 +250,26 @@ impl IonLanguageServer {
                     }
                 }
 
-                match checker.check_program(&ast) {
-                    Ok(result) => {
-                        if let Ok(mut cache) = self.file_cache.lock() {
-                            cache.insert(uri.clone(), result.lsp_info);
-                        }
-                        self.client.publish_diagnostics(uri, vec![], None).await;
+                let (result, tc_errors) = checker.check_program_collecting(&ast);
+                if tc_errors.is_empty() {
+                    if let Ok(mut cache) = self.file_cache.lock() {
+                        cache.insert(uri.clone(), result.lsp_info);
                     }
-                    Err(err) => {
-                        let (span, message) = diagnostic_from_tc_error(&err);
-                        self.client
-                            .publish_diagnostics(
-                                uri,
-                                vec![diagnostic_for_span(span, message)],
-                                None,
-                            )
-                            .await;
+                    self.client.publish_diagnostics(uri, vec![], None).await;
+                } else {
+                    let diagnostics: Vec<Diagnostic> = tc_errors
+                        .iter()
+                        .map(|err| {
+                            let (span, message) = diagnostic_from_tc_error(err);
+                            diagnostic_for_span(span, message)
+                        })
+                        .collect();
+                    if let Ok(mut cache) = self.file_cache.lock() {
+                        cache.insert(uri.clone(), result.lsp_info);
                     }
+                    self.client
+                        .publish_diagnostics(uri, diagnostics, None)
+                        .await;
                 }
             }
             Err(err) => {

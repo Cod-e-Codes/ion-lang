@@ -1,0 +1,137 @@
+file	kind	exit	error_pattern	must_match	must_not_match
+test_basic.ion	run	42			
+test_arithmetic.ion	run	30			
+test_move_basic.ion	run	10			
+test_ref_valid.ion	run	0			
+test_send_basic.ion	run	42			
+test_defer_basic.ion	run	7			
+test_defer_block.ion	run	1			
+test_scope_drop_block.ion	run	0			
+test_struct_field_drop.ion	run	43			
+test_struct_field_drop_box.ion	run	44			
+test_struct_enum_empty_drop.ion	run	45			
+test_move_call_drop.ion	run	42			
+test_move_in_loop_ok.ion	run	42			
+test_move_in_loop_copy.ion	run	30			
+test_scope_drop_elif.ion	run	0			
+test_channel_basic.ion	run	0			
+test_spawn_basic.ion	run	0			
+test_spawn_channel.ion	run	0			
+test_if_basic.ion	run	2			
+test_if_no_else.ion	run	2			
+test_if_elif.ion	run	2			
+test_if_elif_no_else.ion	run	5			
+test_struct_basic.ion	run	7			
+test_enum_basic.ion	run	0			
+test_match_basic.ion	run	0			
+test_while_basic.ion	run	0			
+test_break_continue.ion	run	27			
+test_call_basic.ion	run	30			
+test_string_basic.ion	run	0			
+test_match_pattern_bindings.ion	run	42			
+test_match_complex.ion	run	10			
+test_generic_types.ion	run	0			
+test_box_basic.ion	run	0			
+test_vec_basic.ion	run	0			
+test_enum_generic.ion	run	0			
+test_generic_struct.ion	run	0			
+test_string_from.ion	run	0			
+test_box_ops.ion	run	0			
+test_vec_new.ion	run	0			
+test_vec_push_pop.ion	run	0			
+test_vec_get_set.ion	run	0			
+test_vec_capacity.ion	run	0			
+test_string_new.ion	run	0			
+test_string_push_str.ion	run	0			
+test_string_push_byte.ion	run	79			
+test_string_eq.ion	run	55			
+test_module_basic.ion	run	30			
+test_ffi_basic.ion	run	0			
+test_array_basic.ion	run	6			
+test_array_literal.ion	run	21			
+test_array_indexing.ion	run	150			
+test_slice_basic.ion	run	3			
+test_slice_indexing.ion	run	42			
+test_array_to_slice_coercion.ion	run	10			
+test_array_to_slice_let.ion	run	11			
+test_array_bounds_safe.ion	run	150			
+test_unsafe_array_indexing.ion	run	1			
+test_io_print_str.ion	run	0			
+test_io_print.ion	run	0			
+test_io_println.ion	run	0			
+test_for_array.ion	run	0			
+test_for_string.ion	run	0			
+test_match_guard.ion	run	0			
+test_generic_field_access.ion	run	0			
+test_io_print_int.ion	run	0			
+test_fmt_int_to_string.ion	run	0			
+test_fmt_println_int.ion	run	0			
+test_fs_read.ion	run	80			
+test_unsafe_basic.ion	run	0			
+test_bool_literal.ion	run	0			
+test_bool_operations.ion	run	0			
+test_bool_comparison.ion	run	0			
+test_float_literal.ion	run	0			
+test_float_arithmetic.ion	run	0			
+test_float_promotion.ion	run	0			
+test_float_comparison.ion	run	0			
+test_integer_types.ion	run	0			
+test_integer_promotion.ion	run	0			
+test_integer_signed_unsigned.ion	run	0			
+test_type_alias_basic.ion	run	42			
+test_type_alias_generic.ion	run	0			
+test_type_alias_resolution.ion	run	0			
+test_method_call_basic.ion	run	0			
+test_method_call_mut.ion	run	0			
+test_method_call_generic.ion	run	0			
+test_method_call_chaining.ion	run	0			
+test_channel_split.ion	run	0			
+test_enum_struct_variant.ion	run	42			
+test_for_loop.ion	run	0			
+test_escape_sequences.ion	run	0			
+test_array_init.ion	run	0			
+test_bitwise_ops.ion	run	0			
+test_comparison_operators.ion	run	0			
+test_type_cast.ion	run	0			
+test_array_assignment.ion	run	0			
+test_hex_literals.ion	run	255			
+test_bin_literals.ion	run	170			
+test_compound_assign.ion	run	42			
+test_loop_basic.ion	run	17			
+test_match_result_type.ion	run	88			
+test_if_else_move_ok.ion	run	60			
+test_fn_type_basic.ion	run	77			
+test_tuple_basic.ion	run	81			
+test_move_error.ion	error		UseAfterMove		
+test_move_in_loop.ion	error		UseAfterMove		
+test_move_in_loop_for.ion	error		UseAfterMove		
+test_move_channel_error.ion	error		UseAfterMove		
+test_ref_return_error.ion	error		ReferenceEscape		
+test_ref_return_error2.ion	error		ReferenceEscape\|TypeMismatch		
+test_channel_ref_error.ion	error		Send element type for channel		
+test_send_ref_error.ion	error		Send element type for channel		
+test_spawn_ref_error.ion	error		Send value for spawn capture		
+test_spawn_move_error.ion	error		UseAfterMove		
+test_struct_ref_error.ion	error		ReferenceEscape		
+test_enum_ref_error.ion	error		ReferenceEscape		
+test_module_visibility.ion	error		Cannot access non-public		
+test_unsafe_extern_required.ion	error		must be inside an unsafe block		
+test_if_bool_required.ion	error		bool.*if condition\|if condition.*bool		
+test_break_continue_error.ion	error		break statement outside of loop		
+test_match_arm_type_mismatch.ion	error		TypeMismatch		
+test_if_else_move_error.ion	error		UseAfterMove		
+test_fn_type_mismatch.ion	error		TypeMismatch		
+test_struct_field_drop.ion	cgen			ion_string_free(h.inner.s)	
+test_struct_field_drop.ion	cgen			ion_string_free(h.label)	
+test_struct_field_drop.ion	cgen			switch (p.tag)	
+test_struct_field_drop_box.ion	cgen			ion_box_free(h.b)	
+test_struct_enum_empty_drop.ion	cgen			switch (p.tag)	
+test_string_push_byte.ion	cgen			ion_string_push_byte	
+test_string_eq.ion	cgen			ion_string_equals	
+test_array_to_slice_coercion.ion	cgen			(ion_slice_int){	
+test_array_to_slice_let.ion	cgen			__ion_arr_slice	
+test_slice_bounds_codegen.ion	cgen			Slice index out of bounds	
+test_unsafe_slice_indexing.ion	cgen			s->data\[0\]	Slice index out of bounds
+test_array_bounds_panic.ion	cgen			ion_panic("Array index out of bounds")	
+test_slice_bounds_panic.ion	cgen			ion_panic("Slice index out of bounds")	
+test_fmt_println_int.ion	cgen			io_print_int	^[[:space:]]+print_int\(

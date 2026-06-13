@@ -192,10 +192,10 @@ cargo test
 Integration tests:
 
 ```bash
-./tests/test_runner.sh
+cd tests && ./test_runner.sh
 ```
 
-The runner compiles Ion programs and checks exit codes or compile errors. See [tests/README.md](tests/README.md) for the test catalog.
+The runner loads `tests/test_expectations.tsv` (exit codes, error patterns, codegen checks) and runs each entry. Add a new positive test with one `.ion` file plus one manifest line. See [tests/README.md](tests/README.md).
 
 ### Linting
 

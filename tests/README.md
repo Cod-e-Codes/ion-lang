@@ -232,16 +232,22 @@ gcc test_slice_bounds_panic.c ../runtime/ion_runtime.c -o test_slice_bounds_pani
 
 ## Adding Tests
 
-1. Create a new `.ion` file in this directory
-2. Add a test case to `test_runner.sh`:
-   ```bash
-   test_file "test_name.ion" expected_exit_code
-   ```
-   
-   For error tests (should fail to compile):
-   ```bash
-   test_error "test_name.ion" "expected_error_pattern"
-   ```
+1. Create a new `test_<feature>.ion` file in this directory
+2. Add one line to `test_expectations.tsv` (tab-separated):
+
+```
+file	kind	exit	error_pattern	must_match	must_not_match
+test_myfeature.ion	run	42
+```
+
+   Kinds: `run` (compile+run+exit code), `error` (compile must fail; `error_pattern` greps CLI stderr), `cgen` (`must_match` / optional `must_not_match` on generated `.c`).
+
+3. Document the test in this README under the appropriate category
+
+Special cases (not in the manifest):
+
+- `test_multifile.ion`: multi-file mode harness in `test_runner.sh`
+- `test_array_bounds_panic.ion` / `test_slice_bounds_panic.ion`: codegen-only in manifest; runtime panic is manual (see below)
 
 ## Environment Variables
 

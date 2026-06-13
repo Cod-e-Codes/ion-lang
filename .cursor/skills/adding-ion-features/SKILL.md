@@ -27,9 +27,9 @@ Copy and track progress:
 - [ ] 2. Lexer - new tokens/keywords in src/lexer/mod.rs (if needed)
 - [ ] 3. AST - add/modify nodes in src/ast/mod.rs
 - [ ] 4. Parser - parse new syntax in src/parser/mod.rs
-- [ ] 5. Type checker - typing, ownership, Send in src/tc/mod.rs
+- [ ] 5. Type checker - typing, ownership, Send in `src/tc/` (`mod.rs` plus `ownership.rs`, `builtins.rs`, `types.rs` as needed)
 - [ ] 6. IR - lowering in src/ir/mod.rs
-- [ ] 7. Codegen - C output in src/cgen/mod.rs (+ runtime/ if new runtime support)
+- [ ] 7. Codegen - C output in `src/cgen/` (`mod.rs`, `types.rs`, `builtins.rs`, `drop.rs`) (+ runtime/ if new runtime support)
 - [ ] 8. Tests - integration test in tests/ (see ion-integration-tests skill)
 - [ ] 9. LSP - update src/lsp/ if diagnostics/hover/completion affected
 - [ ] 10. cargo test && cargo build --release && tests/test_runner.sh
@@ -67,7 +67,9 @@ Touch this for imports, multi-file mode, or qualified names - not only when edit
 - `merge_modules` - single-file codegen merges imported ASTs into one program
 - `resolve_import_path` - relative path resolution from importing file
 
-### Type checker (`src/tc/mod.rs`)
+### Type checker (`src/tc/`)
+
+See `mod.rs`, `ownership.rs`, `builtins.rs`, `types.rs`. LSP uses `check_program_collecting` for multiple diagnostics; CLI uses `check_program` (first error only).
 
 Critical checks to preserve. Patterns below match **CLI stderr** (`Type check error: UseAfterMove { ... }` via `{:?}`). The LSP formats the same errors differently (e.g. "Use after move: x") - see `ion-lsp-vscode` skill; do not use CLI grep patterns to validate LSP diagnostics.
 

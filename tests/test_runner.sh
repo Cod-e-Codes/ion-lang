@@ -1,9 +1,8 @@
 #!/bin/bash
 
 # Test harness for Ion compiler
-# Automates: Ion → C → Compile C → Run Executable → Verify output
+# Automates: Ion -> C -> Compile C -> Run Executable -> Verify output
 
-# Don't exit on error - we want to run all tests
 set +e
 
 COMPILER="${COMPILER:-../target/release/ion-compiler}"
@@ -19,50 +18,43 @@ if command -v uname >/dev/null 2>&1; then
     esac
 fi
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 test_count=0
 pass_count=0
 fail_count=0
 
-# Test function: compile, build, run, and check exit code (positive test)
 test_file() {
     local ion_file="$1"
     local expected_exit="$2"
     local test_name="${ion_file%.ion}"
-    
+
     test_count=$((test_count + 1))
     echo -n "Testing ${test_name}... "
-    
-    # Step 1: Compile Ion to C
+
     if ! "$COMPILER" "$ion_file" > /dev/null 2>&1; then
         echo -e "${RED}FAIL${NC} - Compilation failed"
         fail_count=$((fail_count + 1))
         return 1
     fi
-    
+
     local c_file="${test_name}.c"
     if [ ! -f "$c_file" ]; then
         echo -e "${RED}FAIL${NC} - C file not generated"
         fail_count=$((fail_count + 1))
         return 1
     fi
-    
-    # Step 2: Compile C to executable (include runtime if it exists)
+
     local compile_cmd="$CC \"$c_file\""
     if [ -f "../runtime/ion_runtime.c" ]; then
         compile_cmd="$compile_cmd ../runtime/ion_runtime.c"
     elif [ -f "runtime/ion_runtime.c" ]; then
         compile_cmd="$compile_cmd runtime/ion_runtime.c"
     fi
-    # Add include paths for runtime headers (ion_runtime.h can be in runtime/ or ../runtime/)
-    compile_cmd="$compile_cmd -I. -I.. -Iruntime -I../runtime"
-    # Link with pthread for channels and spawn
-    compile_cmd="$compile_cmd -lpthread"
+    compile_cmd="$compile_cmd -I. -I.. -Iruntime -I../runtime -lpthread"
     if command -v uname >/dev/null 2>&1; then
         case "$(uname -s)" in
             MINGW*|MSYS*|CYGWIN*) compile_cmd="$compile_cmd -lws2_32" ;;
@@ -75,12 +67,10 @@ test_file() {
         rm -f "$c_file"
         return 1
     fi
-    
-    # Step 3: Run and check exit code
+
     "./${test_name}${EXE_SUFFIX}" > /dev/null 2>&1
     local actual_exit=$?
-    
-    # Step 4: Verify result
+
     if [ "$actual_exit" -eq "$expected_exit" ]; then
         echo -e "${GREEN}PASS${NC}"
         pass_count=$((pass_count + 1))
@@ -94,29 +84,25 @@ test_file() {
     fi
 }
 
-# Test function: verify compilation fails with expected error (negative test)
 test_error() {
     local ion_file="$1"
-    local expected_error="$2"  # Error pattern to search for
+    local expected_error="$2"
     local test_name="${ion_file%.ion}"
-    
+
     test_count=$((test_count + 1))
     echo -n "Testing ${test_name} (should error)... "
-    
-    # Step 1: Try to compile Ion to C - should FAIL
+
     local output
     output=$("$COMPILER" "$ion_file" 2>&1)
     local compile_exit=$?
-    
-    # If compilation succeeded, that's a failure (we expected it to fail)
+
     if [ "$compile_exit" -eq 0 ]; then
         echo -e "${RED}FAIL${NC} - Compilation succeeded but should have failed"
         fail_count=$((fail_count + 1))
         rm -f "${test_name}.c"
         return 1
     fi
-    
-    # Step 2: Check if error message contains expected pattern
+
     if echo "$output" | grep -q "$expected_error"; then
         echo -e "${GREEN}PASS${NC}"
         pass_count=$((pass_count + 1))
@@ -125,12 +111,11 @@ test_error() {
         echo -e "${YELLOW}PARTIAL${NC} - Compilation failed as expected, but error message didn't match pattern"
         echo "  Expected pattern: $expected_error"
         echo "  Actual output: $output"
-        pass_count=$((pass_count + 1))  # Still count as pass since it failed
+        pass_count=$((pass_count + 1))
         return 0
     fi
 }
 
-# Test function: compile and verify generated C contains expected patterns
 test_cgen_grep() {
     local ion_file="$1"
     local must_match="$2"
@@ -173,629 +158,111 @@ test_cgen_grep() {
     return 0
 }
 
-# Main test execution
-echo "Ion Compiler Test Harness"
-echo "========================="
-echo ""
+test_multifile() {
+    if [ ! -f "test_multifile.ion" ] || [ ! -f "utils.ion" ]; then
+        return 0
+    fi
 
-# Create test directory if it doesn't exist
-cd "$(dirname "$0")" || exit 1
-
-# Run positive tests (should compile and run)
-# Wrap each test call to ensure failures don't stop execution
-if [ -f "test_basic.ion" ]; then
-    test_file "test_basic.ion" 42 || true
-fi
-
-if [ -f "test_arithmetic.ion" ]; then
-    test_file "test_arithmetic.ion" 30 || true
-fi
-
-if [ -f "test_move_basic.ion" ]; then
-    test_file "test_move_basic.ion" 10 || true
-fi
-
-if [ -f "test_ref_valid.ion" ]; then
-    test_file "test_ref_valid.ion" 0 || true
-fi
-
-if [ -f "test_send_basic.ion" ]; then
-    test_file "test_send_basic.ion" 42 || true
-fi
-
-if [ -f "test_defer_basic.ion" ]; then
-    test_file "test_defer_basic.ion" 7 || true
-fi
-
-if [ -f "test_defer_block.ion" ]; then
-    test_file "test_defer_block.ion" 1 || true
-fi
-
-if [ -f "test_scope_drop_block.ion" ]; then
-    test_file "test_scope_drop_block.ion" 0 || true
-fi
-
-if [ -f "test_struct_field_drop.ion" ]; then
-    test_file "test_struct_field_drop.ion" 43 || true
-    test_cgen_grep "test_struct_field_drop.ion" "ion_string_free(h.inner.s)" "" || true
-    test_cgen_grep "test_struct_field_drop.ion" "ion_string_free(h.label)" "" || true
-    test_cgen_grep "test_struct_field_drop.ion" "switch (p.tag)" "" || true
-fi
-
-if [ -f "test_struct_field_drop_box.ion" ]; then
-    test_file "test_struct_field_drop_box.ion" 44 || true
-    test_cgen_grep "test_struct_field_drop_box.ion" "ion_box_free(h.b)" "" || true
-fi
-
-if [ -f "test_struct_enum_empty_drop.ion" ]; then
-    test_file "test_struct_enum_empty_drop.ion" 45 || true
-    test_cgen_grep "test_struct_enum_empty_drop.ion" "switch (p.tag)" "" || true
-fi
-
-if [ -f "test_move_call_drop.ion" ]; then
-    test_file "test_move_call_drop.ion" 42 || true
-fi
-
-if [ -f "test_move_in_loop_ok.ion" ]; then
-    test_file "test_move_in_loop_ok.ion" 42 || true
-fi
-
-if [ -f "test_move_in_loop_copy.ion" ]; then
-    test_file "test_move_in_loop_copy.ion" 30 || true
-fi
-
-if [ -f "test_scope_drop_elif.ion" ]; then
-    test_file "test_scope_drop_elif.ion" 0 || true
-fi
-
-if [ -f "test_channel_basic.ion" ]; then
-    test_file "test_channel_basic.ion" 0 || true
-fi
-
-if [ -f "test_spawn_basic.ion" ]; then
-    test_file "test_spawn_basic.ion" 0 || true
-fi
-
-if [ -f "test_spawn_channel.ion" ]; then
-    test_file "test_spawn_channel.ion" 0 || true
-fi
-
-if [ -f "test_if_basic.ion" ]; then
-    test_file "test_if_basic.ion" 2 || true
-fi
-
-if [ -f "test_if_no_else.ion" ]; then
-    test_file "test_if_no_else.ion" 2 || true
-fi
-
-if [ -f "test_if_elif.ion" ]; then
-    test_file "test_if_elif.ion" 2 || true
-fi
-
-if [ -f "test_if_elif_no_else.ion" ]; then
-    test_file "test_if_elif_no_else.ion" 5 || true
-fi
-
-if [ -f "test_struct_basic.ion" ]; then
-    test_file "test_struct_basic.ion" 7 || true
-fi
-
-# Enums, matching, and control flow
-if [ -f "test_enum_basic.ion" ]; then
-    test_file "test_enum_basic.ion" 0 || true
-fi
-
-if [ -f "test_match_basic.ion" ]; then
-    test_file "test_match_basic.ion" 0 || true
-fi
-
-if [ -f "test_while_basic.ion" ]; then
-    test_file "test_while_basic.ion" 0 || true
-fi
-
-if [ -f "test_break_continue.ion" ]; then
-    test_file "test_break_continue.ion" 27 || true
-fi
-
-if [ -f "test_call_basic.ion" ]; then
-    test_file "test_call_basic.ion" 30 || true
-fi
-
-if [ -f "test_string_basic.ion" ]; then
-    test_file "test_string_basic.ion" 0 || true
-fi
-
-if [ -f "test_match_pattern_bindings.ion" ]; then
-    test_file "test_match_pattern_bindings.ion" 42 || true
-fi
-
-if [ -f "test_match_complex.ion" ]; then
-    test_file "test_match_complex.ion" 10 || true
-fi
-
-if [ -f "test_generic_types.ion" ]; then
-    test_file "test_generic_types.ion" 0 || true
-fi
-
-if [ -f "test_box_basic.ion" ]; then
-    test_file "test_box_basic.ion" 0 || true
-fi
-
-if [ -f "test_vec_basic.ion" ]; then
-    test_file "test_vec_basic.ion" 0 || true
-fi
-
-if [ -f "test_enum_generic.ion" ]; then
-    test_file "test_enum_generic.ion" 0 || true
-fi
-
-if [ -f "test_generic_struct.ion" ]; then
-    test_file "test_generic_struct.ion" 0 || true
-fi
-
-if [ -f "test_string_from.ion" ]; then
-    test_file "test_string_from.ion" 0 || true
-fi
-
-# Standard library tests
-if [ -f "test_box_ops.ion" ]; then
-    test_file "test_box_ops.ion" 0 || true
-fi
-
-if [ -f "test_vec_new.ion" ]; then
-    test_file "test_vec_new.ion" 0 || true
-fi
-
-if [ -f "test_vec_push_pop.ion" ]; then
-    test_file "test_vec_push_pop.ion" 0 || true
-fi
-
-if [ -f "test_vec_get_set.ion" ]; then
-    test_file "test_vec_get_set.ion" 0 || true
-fi
-
-if [ -f "test_vec_capacity.ion" ]; then
-    test_file "test_vec_capacity.ion" 0 || true
-fi
-
-if [ -f "test_string_new.ion" ]; then
-    test_file "test_string_new.ion" 0 || true
-fi
-
-if [ -f "test_string_push_str.ion" ]; then
-    test_file "test_string_push_str.ion" 0 || true
-fi
-
-if [ -f "test_string_push_byte.ion" ]; then
-    test_file "test_string_push_byte.ion" 79 || true
-    test_cgen_grep "test_string_push_byte.ion" "ion_string_push_byte" "" || true
-fi
-
-if [ -f "test_string_eq.ion" ]; then
-    test_file "test_string_eq.ion" 55 || true
-    test_cgen_grep "test_string_eq.ion" "ion_string_equals" "" || true
-fi
-
-# Modules and FFI
-if [ -f "test_module_basic.ion" ]; then
-    test_file "test_module_basic.ion" 30 || true
-fi
-
-if [ -f "test_ffi_basic.ion" ]; then
-    test_file "test_ffi_basic.ion" 0 || true
-fi
-
-# Run negative tests (should fail to compile)
-if [ -f "test_move_error.ion" ]; then
-    test_error "test_move_error.ion" "UseAfterMove" || true
-fi
-
-if [ -f "test_move_in_loop.ion" ]; then
-    test_error "test_move_in_loop.ion" "UseAfterMove" || true
-fi
-
-if [ -f "test_move_in_loop_for.ion" ]; then
-    test_error "test_move_in_loop_for.ion" "UseAfterMove" || true
-fi
-
-if [ -f "test_move_channel_error.ion" ]; then
-    test_error "test_move_channel_error.ion" "UseAfterMove" || true
-fi
-
-if [ -f "test_ref_return_error.ion" ]; then
-    test_error "test_ref_return_error.ion" "ReferenceEscape" || true
-fi
-
-if [ -f "test_ref_return_error2.ion" ]; then
-    # This one should fail because return type mismatch (can't return &int where int expected)
-    # But it might also fail on the no-escape rule first
-    test_error "test_ref_return_error2.ion" "ReferenceEscape\|TypeMismatch" || true
-fi
-
-if [ -f "test_channel_ref_error.ion" ]; then
-    test_error "test_channel_ref_error.ion" "Send element type for channel" || true
-fi
-
-if [ -f "test_send_ref_error.ion" ]; then
-    test_error "test_send_ref_error.ion" "Send element type for channel" || true
-fi
-
-if [ -f "test_spawn_ref_error.ion" ]; then
-    test_error "test_spawn_ref_error.ion" "Send value for spawn capture" || true
-fi
-
-if [ -f "test_spawn_move_error.ion" ]; then
-    test_error "test_spawn_move_error.ion" "UseAfterMove" || true
-fi
-
-if [ -f "test_struct_ref_error.ion" ]; then
-    test_error "test_struct_ref_error.ion" "ReferenceEscape" || true
-fi
-
-if [ -f "test_enum_ref_error.ion" ]; then
-    test_error "test_enum_ref_error.ion" "ReferenceEscape" || true
-fi
-
-# Module negative tests
-if [ -f "test_module_visibility.ion" ]; then
-    test_error "test_module_visibility.ion" "Cannot access non-public" || true
-fi
-
-# Arrays and slices
-if [ -f "test_array_basic.ion" ]; then
-    test_file "test_array_basic.ion" 6 || true
-fi
-
-if [ -f "test_array_literal.ion" ]; then
-    test_file "test_array_literal.ion" 21 || true
-fi
-
-if [ -f "test_array_indexing.ion" ]; then
-    test_file "test_array_indexing.ion" 150 || true
-fi
-
-if [ -f "test_slice_basic.ion" ]; then
-    test_file "test_slice_basic.ion" 3 || true
-fi
-
-if [ -f "test_slice_indexing.ion" ]; then
-    test_file "test_slice_indexing.ion" 42 || true
-fi
-
-if [ -f "test_array_to_slice_coercion.ion" ]; then
-    test_file "test_array_to_slice_coercion.ion" 10 || true
-    test_cgen_grep "test_array_to_slice_coercion.ion" "(ion_slice_int){" "" || true
-fi
-
-if [ -f "test_array_to_slice_let.ion" ]; then
-    test_file "test_array_to_slice_let.ion" 11 || true
-    test_cgen_grep "test_array_to_slice_let.ion" "__ion_arr_slice" "" || true
-fi
-
-# Array bounds checking tests (Safety Enhancement)
-if [ -f "test_array_bounds_safe.ion" ]; then
-    test_file "test_array_bounds_safe.ion" 150 || true
-fi
-
-if [ -f "test_slice_bounds_codegen.ion" ]; then
-    test_cgen_grep "test_slice_bounds_codegen.ion" "Slice index out of bounds" "" || true
-fi
-
-if [ -f "test_unsafe_slice_indexing.ion" ]; then
-    test_cgen_grep "test_unsafe_slice_indexing.ion" "s->data\[0\]" "Slice index out of bounds" || true
-fi
-
-if [ -f "test_unsafe_array_indexing.ion" ]; then
-    test_file "test_unsafe_array_indexing.ion" 1 || true
-fi
-
-if [ -f "test_array_bounds_panic.ion" ]; then
-    test_cgen_grep "test_array_bounds_panic.ion" 'ion_panic("Array index out of bounds")' "" || true
-fi
-
-if [ -f "test_slice_bounds_panic.ion" ]; then
-    test_cgen_grep "test_slice_bounds_panic.ion" 'ion_panic("Slice index out of bounds")' "" || true
-fi
-
-# Note: test_array_bounds_panic.ion and test_slice_bounds_panic.ion panic and abort at runtime.
-# Harness checks generated C only. See tests/README.md for manual run steps.
-
-# Safe I/O library tests
-if [ -f "test_io_print_str.ion" ]; then
-    test_file "test_io_print_str.ion" 0 || true
-fi
-
-if [ -f "test_io_print.ion" ]; then
-    test_file "test_io_print.ion" 0 || true
-fi
-
-if [ -f "test_io_println.ion" ]; then
-    test_file "test_io_println.ion" 0 || true
-fi
-
-# Iteration, guards, generics, and formatting tests
-if [ -f "test_for_array.ion" ]; then
-    test_file "test_for_array.ion" 0 || true
-fi
-
-if [ -f "test_for_string.ion" ]; then
-    test_file "test_for_string.ion" 0 || true
-fi
-
-if [ -f "test_match_guard.ion" ]; then
-    test_file "test_match_guard.ion" 0 || true
-fi
-
-if [ -f "test_generic_field_access.ion" ]; then
-    test_file "test_generic_field_access.ion" 0 || true
-fi
-
-if [ -f "test_io_print_int.ion" ]; then
-    test_file "test_io_print_int.ion" 0 || true
-fi
-
-if [ -f "test_fmt_int_to_string.ion" ]; then
-    test_file "test_fmt_int_to_string.ion" 0 || true
-fi
-
-if [ -f "test_fmt_println_int.ion" ]; then
-    test_file "test_fmt_println_int.ion" 0 || true
-    test_cgen_grep "test_fmt_println_int.ion" "io_print_int" '^[[:space:]]+print_int\(' || true
-fi
-
-if [ -f "test_fs_read.ion" ]; then
-    test_file "test_fs_read.ion" 80 || true
-fi
-
-# Unsafe blocks
-if [ -f "test_unsafe_basic.ion" ]; then
-    test_file "test_unsafe_basic.ion" 0 || true
-fi
-
-# Unsafe negative tests
-if [ -f "test_unsafe_extern_required.ion" ]; then
-    test_error "test_unsafe_extern_required.ion" "must be inside an unsafe block" || true
-fi
-
-# Boolean type
-if [ -f "test_bool_literal.ion" ]; then
-    test_file "test_bool_literal.ion" 0 || true
-fi
-
-if [ -f "test_bool_operations.ion" ]; then
-    test_file "test_bool_operations.ion" 0 || true
-fi
-
-if [ -f "test_bool_comparison.ion" ]; then
-    test_file "test_bool_comparison.ion" 0 || true
-fi
-
-# Floating-point types
-if [ -f "test_float_literal.ion" ]; then
-    test_file "test_float_literal.ion" 0 || true
-fi
-
-if [ -f "test_float_arithmetic.ion" ]; then
-    test_file "test_float_arithmetic.ion" 0 || true
-fi
-
-if [ -f "test_float_promotion.ion" ]; then
-    test_file "test_float_promotion.ion" 0 || true
-fi
-
-if [ -f "test_float_comparison.ion" ]; then
-    test_file "test_float_comparison.ion" 0 || true
-fi
-
-# Integer types
-if [ -f "test_integer_types.ion" ]; then
-    test_file "test_integer_types.ion" 0 || true
-fi
-
-if [ -f "test_integer_promotion.ion" ]; then
-    test_file "test_integer_promotion.ion" 0 || true
-fi
-
-if [ -f "test_integer_signed_unsigned.ion" ]; then
-    test_file "test_integer_signed_unsigned.ion" 0 || true
-fi
-
-# Type aliases
-if [ -f "test_type_alias_basic.ion" ]; then
-    test_file "test_type_alias_basic.ion" 42 || true
-fi
-
-if [ -f "test_type_alias_generic.ion" ]; then
-    test_file "test_type_alias_generic.ion" 0 || true
-fi
-
-if [ -f "test_type_alias_resolution.ion" ]; then
-    test_file "test_type_alias_resolution.ion" 0 || true
-fi
-
-# Type and control-flow negative tests
-if [ -f "test_if_bool_required.ion" ]; then
-    test_error "test_if_bool_required.ion" "bool.*if condition\|if condition.*bool" || true
-fi
-
-if [ -f "test_break_continue_error.ion" ]; then
-    test_error "test_break_continue_error.ion" "break statement outside of loop" || true
-fi
-
-# Method call syntax
-if [ -f "test_method_call_basic.ion" ]; then
-    test_file "test_method_call_basic.ion" 0 || true
-fi
-
-if [ -f "test_method_call_mut.ion" ]; then
-    test_file "test_method_call_mut.ion" 0 || true
-fi
-
-if [ -f "test_method_call_generic.ion" ]; then
-    test_file "test_method_call_generic.ion" 0 || true
-fi
-
-if [ -f "test_method_call_chaining.ion" ]; then
-    test_file "test_method_call_chaining.ion" 0 || true
-fi
-
-# Split channels, struct enum variants, for...in loops
-if [ -f "test_channel_split.ion" ]; then
-    test_file "test_channel_split.ion" 0 || true
-fi
-
-if [ -f "test_enum_struct_variant.ion" ]; then
-    test_file "test_enum_struct_variant.ion" 42 || true
-fi
-
-if [ -f "test_for_loop.ion" ]; then
-    test_file "test_for_loop.ion" 0 || true
-fi
-
-# Escape sequences, array initialization, bitwise operators
-if [ -f "test_escape_sequences.ion" ]; then
-    test_file "test_escape_sequences.ion" 0 || true
-fi
-
-if [ -f "test_array_init.ion" ]; then
-    test_file "test_array_init.ion" 0 || true
-fi
-
-if [ -f "test_bitwise_ops.ion" ]; then
-    test_file "test_bitwise_ops.ion" 0 || true
-fi
-
-if [ -f "test_comparison_operators.ion" ]; then
-    test_file "test_comparison_operators.ion" 0 || true
-fi
-
-if [ -f "test_type_cast.ion" ]; then
-    test_file "test_type_cast.ion" 0 || true
-fi
-
-if [ -f "test_array_assignment.ion" ]; then
-    test_file "test_array_assignment.ion" 0 || true
-fi
-
-if [ -f "test_hex_literals.ion" ]; then
-    test_file "test_hex_literals.ion" 255 || true
-fi
-
-if [ -f "test_bin_literals.ion" ]; then
-    test_file "test_bin_literals.ion" 170 || true
-fi
-
-if [ -f "test_compound_assign.ion" ]; then
-    test_file "test_compound_assign.ion" 42 || true
-fi
-
-if [ -f "test_loop_basic.ion" ]; then
-    test_file "test_loop_basic.ion" 17 || true
-fi
-
-if [ -f "test_match_result_type.ion" ]; then
-    test_file "test_match_result_type.ion" 88 || true
-fi
-
-if [ -f "test_match_arm_type_mismatch.ion" ]; then
-    test_error "test_match_arm_type_mismatch.ion" "TypeMismatch" || true
-fi
-
-if [ -f "test_if_else_move_ok.ion" ]; then
-    test_file "test_if_else_move_ok.ion" 60 || true
-fi
-
-if [ -f "test_if_else_move_error.ion" ]; then
-    test_error "test_if_else_move_error.ion" "UseAfterMove" || true
-fi
-
-if [ -f "test_fn_type_basic.ion" ]; then
-    test_file "test_fn_type_basic.ion" 77 || true
-fi
-
-if [ -f "test_fn_type_mismatch.ion" ]; then
-    test_error "test_fn_type_mismatch.ion" "TypeMismatch" || true
-fi
-
-if [ -f "test_tuple_basic.ion" ]; then
-    test_file "test_tuple_basic.ion" 81 || true
-fi
-
-# Multi-file compilation
-if [ -f "test_multifile.ion" ] && [ -f "utils.ion" ]; then
     test_count=$((test_count + 1))
     echo -n "Testing test_multifile (multi-file mode)... "
-    
-    # Compile in multi-file mode (we're already in tests/ directory)
-    # Use absolute path for compiler to ensure it works
-    compiler_abs="$COMPILER"
+
+    local compiler_abs="$COMPILER"
     if [ "${COMPILER:0:1}" != "/" ]; then
-        # Convert relative path to absolute
         compiler_abs="$(cd "$(dirname "$COMPILER")" 2>/dev/null && pwd)/$(basename "$COMPILER")"
         if [ ! -f "$compiler_abs" ]; then
             compiler_abs="$COMPILER"
         fi
     fi
-    
+
+    local compile_output
     compile_output=$("$compiler_abs" --mode multi --output test_multifile test_multifile.ion 2>&1)
-    compile_exit=$?
+    local compile_exit=$?
     if [ "$compile_exit" -ne 0 ]; then
         echo -e "${RED}FAIL${NC} - Multi-file compilation failed"
         echo "  Error output: $compile_output"
         fail_count=$((fail_count + 1))
-    else
-        # Check that files were generated
-        if [ ! -f "test_multifile.c" ] || [ ! -f "test_multifile.h" ] || [ ! -f "utils.c" ] || [ ! -f "utils.h" ]; then
-            echo -e "${RED}FAIL${NC} - Generated files missing"
-            fail_count=$((fail_count + 1))
-            rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile.o utils.o 2>/dev/null
-        else
-            # Check that test_multifile.c includes its header
-            if ! grep -q '#include "test_multifile.h"' test_multifile.c 2>/dev/null; then
-                echo -e "${YELLOW}WARN${NC} - test_multifile.c doesn't include its header"
-            fi
-            # Check that test_multifile.c includes utils.h
-            if ! grep -q '#include "utils.h"' test_multifile.c 2>/dev/null; then
-                echo -e "${YELLOW}WARN${NC} - test_multifile.c doesn't include utils.h"
-            fi
-            # Check that utils.c includes its header
-            if ! grep -q '#include "utils.h"' utils.c 2>/dev/null; then
-                echo -e "${YELLOW}WARN${NC} - utils.c doesn't include its header"
-            fi
-            
-            # Compile and run the executable
-            multifile_cc="$CC test_multifile.c utils.c -I. -I.. -Iruntime -I../runtime ../runtime/ion_runtime.c -lpthread"
-            if command -v uname >/dev/null 2>&1; then
-                case "$(uname -s)" in
-                    MINGW*|MSYS*|CYGWIN*) multifile_cc="$multifile_cc -lws2_32" ;;
-                esac
-            fi
-            multifile_cc="$multifile_cc -o test_multifile${EXE_SUFFIX}"
-            if ! eval "$multifile_cc" 2>/dev/null; then
-                echo -e "${RED}FAIL${NC} - C compilation failed"
-                fail_count=$((fail_count + 1))
-            elif [ -f "test_multifile${EXE_SUFFIX}" ]; then
-                ./test_multifile${EXE_SUFFIX} > /dev/null 2>&1
-                actual_exit=$?
-                if [ "$actual_exit" -eq 27 ]; then
-                    echo -e "${GREEN}PASS${NC}"
-                    pass_count=$((pass_count + 1))
-                else
-                    echo -e "${RED}FAIL${NC} - Expected exit code 27, got $actual_exit"
-                    fail_count=$((fail_count + 1))
-                fi
-            else
-                echo -e "${RED}FAIL${NC} - Executable not generated"
-                fail_count=$((fail_count + 1))
-            fi
-            
-            # Cleanup
-            rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile${EXE_SUFFIX} test_multifile.o utils.o 2>/dev/null
-        fi
+        return 1
     fi
-fi
 
-# Summary
+    if [ ! -f "test_multifile.c" ] || [ ! -f "test_multifile.h" ] || [ ! -f "utils.c" ] || [ ! -f "utils.h" ]; then
+        echo -e "${RED}FAIL${NC} - Generated files missing"
+        fail_count=$((fail_count + 1))
+        rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile.o utils.o 2>/dev/null
+        return 1
+    fi
+
+    local multifile_cc="$CC test_multifile.c utils.c -I. -I.. -Iruntime -I../runtime ../runtime/ion_runtime.c -lpthread"
+    if command -v uname >/dev/null 2>&1; then
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*) multifile_cc="$multifile_cc -lws2_32" ;;
+        esac
+    fi
+    multifile_cc="$multifile_cc -o test_multifile${EXE_SUFFIX}"
+    if ! eval "$multifile_cc" 2>/dev/null; then
+        echo -e "${RED}FAIL${NC} - C compilation failed"
+        fail_count=$((fail_count + 1))
+        return 1
+    fi
+
+    if [ ! -f "test_multifile${EXE_SUFFIX}" ]; then
+        echo -e "${RED}FAIL${NC} - Executable not generated"
+        fail_count=$((fail_count + 1))
+        rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile${EXE_SUFFIX} test_multifile.o utils.o 2>/dev/null
+        return 1
+    fi
+
+    ./test_multifile${EXE_SUFFIX} > /dev/null 2>&1
+    local actual_exit=$?
+    if [ "$actual_exit" -eq 27 ]; then
+        echo -e "${GREEN}PASS${NC}"
+        pass_count=$((pass_count + 1))
+    else
+        echo -e "${RED}FAIL${NC} - Expected exit code 27, got $actual_exit"
+        fail_count=$((fail_count + 1))
+    fi
+
+    rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile${EXE_SUFFIX} test_multifile.o utils.o 2>/dev/null
+}
+
+run_manifest() {
+    local manifest="${1:-test_expectations.tsv}"
+    if [ ! -f "$manifest" ]; then
+        echo -e "${RED}ERROR${NC} - Missing manifest: $manifest"
+        fail_count=$((fail_count + 1))
+        return 1
+    fi
+
+    while IFS=$'\t' read -r file kind exit_code error_pattern must_match must_not_match; do
+        [ "$file" = "file" ] && continue
+        [ -z "$file" ] && continue
+        [ ! -f "$file" ] && continue
+
+        case "$kind" in
+            run)
+                test_file "$file" "$exit_code" || true
+                ;;
+            error)
+                test_error "$file" "$error_pattern" || true
+                ;;
+            cgen)
+                test_cgen_grep "$file" "$must_match" "$must_not_match" || true
+                ;;
+            *)
+                echo -e "${YELLOW}WARN${NC} - Unknown manifest kind '$kind' for $file"
+                ;;
+        esac
+    done < "$manifest"
+}
+
+echo "Ion Compiler Test Harness"
+echo "========================="
+echo ""
+
+cd "$(dirname "$0")" || exit 1
+
+run_manifest "test_expectations.tsv"
+test_multifile || true
+
 echo ""
 echo "========================="
 echo "Tests run: $test_count"
@@ -811,4 +278,3 @@ if [ $fail_count -eq 0 ]; then
 else
     exit 1
 fi
-

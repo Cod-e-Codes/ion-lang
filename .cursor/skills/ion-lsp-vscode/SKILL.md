@@ -65,8 +65,8 @@ Adjust path for OS (no `.exe` on Linux/macOS).
 
 1. On `did_open` / `did_change` - **lexer → parser** on the in-memory buffer (unsaved edits included; does not re-read the file from disk)
 2. **`Compiler::register_imports`** - for each import, **`parse_module` on disk** (full lex+parse of dependency tree) to populate `module_exports` for qualified names
-3. **Type-check** - `tc::TypeChecker` on the buffer AST, with exports from step 2
-4. Publish diagnostics from lexer, parser, or type-check errors
+3. **Type-check** - `tc::TypeChecker` on the buffer AST, with exports from step 2 (`check_program_collecting` publishes all independent type errors)
+4. Publish diagnostics from lexer, parser, or type-check errors (multiple TC errors when reported by `check_program_collecting`)
 5. Hover - variable types at use sites and `let` binding identifiers; symbol docs at fn/struct/enum definitions
 6. Completion - keywords, builtins, file symbols (no prefix filtering)
 7. Go to definition - variables, function calls (`foo`, `mod::func`), user-defined methods; cross-file for imports
@@ -75,7 +75,7 @@ Known limitations (ION_SPEC §10.2): built-in methods (`Vec::push`, etc.) do not
 
 ### CLI vs LSP error text
 
-The CLI prints `Type check error: UseAfterMove { ... }` (`{:?}` on `TypeCheckError`). The LSP formats the same errors as human-readable strings (e.g. "Use after move: x", "Reference escape: ..."). Do not use CLI grep patterns from `ion-integration-tests` to validate LSP diagnostics - check the editor or `src/lsp/server.rs` formatting.
+The CLI prints `Type check error: UseAfterMove { ... }` (`{:?}` on `TypeCheckError`) and stops at the first error. The LSP uses `check_program_collecting` and may show several type-check diagnostics in one publish (e.g. one per function). LSP formats errors as human-readable strings (e.g. "Use after move: x"). Do not use CLI grep patterns from `ion-integration-tests` to validate LSP diagnostics.
 
 ## Extension files
 
