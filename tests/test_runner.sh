@@ -192,6 +192,14 @@ if [ -f "test_if_no_else.ion" ]; then
     test_file "test_if_no_else.ion" 2 || true
 fi
 
+if [ -f "test_if_elif.ion" ]; then
+    test_file "test_if_elif.ion" 2 || true
+fi
+
+if [ -f "test_if_elif_no_else.ion" ]; then
+    test_file "test_if_elif_no_else.ion" 5 || true
+fi
+
 if [ -f "test_struct_basic.ion" ]; then
     test_file "test_struct_basic.ion" 7 || true
 fi
@@ -290,6 +298,10 @@ fi
 # Run negative tests (should fail to compile)
 if [ -f "test_move_error.ion" ]; then
     test_error "test_move_error.ion" "UseAfterMove" || true
+fi
+
+if [ -f "test_move_channel_error.ion" ]; then
+    test_error "test_move_channel_error.ion" "UseAfterMove" || true
 fi
 
 if [ -f "test_ref_return_error.ion" ]; then

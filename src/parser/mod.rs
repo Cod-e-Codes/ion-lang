@@ -1237,11 +1237,17 @@ impl Parser {
         // Then block
         let then_block = self.parse_block()?;
 
-        // Optional else block
+        // Optional else block (`else { ... }` or `else if ...` chain)
         let else_block = if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Else) {
             self.advance(); // consume else
-            // For minimal subset, we only support `else { ... }` (no else-if chain)
-            Some(self.parse_block()?)
+            if !self.is_at_end() && matches!(self.peek().kind, TokenKind::If) {
+                let elif_stmt = self.parse_if_stmt()?;
+                Some(Block {
+                    statements: vec![Stmt::If(elif_stmt)],
+                })
+            } else {
+                Some(self.parse_block()?)
+            }
         } else {
             None
         };

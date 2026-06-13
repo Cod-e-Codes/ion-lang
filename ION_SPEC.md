@@ -362,6 +362,8 @@ defer_stmt       = "defer" , expr , ";" ;
 spawn_stmt       = "spawn" , block , ";" ;
 ```
 
+`else if` chains use the `if_stmt` alternative after `else` (for example `else if cond { ... }`).
+
 #### 3.5 Expressions
 
 The expression grammar is presented in precedence levels (from lowest to highest):
@@ -1074,7 +1076,6 @@ Build with `cargo build --release --bin ion-lsp`. Set `ion.lspPath` in editor se
 
 - No trait bounds on generics
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
-- No `else if` syntax; use nested `if`/`else`
 - `break` and `continue` are not implemented
 - `if`/`else` merge: a variable moved in only one branch is an error; use early return or a helper function instead
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks

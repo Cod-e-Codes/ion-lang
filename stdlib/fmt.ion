@@ -53,40 +53,24 @@ pub fn int_to_string(n: int) -> String {
         let ch: u8 = buf[i];
         if ch == 48 {
             String::push_str(&mut result, "0");
+        } else if ch == 49 {
+            String::push_str(&mut result, "1");
+        } else if ch == 50 {
+            String::push_str(&mut result, "2");
+        } else if ch == 51 {
+            String::push_str(&mut result, "3");
+        } else if ch == 52 {
+            String::push_str(&mut result, "4");
+        } else if ch == 53 {
+            String::push_str(&mut result, "5");
+        } else if ch == 54 {
+            String::push_str(&mut result, "6");
+        } else if ch == 55 {
+            String::push_str(&mut result, "7");
+        } else if ch == 56 {
+            String::push_str(&mut result, "8");
         } else {
-            if ch == 49 {
-                String::push_str(&mut result, "1");
-            } else {
-                if ch == 50 {
-                    String::push_str(&mut result, "2");
-                } else {
-                    if ch == 51 {
-                        String::push_str(&mut result, "3");
-                    } else {
-                        if ch == 52 {
-                            String::push_str(&mut result, "4");
-                        } else {
-                            if ch == 53 {
-                                String::push_str(&mut result, "5");
-                            } else {
-                                if ch == 54 {
-                                    String::push_str(&mut result, "6");
-                                } else {
-                                    if ch == 55 {
-                                        String::push_str(&mut result, "7");
-                                    } else {
-                                        if ch == 56 {
-                                            String::push_str(&mut result, "8");
-                                        } else {
-                                            String::push_str(&mut result, "9");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            String::push_str(&mut result, "9");
         }
         i = i - 1;
     }

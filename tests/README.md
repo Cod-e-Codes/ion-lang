@@ -63,6 +63,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_spawn_channel.ion` - Cross-thread channel send/recv via spawn (channel handle drop at scope exit)
 - `test_if_basic.ion` - If statements with else
 - `test_if_no_else.ion` - If statements without else
+- `test_if_elif.ion` - If with else-if chain
+- `test_if_elif_no_else.ion` - Else-if without a final else
 - `test_struct_basic.ion` - Struct declarations
 
 ### Enums, generics, and collections
@@ -155,6 +157,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors
+- `test_move_channel_error.ion` - Use-after-move on channel receivers
 - `test_ref_return_error.ion` - Reference escape errors
 - `test_ref_return_error2.ion` - Additional reference escape errors
 - `test_channel_ref_error.ion` - Non-Send channel elements
