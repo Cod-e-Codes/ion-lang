@@ -224,6 +224,34 @@ test_multifile() {
     rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile${EXE_SUFFIX} test_multifile.o utils.o 2>/dev/null
 }
 
+strip_cr() {
+    printf '%s' "$1" | tr -d '\r'
+}
+
+resolve_error_pattern() {
+    local pattern="$1"
+    local exit_code="$2"
+    local must_match="$3"
+    local must_not_match="$4"
+
+    if [ -n "$pattern" ]; then
+        printf '%s' "$pattern"
+        return 0
+    fi
+    if [ -n "$must_match" ]; then
+        printf '%s' "$must_match"
+        return 0
+    fi
+    if [ -n "$must_not_match" ]; then
+        printf '%s' "$must_not_match"
+        return 0
+    fi
+    if [ -n "$exit_code" ]; then
+        printf '%s' "$exit_code"
+        return 0
+    fi
+}
+
 run_manifest() {
     local manifest="${1:-test_expectations.tsv}"
     if [ ! -f "$manifest" ]; then
@@ -232,7 +260,14 @@ run_manifest() {
         return 1
     fi
 
-    while IFS=$'\t' read -r file kind exit_code error_pattern must_match must_not_match; do
+    while IFS=$'\t' read -r file kind exit_code error_pattern must_match must_not_match || [ -n "$file" ]; do
+        file="$(strip_cr "$file")"
+        kind="$(strip_cr "$kind")"
+        exit_code="$(strip_cr "$exit_code")"
+        error_pattern="$(strip_cr "$error_pattern")"
+        must_match="$(strip_cr "$must_match")"
+        must_not_match="$(strip_cr "$must_not_match")"
+
         [ "$file" = "file" ] && continue
         [ -z "$file" ] && continue
         [ ! -f "$file" ] && continue
@@ -242,7 +277,7 @@ run_manifest() {
                 test_file "$file" "$exit_code" || true
                 ;;
             error)
-                test_error "$file" "$error_pattern" || true
+                test_error "$file" "$(resolve_error_pattern "$error_pattern" "$exit_code" "$must_match" "$must_not_match")" || true
                 ;;
             cgen)
                 test_cgen_grep "$file" "$must_match" "$must_not_match" || true
@@ -251,7 +286,7 @@ run_manifest() {
                 echo -e "${YELLOW}WARN${NC} - Unknown manifest kind '$kind' for $file"
                 ;;
         esac
-    done < "$manifest"
+    done < <(tr -d '\r' < "$manifest")
 }
 
 echo "Ion Compiler Test Harness"

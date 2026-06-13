@@ -34,4 +34,4 @@ jobs:
         shell: bash
         env:
           COMPILER: ${{ github.workspace }}/target/release/ion-compiler
-        run: cd tests && ./test_runner.sh
+        run: cd tests && bash test_runner.sh
