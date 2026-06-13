@@ -1,9 +1,14 @@
 use crate::ast::*;
 use crate::lexer::{Token, TokenKind};
+use std::collections::HashSet;
 
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
+    /// Import aliases from `import "..." as alias` in this file.
+    import_aliases: HashSet<String>,
+    /// Enum type names declared in this file.
+    enum_names: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -19,7 +24,12 @@ pub enum ParseError {
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, current: 0 }
+        Self {
+            tokens,
+            current: 0,
+            import_aliases: HashSet::new(),
+            enum_names: HashSet::new(),
+        }
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
@@ -50,7 +60,9 @@ impl Parser {
                             span: Span::from_token(self.peek()),
                         });
                     }
-                    imports.push(self.parse_import()?);
+                    let import_stmt = self.parse_import()?;
+                    self.import_aliases.insert(import_stmt.alias.clone());
+                    imports.push(import_stmt);
                 }
                 TokenKind::Extern => {
                     if is_pub {
@@ -70,6 +82,7 @@ impl Parser {
                 TokenKind::Enum => {
                     let mut decl = self.parse_enum_decl()?;
                     decl.pub_ = is_pub;
+                    self.enum_names.insert(decl.name.clone());
                     enums.push(decl);
                 }
                 TokenKind::Type => {
@@ -2305,25 +2318,18 @@ impl Parser {
                     false
                 };
 
-                // Check if this is a qualified function call: mod::func(...)
-                // We prefer enum literals over qualified calls, so we only treat as qualified call
-                // if it's a known built-in type (Box, Vec, String) or if we can determine it's a module.
-                // For now, we'll prefer enum literals and let the type checker handle the ambiguity.
-                // Pattern: Ident : : Ident (
-                // Token indices: current=Ident, current+1=:, current+2=:, current+3=Ident, current+4=(
-                let is_qualified_call =
-                    if next_is_colon_colon && self.current + 4 < self.tokens.len() {
-                        // Check if current+3 is Ident and current+4 is LParen
-                        let has_ident_and_paren =
-                            matches!(self.tokens[self.current + 3].kind, TokenKind::Ident(_))
-                                && matches!(self.tokens[self.current + 4].kind, TokenKind::LParen);
-
-                        // Only treat as qualified call if it's a known built-in type that uses :: syntax
-                        // (Box, Vec, String) - these are never enums
-                        has_ident_and_paren && matches!(name.as_str(), "Box" | "Vec" | "String")
-                    } else {
-                        false
-                    };
+                // mod::func(...) when mod is an import alias or built-in type (Box, Vec, String).
+                // Local enum types keep Enum::Variant(...) as EnumLit.
+                let is_qualified_call = if next_is_colon_colon && self.current + 4 < self.tokens.len()
+                {
+                    let has_ident_and_paren = matches!(
+                        self.tokens[self.current + 3].kind,
+                        TokenKind::Ident(_)
+                    ) && matches!(self.tokens[self.current + 4].kind, TokenKind::LParen);
+                    has_ident_and_paren && self.is_module_or_builtin_qualified_call(&name)
+                } else {
+                    false
+                };
 
                 if next_is_colon_colon && !is_qualified_call {
                     // Enum literal: EnumName::VariantName(...)
@@ -2708,6 +2714,14 @@ impl Parser {
     }
 
     // Helper methods
+
+    /// True when `Name::item(...)` should parse as a qualified call, not an enum literal.
+    fn is_module_or_builtin_qualified_call(&self, name: &str) -> bool {
+        if self.enum_names.contains(name) {
+            return false;
+        }
+        self.import_aliases.contains(name) || matches!(name, "Box" | "Vec" | "String")
+    }
 
     fn is_at_end(&self) -> bool {
         matches!(self.peek().kind, TokenKind::EOF)

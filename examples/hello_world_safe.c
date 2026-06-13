@@ -7,20 +7,20 @@
 extern int write(int fd, uint8_t* buf, int count);
 
 int main(void);
-void print(ion_string_t* s);
-void println(ion_string_t* s);
-void print_str(uint8_t* s, int len);
-void print_int(int n);
+void io_print(ion_string_t* s);
+void io_println(ion_string_t* s);
+void io_print_str(uint8_t* s, int len);
+void io_print_int(int n);
 int main(void) {
     int ret_val = 0;
-    println(ion_string_from_literal("Hello, World!", 13));
+    io_println(ion_string_from_literal("Hello, World!", 13));
     ret_val = 0;
     goto epilogue;
 epilogue:
         return ret_val;
 }
 
-void print(ion_string_t* s) {
+void io_print(ion_string_t* s) {
     {
         int _result = write(1, s->data, (int)s->len);
     }
@@ -28,7 +28,7 @@ epilogue:
         return;
 }
 
-void println(ion_string_t* s) {
+void io_println(ion_string_t* s) {
     {
         int _result = write(1, s->data, (int)s->len);
         int _newline = write(1, "\n", 1);
@@ -37,7 +37,7 @@ epilogue:
         return;
 }
 
-void print_str(uint8_t* s, int len) {
+void io_print_str(uint8_t* s, int len) {
     if (len < 0) {
                 goto epilogue;
     }
@@ -48,7 +48,7 @@ epilogue:
         return;
 }
 
-void print_int(int n) {
+void io_print_int(int n) {
     uint8_t buf[12] = {0};
     int len = 0;
     int negative = 0;

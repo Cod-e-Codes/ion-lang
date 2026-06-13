@@ -1,0 +1,7 @@
+import "../stdlib/io.ion" as io;
+import "../stdlib/fmt.ion" as fmt;
+
+fn main() -> int {
+    fmt::println_int(42);
+    return 0;
+}

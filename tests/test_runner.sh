@@ -130,6 +130,49 @@ test_error() {
     fi
 }
 
+# Test function: compile and verify generated C contains expected patterns
+test_cgen_grep() {
+    local ion_file="$1"
+    local must_match="$2"
+    local must_not_match="$3"
+    local test_name="${ion_file%.ion}"
+
+    test_count=$((test_count + 1))
+    echo -n "Testing ${test_name} (codegen)... "
+
+    if ! "$COMPILER" "$ion_file" > /dev/null 2>&1; then
+        echo -e "${RED}FAIL${NC} - Compilation failed"
+        fail_count=$((fail_count + 1))
+        return 1
+    fi
+
+    local c_file="${test_name}.c"
+    if [ ! -f "$c_file" ]; then
+        echo -e "${RED}FAIL${NC} - C file not generated"
+        fail_count=$((fail_count + 1))
+        return 1
+    fi
+
+    if ! grep -q "$must_match" "$c_file" 2>/dev/null; then
+        echo -e "${RED}FAIL${NC} - Generated C missing pattern: $must_match"
+        fail_count=$((fail_count + 1))
+        rm -f "$c_file"
+        return 1
+    fi
+
+    if [ -n "$must_not_match" ] && grep -q "$must_not_match" "$c_file" 2>/dev/null; then
+        echo -e "${RED}FAIL${NC} - Generated C contains forbidden pattern: $must_not_match"
+        fail_count=$((fail_count + 1))
+        rm -f "$c_file"
+        return 1
+    fi
+
+    echo -e "${GREEN}PASS${NC}"
+    pass_count=$((pass_count + 1))
+    rm -f "$c_file"
+    return 0
+}
+
 # Main test execution
 echo "Ion Compiler Test Harness"
 echo "========================="
@@ -424,6 +467,11 @@ fi
 
 if [ -f "test_fmt_int_to_string.ion" ]; then
     test_file "test_fmt_int_to_string.ion" 0 || true
+fi
+
+if [ -f "test_fmt_println_int.ion" ]; then
+    test_file "test_fmt_println_int.ion" 0 || true
+    test_cgen_grep "test_fmt_println_int.ion" "io_print_int" '^[[:space:]]+print_int\(' || true
 fi
 
 # Unsafe blocks
