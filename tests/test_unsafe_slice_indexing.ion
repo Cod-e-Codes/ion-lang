@@ -1,0 +1,7 @@
+fn main() -> int {
+    let arr: [int; 3] = [1, 2, 3];
+    let s: &[]int = &arr;
+    unsafe {
+        return s[0];
+    }
+}

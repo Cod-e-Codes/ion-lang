@@ -1,0 +1,7 @@
+fn get_elem(s: &[]int, i: int) -> int {
+    return s[i];
+}
+
+fn main() -> int {
+    return 0;
+}

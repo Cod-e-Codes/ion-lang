@@ -1,0 +1,8 @@
+fn get_elem(s: &[]int, i: int) -> int {
+    return s[i];
+}
+
+fn main() -> int {
+    let arr: [int; 3] = [1, 2, 3];
+    return get_elem(&arr, 10);
+}

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 enum BoundsCheck {
     Fixed(usize),
     StringLen,
+    SliceLen { by_ref: bool },
 }
 
 #[derive(Clone)]
@@ -2682,19 +2683,11 @@ impl Codegen {
                 index,
                 target_type,
             } => {
-                if self.in_unsafe_block {
-                    // Unchecked indexing for unsafe blocks - direct C array access
-                    self.generate_expr(target);
-                    self.write("[");
-                    self.generate_expr(index);
-                    self.write("]");
-                } else {
-                    let bounds_check = match target_type {
-                        Some(Type::Array { size, .. }) => Some(BoundsCheck::Fixed(*size)),
-                        Some(Type::String) => Some(BoundsCheck::StringLen),
-                        _ => None,
-                    };
+                let bounds_check = self.bounds_check_for_target_type(target_type.as_ref());
 
+                if self.in_unsafe_block {
+                    self.emit_index_access(target, index, bounds_check.as_ref());
+                } else {
                     let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
                     self.temp_var_counter += 1;
 
@@ -2735,11 +2728,25 @@ impl Codegen {
                                 "] : (ion_panic(\"String index out of bounds\"), (uint8_t)0); })",
                             );
                         }
-                        None => {
-                            self.generate_expr(target);
-                            self.write("[");
+                        Some(BoundsCheck::SliceLen { by_ref }) => {
+                            self.write("({ int ");
+                            self.write(&temp_var);
+                            self.write(" = ");
                             self.generate_expr(index);
-                            self.write("]");
+                            self.write("; (");
+                            self.write(&temp_var);
+                            self.write(" >= 0 && ");
+                            self.write(&temp_var);
+                            self.write(" < ");
+                            self.emit_slice_len(target, by_ref);
+                            self.write(") ? ");
+                            self.emit_slice_data_index(target, &temp_var, by_ref);
+                            self.write(" : (ion_panic(\"Slice index out of bounds\"), ");
+                            self.emit_slice_data_index(target, "0", by_ref);
+                            self.write("); })");
+                        }
+                        None => {
+                            self.emit_index_access(target, index, None);
                         }
                     }
                 }
@@ -2775,6 +2782,71 @@ impl Codegen {
     fn type_to_c(&self, ty: &Type) -> String {
         let resolved = resolve_type_alias(ty, &self.type_aliases);
         type_to_c_impl(&resolved)
+    }
+
+    fn bounds_check_for_target_type(&self, ty: Option<&Type>) -> Option<BoundsCheck> {
+        let resolved = ty.map(|t| resolve_type_alias(t, &self.type_aliases));
+        match resolved.as_ref() {
+            Some(Type::Array { size, .. }) => Some(BoundsCheck::Fixed(*size)),
+            Some(Type::String) => Some(BoundsCheck::StringLen),
+            Some(Type::Slice { .. }) => Some(BoundsCheck::SliceLen { by_ref: false }),
+            Some(Type::Ref { inner, .. }) if matches!(**inner, Type::Slice { .. }) => {
+                Some(BoundsCheck::SliceLen { by_ref: true })
+            }
+            _ => None,
+        }
+    }
+
+    fn emit_slice_len(&mut self, target: &IREexpr, by_ref: bool) {
+        self.generate_expr(target);
+        if by_ref {
+            self.write("->len");
+        } else {
+            self.write(".len");
+        }
+    }
+
+    fn emit_slice_data_index(&mut self, target: &IREexpr, index: &str, by_ref: bool) {
+        self.generate_expr(target);
+        if by_ref {
+            self.write("->data[");
+        } else {
+            self.write(".data[");
+        }
+        self.write(index);
+        self.write("]");
+    }
+
+    fn emit_index_access(
+        &mut self,
+        target: &IREexpr,
+        index: &IREexpr,
+        bounds_check: Option<&BoundsCheck>,
+    ) {
+        match bounds_check {
+            Some(BoundsCheck::SliceLen { by_ref }) => {
+                self.generate_expr(target);
+                if *by_ref {
+                    self.write("->data[");
+                } else {
+                    self.write(".data[");
+                }
+                self.generate_expr(index);
+                self.write("]");
+            }
+            Some(BoundsCheck::StringLen) => {
+                self.generate_expr(target);
+                self.write("->data[");
+                self.generate_expr(index);
+                self.write("]");
+            }
+            _ => {
+                self.generate_expr(target);
+                self.write("[");
+                self.generate_expr(index);
+                self.write("]");
+            }
+        }
     }
 
     /// Zero-initialize a moved capture in the parent scope after ownership transfers to the thread.

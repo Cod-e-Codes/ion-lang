@@ -434,11 +434,19 @@ if [ -f "test_array_bounds_safe.ion" ]; then
     test_file "test_array_bounds_safe.ion" 150 || true
 fi
 
+if [ -f "test_slice_bounds_codegen.ion" ]; then
+    test_cgen_grep "test_slice_bounds_codegen.ion" "Slice index out of bounds" "" || true
+fi
+
+if [ -f "test_unsafe_slice_indexing.ion" ]; then
+    test_cgen_grep "test_unsafe_slice_indexing.ion" "s->data\[0\]" "Slice index out of bounds" || true
+fi
+
 if [ -f "test_unsafe_array_indexing.ion" ]; then
     test_file "test_unsafe_array_indexing.ion" 1 || true
 fi
 
-# Note: test_array_bounds_panic.ion should panic and abort - we'll skip automated testing
+# Note: test_array_bounds_panic.ion and test_slice_bounds_panic.ion panic and abort - skip automated run
 # To manually test: compile and run, should see "Ion panic: Array index out of bounds"
 
 # Safe I/O library tests

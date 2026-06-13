@@ -104,6 +104,9 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_array_indexing.ion` - Array indexing operations
 - `test_array_bounds_safe.ion` - Array bounds checking with valid indices (Safety Enhancement)
 - `test_unsafe_array_indexing.ion` - Unsafe array indexing without bounds checking (Safety Enhancement)
+- `test_slice_bounds_codegen.ion` - Slice bounds checking in generated C (codegen grep)
+- `test_unsafe_slice_indexing.ion` - Unsafe slice indexing without bounds checking (codegen grep)
+- `test_slice_bounds_panic.ion` - Slice out-of-bounds panic (manual only; aborts)
 - `test_slice_basic.ion` - Dynamically sized slices
 - `test_slice_indexing.ion` - Slice indexing operations
 - `test_array_to_slice_coercion.ion` - Array-to-slice coercion

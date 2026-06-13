@@ -113,7 +113,7 @@ This list is intentionally small; future additions must justify their complexity
 
 The `unsafe` keyword marks code blocks where Ion's safety guarantees are suspended:
 
-- **Array bounds checking** is disabled for array indexing within `unsafe` blocks
+- **Array and slice bounds checking** is disabled for indexing within `unsafe` blocks
 - **Raw pointer dereferencing** is only permitted within `unsafe` blocks  
 - **FFI calls** to `extern "C"` functions must be wrapped in `unsafe` blocks
 
@@ -121,7 +121,7 @@ The `unsafe` keyword marks code blocks where Ion's safety guarantees are suspend
 
 Code within `unsafe` blocks must manually uphold the following invariants:
 
-1. **No out-of-bounds array access**: All array indices must be valid
+1. **No out-of-bounds array or slice access**: All indices must be valid
 2. **No null pointer dereference**: All pointer dereferences must be to valid memory
 3. **No data races**: Concurrent access to shared mutable state is prohibited
 
@@ -513,6 +513,35 @@ unsafe {
 ```ion
 let arr: [int; 3] = [1, 2, 3];
 let x = arr[10]; // Runtime panic: "Array index out of bounds"
+```
+
+#### 4.1.2 Slice Safety
+
+Dynamically sized slices `[]T` (and `&[]T`) have the following safety properties:
+
+- **Bounds checking**: Slice indexing `s[i]` performs runtime bounds checking by default
+  - If `i < 0` or `i >= s.len`, the program panics with an error message via `ion_panic()`
+  - The panic prints "Slice index out of bounds" to stderr and aborts the program
+  - Bounds checking can be disabled in `unsafe` blocks for performance-critical code
+- **Fat pointer representation**: Slices are `(data, len)` pairs at runtime
+
+**Safe slice access:**
+```ion
+fn first(s: &[]int) -> int {
+    return s[0]; // OK: bounds checked against s.len at runtime
+}
+```
+
+**Unsafe slice access (no bounds checking):**
+```ion
+unsafe {
+    let x = s[0]; // No bounds check - faster but unsafe
+}
+```
+
+**Out-of-bounds access (panics):**
+```ion
+return s[10]; // Runtime panic: "Slice index out of bounds" when len <= 10
 ```
 
 
