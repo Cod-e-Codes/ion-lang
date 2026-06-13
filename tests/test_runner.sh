@@ -427,6 +427,7 @@ fi
 
 if [ -f "test_array_to_slice_coercion.ion" ]; then
     test_file "test_array_to_slice_coercion.ion" 10 || true
+    test_cgen_grep "test_array_to_slice_coercion.ion" "(ion_slice_int){" "" || true
 fi
 
 # Array bounds checking tests (Safety Enhancement)

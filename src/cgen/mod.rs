@@ -35,6 +35,7 @@ pub struct Codegen {
     extern_functions: HashMap<String, Vec<Type>>, // Map extern function names to their parameter types
     current_return_type: Option<Type>, // Current function's return type (for array return handling)
     function_return_types: HashMap<String, Option<Type>>, // Map function names to their return types
+    function_param_types: HashMap<String, Vec<Type>>,     // Map function names to parameter types
     in_unsafe_block: bool,                                // Track if we're in an unsafe block
     temp_var_counter: usize, // Counter for unique temporary variable names
     current_function_params: HashMap<String, Type>, // Track current function parameter types for field access
@@ -360,6 +361,7 @@ impl Codegen {
             extern_functions: HashMap::new(),
             current_return_type: None,
             function_return_types: HashMap::new(),
+            function_param_types: HashMap::new(),
             in_unsafe_block: false,
             temp_var_counter: 0,
             current_function_params: HashMap::new(),
@@ -407,9 +409,14 @@ impl Codegen {
         }
         // Build function return type map
         self.function_return_types.clear();
+        self.function_param_types.clear();
         for function in &program.functions {
             self.function_return_types
                 .insert(function.name.clone(), function.return_type.clone());
+            self.function_param_types.insert(
+                function.name.clone(),
+                function.params.iter().map(|p| p.ty.clone()).collect(),
+            );
         }
         self.generated_types.clear();
         self.spawn_counter = 0;
@@ -1376,6 +1383,71 @@ impl Codegen {
         None
     }
 
+    fn lookup_var_type(&self, name: &str) -> Option<Type> {
+        self.lookup_binding_type(name)
+            .or_else(|| self.current_function_params.get(name).cloned())
+    }
+
+    fn slice_struct_name_for_elem(&self, elem_ty: &Type) -> String {
+        format!(
+            "ion_slice_{}",
+            mangle_type_name(&self.type_to_c(elem_ty), &[])
+        )
+    }
+
+    /// When init is `&arr` for `[T; N]` and expected is `&[]T`, return (array name, N, elem type).
+    fn match_array_to_slice_coercion(
+        &self,
+        expected: &Type,
+        init: &IREexpr,
+    ) -> Option<(String, usize, Type)> {
+        let expected = resolve_type_alias(expected, &self.type_aliases);
+        let Type::Ref {
+            inner: expected_inner,
+            mutable: expected_mut,
+        } = expected
+        else {
+            return None;
+        };
+        let Type::Slice { .. } = expected_inner.as_ref() else {
+            return None;
+        };
+        let IREexpr::AddressOf {
+            inner,
+            mutable: init_mut,
+        } = init
+        else {
+            return None;
+        };
+        if expected_mut != *init_mut {
+            return None;
+        }
+        let IREexpr::Var(array_name) = inner.as_ref() else {
+            return None;
+        };
+        let var_ty = self.lookup_var_type(array_name)?;
+        let var_ty = resolve_type_alias(&var_ty, &self.type_aliases);
+        let Type::Array {
+            inner: array_elem,
+            size,
+        } = var_ty
+        else {
+            return None;
+        };
+        Some((array_name.clone(), size, (*array_elem).clone()))
+    }
+
+    fn emit_array_to_slice_ptr(&mut self, array_name: &str, size: usize, elem_ty: &Type) {
+        let slice_type = self.slice_struct_name_for_elem(elem_ty);
+        self.write("&(");
+        self.write(&slice_type);
+        self.write("){");
+        self.write(array_name);
+        self.write(", ");
+        self.write(&size.to_string());
+        self.write("}");
+    }
+
     /// Mirror tc `check_expr_for_moves`: mark bindings consumed by this expression.
     fn mark_moves_in_expr(&mut self, expr: &IREexpr) {
         match expr {
@@ -1765,6 +1837,30 @@ impl Codegen {
     fn generate_stmt(&mut self, stmt: &IRStmt) {
         match stmt {
             IRStmt::Let(let_stmt) => {
+                if let Some(ref init) = let_stmt.init
+                    && let Some((array_name, size, elem_ty)) =
+                        self.match_array_to_slice_coercion(&let_stmt.ty, init)
+                {
+                    let slice_type = self.slice_struct_name_for_elem(&elem_ty);
+                    let temp = format!("__ion_arr_slice_{}", self.temp_var_counter);
+                    self.temp_var_counter += 1;
+                    self.write_indent();
+                    self.writeln(&format!(
+                        "{} {} = {{ {}, {} }};",
+                        slice_type, temp, array_name, size
+                    ));
+                    self.write_indent();
+                    self.write(&format!(
+                        "{} {} = &{};",
+                        self.type_to_c(&let_stmt.ty),
+                        let_stmt.name,
+                        temp
+                    ));
+                    self.writeln(";");
+                    self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
+                    self.mark_moves_in_expr(init);
+                    return;
+                }
                 self.write_indent();
                 // Special handling: if initialized from function call that returns array,
                 // declare as pointer (C doesn't allow returning arrays)
@@ -2594,6 +2690,14 @@ impl Codegen {
                         // If this is an extern function expecting int by value, convert &int (immutable) arguments to int
                         // For &int -> int: just use the inner expression (the variable itself)
                         // For &mut int -> int*: keep the address-of (don't dereference)
+                        if let Some(param_types) = self.function_param_types.get(&func_name)
+                            && i < param_types.len()
+                            && let Some((array_name, size, elem_ty)) =
+                                self.match_array_to_slice_coercion(&param_types[i], arg)
+                        {
+                            self.emit_array_to_slice_ptr(&array_name, size, &elem_ty);
+                            continue;
+                        }
                         if let Some(param_types) = self.extern_functions.get(&func_name)
                             && i < param_types.len()
                             && let Type::Ref {

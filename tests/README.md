@@ -106,10 +106,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_unsafe_array_indexing.ion` - Unsafe array indexing without bounds checking (Safety Enhancement)
 - `test_slice_bounds_codegen.ion` - Slice bounds checking in generated C (codegen grep)
 - `test_unsafe_slice_indexing.ion` - Unsafe slice indexing without bounds checking (codegen grep)
-- `test_slice_bounds_panic.ion` - Slice out-of-bounds panic (manual only; aborts)
+- `test_slice_bounds_panic.ion` - Slice out-of-bounds panic (manual only in harness; compiles and runs once array-to-slice coercion is in place)
 - `test_slice_basic.ion` - Dynamically sized slices
 - `test_slice_indexing.ion` - Slice indexing operations
-- `test_array_to_slice_coercion.ion` - Array-to-slice coercion
+- `test_array_to_slice_coercion.ion` - `&[T; N]` to `&[]T` at call sites (exit 10)
 - `test_unsafe_basic.ion` - Unsafe blocks
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls (negative test)
 - `test_multifile.ion` - Multi-file compilation

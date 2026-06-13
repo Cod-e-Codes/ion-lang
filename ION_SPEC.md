@@ -544,6 +544,19 @@ unsafe {
 return s[10]; // Runtime panic: "Slice index out of bounds" when len <= 10
 ```
 
+**Array-to-slice coercion:**
+
+A reference to a fixed-size array `&[T; N]` coerces to `&[]T` where the type checker accepts it (let bindings and function arguments). Codegen builds a temporary `ion_slice_T` fat pointer with `data` pointing at the array and `len = N`.
+
+```ion
+fn sum(s: &[]int) -> int { return s[0] + s[1]; }
+
+fn main() -> int {
+    let arr: [int; 3] = [10, 20, 30];
+    return sum(&arr); // &[int; 3] coerced to &[]int at the call site
+}
+```
+
 
 **Standard library enums (user-defined):**
 - `Option<T>` – optional value (`Some(T)` or `None`) – can be defined as a generic enum
