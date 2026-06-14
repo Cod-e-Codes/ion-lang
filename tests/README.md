@@ -149,6 +149,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_channel_split.ion` - Split Channel API (`Sender<T>`, `Receiver<T>` types)
 - `test_channel_string.ion` - `channel<String>` send/recv; IR recv uses `String` element type (exit 3)
 - `test_channel_send_call_expr.ion` - `send(&tx, make())` with non-lvalue operand codegen (exit 7)
+- `test_channel_send_field_call_expr.ion` - `send(&tx, make_pair().x)` temps field of call result (exit 11)
 - `test_enum_struct_variant.ion` - Struct-style enum variants with named fields
 - `test_for_loop.ion` - `for...in` loop syntax with Vec iteration
 

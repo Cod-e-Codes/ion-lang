@@ -44,10 +44,28 @@ Tab-separated columns:
 | `kind` | `run` | `error` | `cgen` |
 | `exit` | expected exit code | empty | empty |
 | `error_pattern` | empty | grep on CLI stderr | empty |
-| `must_match` | empty | empty | required substring in `.c` |
-| `must_not_match` | empty | empty | optional forbidden substring |
+| `must_match` | empty | empty | required literal substring in `.c` (`grep -Fq`) |
+| `must_not_match` | empty | empty | optional forbidden regex in `.c` (`grep -q`) |
 
 `test_runner.sh` loops the manifest and calls `test_file`, `test_error`, or `test_cgen_grep`. Special cases stay explicit: `test_multifile` (multi-file mode), panic tests (codegen-only rows; manual runtime documented in [tests/README.md](../../../tests/README.md)).
+
+### Manifest parsing and `cgen` grep
+
+Authors still write normal tab-separated rows. The harness reads them with `awk -F '\t'` and an internal record separator so **empty columns are preserved** (bash `read` with tab IFS collapses consecutive tabs and breaks `cgen` rows).
+
+On startup, two self-checks run before the manifest:
+
+1. TSV field 5 (`must_match`) is parsed correctly for a sample `cgen` row
+2. Empty `must_match` is rejected (would otherwise false-pass via `grep -q ""`)
+
+**`cgen` pattern rules:**
+
+| Column | grep mode | Write patterns as |
+|--------|-----------|-------------------|
+| `must_match` | Fixed string (`grep -Fq`) | Literal C text. Use `s->data[0]`, not `s->data\[0\]`. Parentheses are fine: `ion_vec_free((ion_vec_t*)(h.items))` |
+| `must_not_match` | Basic regex (`grep -q`) | Regex when needed, e.g. `^[[:space:]]+print_int\(` on `test_fmt_println_int.ion` |
+
+Empty `must_match` on a `cgen` row is a harness **FAIL**, not a skip.
 
 ## Add a positive test
 

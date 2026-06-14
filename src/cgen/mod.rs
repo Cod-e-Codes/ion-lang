@@ -20,10 +20,12 @@ enum BoundsCheck {
 }
 
 fn is_send_value_lvalue(expr: &IREexpr) -> bool {
-    matches!(
-        expr,
-        IREexpr::Var(_) | IREexpr::FieldAccess { .. } | IREexpr::Index { .. }
-    )
+    match expr {
+        IREexpr::Var(_) => true,
+        IREexpr::FieldAccess { base, .. } => is_send_value_lvalue(base),
+        IREexpr::Index { target, .. } => is_send_value_lvalue(target),
+        _ => false,
+    }
 }
 
 #[derive(Clone)]

@@ -88,6 +88,7 @@ test_method_call_chaining.ion	run	0
 test_channel_split.ion	run	0			
 test_channel_string.ion	run	3			
 test_channel_send_call_expr.ion	run	7			
+test_channel_send_field_call_expr.ion	run	11			
 test_enum_struct_variant.ion	run	42			
 test_for_loop.ion	run	0			
 test_escape_sequences.ion	run	0			

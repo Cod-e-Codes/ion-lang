@@ -1,0 +1,14 @@
+struct Pair {
+    x: int;
+    y: int;
+}
+
+fn make_pair() -> Pair {
+    return Pair { x: 11, y: 22 };
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    send(&tx, make_pair().x);
+    return recv(&mut rx);
+}
