@@ -82,6 +82,24 @@ impl TypeChecker {
         }
     }
 
+    /// Peel field/index chains to the root owner variable binding, if any.
+    pub(crate) fn borrow_owner_from_expr(&self, expr: &Expr) -> Option<(String, Span)> {
+        let mut current = expr;
+        loop {
+            match current {
+                Expr::Var(var_expr) => {
+                    if self.variables.contains_key(&var_expr.name) {
+                        return Some((var_expr.name.clone(), var_expr.span));
+                    }
+                    return None;
+                }
+                Expr::FieldAccess(acc) => current = &acc.base,
+                Expr::Index(index_expr) => current = &index_expr.target,
+                _ => return None,
+            }
+        }
+    }
+
     pub(crate) fn check_owner_not_borrowed(
         &self,
         owner: &str,
@@ -154,10 +172,11 @@ impl TypeChecker {
             }
             Expr::Ref(ref_expr) => {
                 // Creating a reference borrows the owner; it is not a direct owner use.
-                if let Expr::Var(var_expr) = ref_expr.inner.as_ref() {
-                    self.check_borrow_allowed(&var_expr.name, ref_expr.mutable, var_expr.span)?;
-                } else {
-                    self.check_expr(&ref_expr.inner)?;
+                if let Some((owner, span)) = self.borrow_owner_from_expr(&ref_expr.inner) {
+                    self.check_borrow_allowed(&owner, ref_expr.mutable, span)?;
+                }
+                if !matches!(ref_expr.inner.as_ref(), Expr::Var(_)) {
+                    self.check_expr_borrow_operand(&ref_expr.inner)?;
                 }
                 Ok(())
             }

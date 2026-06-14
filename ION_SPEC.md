@@ -728,6 +728,10 @@ The following borrowing rules apply:
 - Borrows are restricted to the lexical scope of the function in which they are created (see 5.4).
 - While any lasting borrow of a variable is active, that variable cannot be used directly: no reads, assignment, or moves. This applies to copy types (e.g. `int`) as well as move-only types. Use the reference binding instead; `&mut` and `&` both enforce this exclusivity on the owner for the borrow's lifetime.
 
+**Field and subpath borrows**
+
+Lasting borrows through fields or indexing (e.g. `let r = &mut s.x`, `let r = &arr[i]`) register a borrow on the **root owner binding** (`s`, `arr`), not on a separate field slot. Ion does not support Rust-style disjoint field borrows: at most one `&mut` path into an owner at a time, and while the owner is borrowed no direct use of the owner (including other field paths or whole-owner `&mut s`) is allowed. Multiple shared `&` paths into the same owner remain allowed (`let a = &s.x; let b = &s.y`). Ephemeral `&` / `&mut` in call arguments are checked for aliasing at the use site but do not register lasting borrow counts.
+
 #### 5.4 No-Escape Rule (Formal)
 
 Each reference has a **borrow scope** equal to a syntactic region within a single function body. The compiler enforces:

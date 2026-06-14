@@ -1015,11 +1015,11 @@ impl TypeChecker {
                     // This handles cases like `let y = x;` where `x` is moved to `y`
                     self.check_expr_for_moves(init)?;
 
-                    // Lasting borrows from `let r = &x` / `let r = &mut x`
+                    // Lasting borrows from `let r = &x` / `let r = &mut s.field`, etc.
                     if let Expr::Ref(ref_expr) = init
-                        && let Expr::Var(var_expr) = ref_expr.inner.as_ref()
+                        && let Some((owner, span)) = self.borrow_owner_from_expr(&ref_expr.inner)
                     {
-                        self.register_borrow(&var_expr.name, ref_expr.mutable, var_expr.span)?;
+                        self.register_borrow(&owner, ref_expr.mutable, span)?;
                     }
 
                     // New variable starts as Valid (it owns the value from init)
@@ -1634,6 +1634,18 @@ impl TypeChecker {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> Result<Type, TypeCheckError> {
+        self.check_expr_with_context(expr, false)
+    }
+
+    fn check_expr_borrow_operand(&mut self, expr: &Expr) -> Result<Type, TypeCheckError> {
+        self.check_expr_with_context(expr, true)
+    }
+
+    fn check_expr_with_context(
+        &mut self,
+        expr: &Expr,
+        borrow_operand: bool,
+    ) -> Result<Type, TypeCheckError> {
         match expr {
             Expr::Lit(_) => Ok(Type::Int),
             Expr::BoolLiteral(_) => Ok(Type::Bool),
@@ -1698,7 +1710,9 @@ impl TypeChecker {
                         });
                     }
 
-                    self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
+                    if !borrow_operand {
+                        self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
+                    }
 
                     let def_span = var_info.definition_span;
                     let var_ty = var_info.ty.clone();
@@ -1732,19 +1746,10 @@ impl TypeChecker {
                 }
             }
             Expr::Ref(ref_expr) => {
-                let inner_type = match ref_expr.inner.as_ref() {
-                    Expr::Var(var_expr) => {
-                        self.check_borrow_allowed(&var_expr.name, ref_expr.mutable, var_expr.span)?;
-                        self.variables
-                            .get(&var_expr.name)
-                            .map(|info| info.ty.clone())
-                            .ok_or_else(|| TypeCheckError::UndefinedVariable {
-                                name: var_expr.name.clone(),
-                                span: var_expr.span,
-                            })?
-                    }
-                    _ => self.check_expr(&ref_expr.inner)?,
-                };
+                if let Some((owner, span)) = self.borrow_owner_from_expr(&ref_expr.inner) {
+                    self.check_borrow_allowed(&owner, ref_expr.mutable, span)?;
+                }
+                let inner_type = self.check_expr_borrow_operand(&ref_expr.inner)?;
 
                 Ok(Type::Ref {
                     inner: Box::new(inner_type),
@@ -1872,7 +1877,7 @@ impl TypeChecker {
                 Ok(Type::Struct(struct_name))
             }
             Expr::FieldAccess(acc) => {
-                let base_ty = self.check_expr(&acc.base)?;
+                let base_ty = self.check_expr_with_context(&acc.base, borrow_operand)?;
                 match base_ty {
                     Type::Struct(ref name) => {
                         if self.is_type_param(name) {
@@ -3012,7 +3017,7 @@ impl TypeChecker {
             }
             Expr::Index(index_expr) => {
                 // Check target expression
-                let target_ty = self.check_expr(&index_expr.target)?;
+                let target_ty = self.check_expr_with_context(&index_expr.target, borrow_operand)?;
 
                 // Check index expression is integer
                 let index_ty = self.check_expr(&index_expr.index)?;

@@ -63,6 +63,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_mut_borrow_block_ok.ion` - Mutable borrow ends with `if` branch scope (exit 62)
 - `test_shared_borrow_ok.ion` - Multiple `&T` borrows allowed (exit 63)
 - `test_nested_shared_borrow_ok.ion` - Outer shared borrow survives inner `if` scope (exit 64)
+- `test_field_double_mut_borrow_error.ion` - Second `&mut` on disjoint fields of same owner (negative, `BorrowConflict`)
+- `test_field_mut_borrow_blocks_owner_error.ion` - Field read while root owner is mut-borrowed (negative)
+- `test_field_whole_mut_borrow_error.ion` - Whole-owner `&mut` while field `&mut` is active (negative)
+- `test_field_shared_borrow_ok.ion` - Multiple shared field borrows on same owner (exit 65)
+- `test_field_mut_borrow_scope_ok.ion` - Field mut borrow released by inner `if` scope (exit 66)
 - `test_send_basic.ion` - Send/Send smoke test
 - `test_defer_basic.ion` - Defer statements
 - `test_defer_block.ion` - Block-scoped defer

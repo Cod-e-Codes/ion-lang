@@ -1,0 +1,13 @@
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn main() -> int {
+    let mut s: Point = Point { x: 1, y: 2 };
+    if true {
+        let _a = &mut s.x;
+    }
+    let _b = &mut s.y;
+    return 66;
+}

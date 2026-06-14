@@ -12,6 +12,11 @@ test_assign_while_borrowed_error.ion	error		BorrowConflict
 test_mut_borrow_block_ok.ion	run	62			
 test_shared_borrow_ok.ion	run	63			
 test_nested_shared_borrow_ok.ion	run	64			
+test_field_double_mut_borrow_error.ion	error		BorrowConflict		
+test_field_mut_borrow_blocks_owner_error.ion	error		BorrowConflict		
+test_field_whole_mut_borrow_error.ion	error		BorrowConflict		
+test_field_shared_borrow_ok.ion	run	65			
+test_field_mut_borrow_scope_ok.ion	run	66			
 test_send_basic.ion	run	42			
 test_defer_basic.ion	run	7			
 test_defer_block.ion	run	1			
