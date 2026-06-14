@@ -17,15 +17,15 @@ typedef struct Vec_int {
     size_t elem_size;
 } Vec_int;
 
-typedef struct tuple_ion_sender_t_ion_receiver_t {
-    ion_sender_t f0;
-    ion_receiver_t f1;
-} tuple_ion_sender_t_ion_receiver_t;
-
 typedef struct tuple_int_int {
     int f0;
     int f1;
 } tuple_int_int;
+
+typedef struct tuple_ion_sender_t_ion_receiver_t {
+    ion_sender_t f0;
+    ion_receiver_t f1;
+} tuple_ion_sender_t_ion_receiver_t;
 
 typedef struct Point {
     int x;
@@ -383,8 +383,10 @@ int reference_example(void) {
     int ret_val = 0;
     int x = 10;
     int y = 20;
-    int* _ref_y = &y;
-    int* _ref_x = &x;
+    if (1) {
+        int* _ref_y = &y;
+        int* _ref_x = &x;
+    }
     Vec_int* values = ((Vec_int*)(ion_vec_new(sizeof(int))));
     ion_vec_push((ion_vec_t*)(values), &((int){x}), sizeof(int));
     ion_vec_push((ion_vec_t*)(values), &((int){y}), sizeof(int));

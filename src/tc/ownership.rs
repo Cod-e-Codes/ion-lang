@@ -138,12 +138,12 @@ impl TypeChecker {
                     });
                 }
 
+                self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
+
                 // Primitives and references are copied, not moved (see ION_SPEC §5.2).
                 if Self::is_copy_type(&var_info.ty) {
                     return Ok(());
                 }
-
-                self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
 
                 // Mark as moved
                 self.variables
@@ -153,9 +153,12 @@ impl TypeChecker {
                 Ok(())
             }
             Expr::Ref(ref_expr) => {
-                // Reference expressions (&x, &mut x) borrow, they don't move
-                // Just check the inner expression is valid
-                self.check_expr(&ref_expr.inner)?;
+                // Creating a reference borrows the owner; it is not a direct owner use.
+                if let Expr::Var(var_expr) = ref_expr.inner.as_ref() {
+                    self.check_borrow_allowed(&var_expr.name, ref_expr.mutable, var_expr.span)?;
+                } else {
+                    self.check_expr(&ref_expr.inner)?;
+                }
                 Ok(())
             }
             Expr::StructLit(lit) => {

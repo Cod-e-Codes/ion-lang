@@ -1,0 +1,7 @@
+fn main() -> int {
+    let mut x = 5;
+    let a = &mut x;
+    let y = x;
+    let _ = a;
+    return 0;
+}

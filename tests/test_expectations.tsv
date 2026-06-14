@@ -6,6 +6,8 @@ test_ref_valid.ion	run	0
 test_double_mut_borrow_error.ion	error		BorrowConflict		
 test_mut_shared_borrow_error.ion	error		BorrowConflict		
 test_move_while_borrowed_error.ion	error		BorrowConflict		
+test_copy_use_while_mut_borrowed_error.ion	error		BorrowConflict		
+test_copy_use_while_shared_borrowed_error.ion	error		BorrowConflict		
 test_assign_while_borrowed_error.ion	error		BorrowConflict		
 test_mut_borrow_block_ok.ion	run	62			
 test_shared_borrow_ok.ion	run	63			

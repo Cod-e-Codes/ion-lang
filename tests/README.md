@@ -57,6 +57,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_double_mut_borrow_error.ion` - Second `&mut` on same variable (negative, `BorrowConflict`)
 - `test_mut_shared_borrow_error.ion` - `&mut` while shared borrow active (negative)
 - `test_move_while_borrowed_error.ion` - Move into call while `let r = &x` is active (negative)
+- `test_copy_use_while_mut_borrowed_error.ion` - Copy-type read while `let r = &mut x` is active (negative)
+- `test_copy_use_while_shared_borrowed_error.ion` - Copy-type read while `let r = &x` is active (negative)
 - `test_assign_while_borrowed_error.ion` - Assignment while `let r = &x` is active (negative)
 - `test_mut_borrow_block_ok.ion` - Mutable borrow ends with `if` branch scope (exit 62)
 - `test_shared_borrow_ok.ion` - Multiple `&T` borrows allowed (exit 63)

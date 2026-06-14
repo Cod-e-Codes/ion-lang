@@ -1698,6 +1698,8 @@ impl TypeChecker {
                         });
                     }
 
+                    self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
+
                     let def_span = var_info.definition_span;
                     let var_ty = var_info.ty.clone();
 

@@ -239,8 +239,10 @@ fn reference_example() -> int {
     let mut x: int = 10;
     let y: int = 20;
 
-    let _ref_y: &int = &y;
-    let _ref_x: &mut int = &mut x;
+    if true {
+        let _ref_y: &int = &y;
+        let _ref_x: &mut int = &mut x;
+    }
 
     // Method calls borrow the receiver automatically
     let mut values: Vec<int> = Vec::new();
