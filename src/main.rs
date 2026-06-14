@@ -128,7 +128,9 @@ fn main() {
 
             // Generate .c file
             let mut codegen = cgen::Codegen::new();
-            let c_code = codegen.generate_module_source(&ir, &module_name, &import_names);
+            let source_ion = module_path.to_string_lossy();
+            let c_code =
+                codegen.generate_module_source(&ir, &module_name, &source_ion, &import_names);
             let c_file = format!("{}.c", module_name);
             if let Err(err) = fs::write(&c_file, c_code) {
                 eprintln!("Error writing C file '{}': {}", c_file, err);
