@@ -79,6 +79,14 @@ impl LanguageServer for IonLanguageServer {
         }
     }
 
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = params.text_document.uri;
+        if let Ok(mut cache) = self.file_cache.lock() {
+            cache.remove(&uri);
+        }
+        self.client.publish_diagnostics(uri, vec![], None).await;
+    }
+
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
