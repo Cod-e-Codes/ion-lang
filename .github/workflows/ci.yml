@@ -5,31 +5,45 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
       - run: cargo fmt --check
       - run: cargo test
       - run: cargo clippy -- -D warnings
+
       - run: cargo build --release --bin ion-compiler
       - run: cargo build --release --bin ion-lsp
       - run: ./target/release/ion-compiler --version
 
   integration:
+    permissions:
+      contents: read
+
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
+
       - run: cargo build --release --bin ion-compiler
+
       - name: Integration tests
         shell: bash
         env:
