@@ -1,34 +1,23 @@
 # Changelog
 
-## [Unreleased]
+## 2026-06
 
-### Release engineering
+**Language** — `for` iteration, `match` guards, `else if`, `break`/`continue`, `loop {}`, `+=`, hex/bin literals, function types `fn(T) -> R`, tuple literals and destructuring.
 
-- Pin Rust toolchain via `rust-toolchain.toml` and commit `Cargo.lock`.
-- Add GitHub Actions CI (unit tests, clippy, release build, integration tests on Linux and Windows).
-- Declare `ion-compiler` and `ion-lsp` binaries explicitly in `Cargo.toml`.
+**Stdlib & runtime** — `fmt.ion`, `Result<T, E>`, `fs.read_to_string`, `String::push_byte`.
 
-### Correctness
+**Compiler** — scope-drop codegen, `pthread` spawn, slice bounds checks, array-to-slice coercion, struct/enum field drops, `String` equality, module function name mangling, lasting-borrow rules (ION_SPEC §5.3), field-path borrow exclusivity, move/copy tracking fixes, generic monomorphization.
 
-- Fix match expression rvalue codegen when used in `let` bindings (assign arm value to target variable).
-- Emit `Vec`/`slice`/`tuple` typedefs before struct definitions so struct fields holding `Vec<T>` get correct drop codegen.
+**LSP** — diagnostics, hover, completion, go-to-definition; multi-error reporting; symbol table mirroring; diagnostics cleared on close; hover fixes for `let` bindings and module-qualified calls.
 
-### CLI
+**Tooling** — GitHub Actions CI (Linux and Windows), pinned toolchain, `test_expectations.tsv` manifest, `--version`, line-numbered errors, Cursor agent skills. Split `tc` and `cgen` into submodules.
 
-- Add `--version` flag.
-- Print parser and type checker errors with line numbers via `Display` (stable error substrings preserved for integration tests).
-- Type-check merged program (main plus imports) in one pass.
+**Fixes** — match rvalue codegen, `Vec` struct drops, channel codegen, parser handling of `alias::call()`, scope-drop for moved-into-call bindings, HTTP server on Windows, integration harness on Windows.
 
-### Stdlib
+## 2025-12
 
-- Add `stdlib/result.ion` with generic `Result<T, E>`.
-- Replace `fs::read_to_string` with `fs::read_to_string_result` returning `ReadResult` (`Ok(String)` / `Err(int)` codes).
+`ion-lsp` and VS Code extension; go-to-definition. Runtime, tests, examples, and print lowering updates. Type-alias resolution in C prototypes.
 
-### Tests
+## 2025-11
 
-- Treat harness `PARTIAL` error-pattern mismatches as failures.
-- Add `test_match_expr_rvalue.ion`, `test_struct_field_drop_vec.ion`.
-
-### Docs
-
-- Update README, CONTRIBUTING, tests README, and agent skill notes.
+Initial compiler (lexer → parser → tc → IR → cgen), C runtime, `ION_SPEC.md`, examples, integration tests, `io`/`fs` stdlib. Core language: ownership, borrows, channels, `spawn`, generics, `match`, `defer`, FFI.
