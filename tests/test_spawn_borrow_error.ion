@@ -1,0 +1,13 @@
+fn take(s: String) {
+    let _ = s;
+}
+
+fn main() -> int {
+    let mut x = String::from("hi");
+    let a = &mut x;
+    spawn {
+        take(x);
+    };
+    let _ = a;
+    return 0;
+}

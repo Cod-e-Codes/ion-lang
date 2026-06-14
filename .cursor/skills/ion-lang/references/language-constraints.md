@@ -19,7 +19,7 @@ References `&T` and `&mut T` are stack-local views. **Rejected:**
 - Capturing references in `spawn` (non-`Send`)
 - Any pattern requiring cross-function lifetime reasoning
 
-**Borrow conflicts** (ION_SPEC section 5.3): at most one `&mut T` or any number of `&T` on the same owner. Lasting borrows come from `let r = &x` / `let r = &mut x` and end when the binding's scope ends. Ephemeral `&` / `&mut` in call arguments are checked but not stored. Moving a non-copy value while it is borrowed is a `BorrowConflict`.
+**Borrow conflicts** (ION_SPEC section 5.3): at most one `&mut T` or any number of `&T` on the same owner. Lasting borrows come from `let r = &x` / `let r = &mut x` and end when the binding's scope ends. Ephemeral `&` / `&mut` in call arguments are checked but not stored. Moving or assigning over a value while it is borrowed is a `BorrowConflict`.
 
 APIs that would return `&T` in Rust must use owned values, indices, or callbacks in Ion.
 

@@ -1238,6 +1238,7 @@ impl TypeChecker {
                                 span: spawn_stmt.span,
                             });
                         }
+                        self.check_owner_not_borrowed(&name, spawn_stmt.span)?;
                         captured_infos.push((name.clone(), info.ty.clone()));
                     } else {
                         return Err(TypeCheckError::UndefinedVariable {
@@ -3086,6 +3087,8 @@ impl TypeChecker {
                                 span: var_expr.span,
                             }
                         })?;
+
+                        self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
 
                         // Check type compatibility with coercion
                         let resolved_var_ty = self.resolve_type_name(&var_info.ty)?;

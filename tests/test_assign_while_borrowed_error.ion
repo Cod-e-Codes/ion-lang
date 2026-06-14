@@ -1,0 +1,7 @@
+fn main() -> int {
+    let mut x = String::from("hi");
+    let r = &x;
+    x = String::from("bye");
+    let _ = r;
+    return 0;
+}

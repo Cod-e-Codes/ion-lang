@@ -6,8 +6,10 @@ test_ref_valid.ion	run	0
 test_double_mut_borrow_error.ion	error		BorrowConflict		
 test_mut_shared_borrow_error.ion	error		BorrowConflict		
 test_move_while_borrowed_error.ion	error		BorrowConflict		
+test_assign_while_borrowed_error.ion	error		BorrowConflict		
 test_mut_borrow_block_ok.ion	run	62			
 test_shared_borrow_ok.ion	run	63			
+test_nested_shared_borrow_ok.ion	run	64			
 test_send_basic.ion	run	42			
 test_defer_basic.ion	run	7			
 test_defer_block.ion	run	1			
@@ -121,7 +123,8 @@ test_ref_return_error.ion	error		ReferenceEscape
 test_ref_return_error2.ion	error		ReferenceEscape\|TypeMismatch		
 test_channel_ref_error.ion	error		Send element type for channel		
 test_send_ref_error.ion	error		Send element type for channel		
-test_spawn_ref_error.ion	error		Send value for spawn capture		
+test_spawn_ref_error.ion	error		Send value for spawn capture
+test_spawn_borrow_error.ion	error		BorrowConflict		
 test_spawn_move_error.ion	error		UseAfterMove		
 test_struct_ref_error.ion	error		ReferenceEscape		
 test_enum_ref_error.ion	error		ReferenceEscape		

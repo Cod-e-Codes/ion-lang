@@ -82,6 +82,23 @@ impl TypeChecker {
         }
     }
 
+    pub(crate) fn check_owner_not_borrowed(
+        &self,
+        owner: &str,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        if let Some(info) = self.variables.get(owner)
+            && (info.shared_borrow_count > 0 || info.mut_borrow_count > 0)
+        {
+            return Err(TypeCheckError::BorrowConflict {
+                name: owner.to_string(),
+                description: "while it is borrowed".to_string(),
+                span,
+            });
+        }
+        Ok(())
+    }
+
     /// Check expression for moves and mark variables as Moved.
     /// This is called before using an expression in contexts that move ownership
     /// (assignment, return, function call arguments).
@@ -106,7 +123,7 @@ impl TypeChecker {
                     }
                 }
 
-                let var_info = self.variables.get_mut(&var_expr.name).ok_or_else(|| {
+                let var_info = self.variables.get(&var_expr.name).ok_or_else(|| {
                     TypeCheckError::UndefinedVariable {
                         name: var_expr.name.clone(),
                         span: var_expr.span,
@@ -126,16 +143,13 @@ impl TypeChecker {
                     return Ok(());
                 }
 
-                if var_info.shared_borrow_count > 0 || var_info.mut_borrow_count > 0 {
-                    return Err(TypeCheckError::BorrowConflict {
-                        name: var_expr.name.clone(),
-                        description: "while it is borrowed".to_string(),
-                        span: var_expr.span,
-                    });
-                }
+                self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
 
                 // Mark as moved
-                var_info.state = OwnershipState::Moved;
+                self.variables
+                    .get_mut(&var_expr.name)
+                    .expect("owner exists after checks")
+                    .state = OwnershipState::Moved;
                 Ok(())
             }
             Expr::Ref(ref_expr) => {

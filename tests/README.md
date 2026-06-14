@@ -57,8 +57,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_double_mut_borrow_error.ion` - Second `&mut` on same variable (negative, `BorrowConflict`)
 - `test_mut_shared_borrow_error.ion` - `&mut` while shared borrow active (negative)
 - `test_move_while_borrowed_error.ion` - Move into call while `let r = &x` is active (negative)
+- `test_assign_while_borrowed_error.ion` - Assignment while `let r = &x` is active (negative)
 - `test_mut_borrow_block_ok.ion` - Mutable borrow ends with `if` branch scope (exit 62)
 - `test_shared_borrow_ok.ion` - Multiple `&T` borrows allowed (exit 63)
+- `test_nested_shared_borrow_ok.ion` - Outer shared borrow survives inner `if` scope (exit 64)
 - `test_send_basic.ion` - Send/Send smoke test
 - `test_defer_basic.ion` - Defer statements
 - `test_defer_block.ion` - Block-scoped defer
@@ -213,6 +215,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_channel_ref_error.ion` - Non-Send channel elements
 - `test_send_ref_error.ion` - Non-Send send operations
 - `test_spawn_ref_error.ion` - Non-Send spawn captures
+- `test_spawn_borrow_error.ion` - Spawn capture while lasting borrow is active (negative)
 - `test_spawn_move_error.ion` - Move errors in spawn blocks
 - `test_struct_ref_error.ion` - Reference in struct fields
 - `test_enum_ref_error.ion` - Reference in enum variants
