@@ -2597,6 +2597,14 @@ impl TypeChecker {
                             file: self.module_paths.get(&enum_lit.enum_name).cloned(),
                         },
                     );
+                    let callee_span = enum_lit.enum_name_span.merge(&enum_lit.variant_span);
+                    let hover_doc = Self::fn_hover_doc(
+                        &callee,
+                        &func_decl.generics,
+                        &func_decl.params,
+                        &func_decl.return_type,
+                    );
+                    self.record_hover_doc(callee_span, hover_doc);
                     self.record_signature(
                         enum_lit.span,
                         Self::fn_hover_doc(
@@ -3184,6 +3192,13 @@ impl TypeChecker {
                     self.record_reference(call_expr.callee_span, enum_target);
                 }
 
+                let hover_doc = Self::fn_hover_doc(
+                    &call_expr.callee,
+                    &fn_generics,
+                    &func_decl_params,
+                    &return_type_opt,
+                );
+                self.record_hover_doc(call_expr.callee_span, hover_doc);
                 self.record_signature(
                     call_expr.span,
                     Self::fn_hover_doc(
@@ -4544,6 +4559,47 @@ fn classify(code: int) -> int {
                 }
             }
         }
+    }
+
+    #[test]
+    fn module_call_callee_hover_shows_signature() {
+        use crate::compiler::Compiler;
+        use std::path::Path;
+
+        let src = r#"
+import "../stdlib/io.ion" as io;
+
+fn main() -> int {
+    let s: String = String::from("hi");
+    io::println(s);
+    return 0;
+}
+"#;
+        let path = Path::new("examples/access_log.ion");
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let ast = parser::Parser::new(tokens).parse().unwrap();
+        let mut compiler = Compiler::new();
+        let _ = compiler.load_imports(path, &ast.imports);
+        let program = compiler.merge_modules(&ast, path);
+        let mut checker = TypeChecker::new();
+        checker.set_module_exports(compiler.get_module_exports().clone());
+        let mut module_paths = std::collections::HashMap::new();
+        for import in &ast.imports {
+            module_paths.insert(
+                import.alias.clone(),
+                compiler.resolve_import_path(&import.path, path),
+            );
+        }
+        checker.set_module_paths(module_paths);
+        let (result, errors) = checker.check_program_collecting_with_source(&program, &ast);
+        assert!(errors.is_empty(), "{errors:?}");
+        let doc = result
+            .lsp_info
+            .hover_docs
+            .values()
+            .find(|d| d.contains("io::println"))
+            .expect("io::println callee hover doc");
+        assert_eq!(doc, "fn io::println(s: String) -> void");
     }
 
     fn spans_overlap(a: Span, b: Span) -> bool {
