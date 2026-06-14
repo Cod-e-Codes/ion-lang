@@ -78,6 +78,9 @@ Read these when the task matches:
 | `adding-ion-features` | Compiler work in `src/`, `runtime/`, `stdlib/`, or `ION_SPEC.md` |
 | `ion-integration-tests` | Adding or running `.ion` integration tests in `tests/` |
 | `ion-lsp-vscode` | LSP server or VS Code/Cursor extension in `ion-vscode/` |
+| `finding-ion-bugs` | Debugging, regressions, test failures, codegen mistakes |
+| `researching-pl-literature` | Academic PL papers relevant to Ion design or compiler work |
+| `creating-ion-skills` | Authoring or editing skills in `.cursor/skills/` |
 
 ## Change discipline
 
