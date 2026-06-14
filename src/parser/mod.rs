@@ -2435,6 +2435,14 @@ impl Parser {
                 } else {
                     false
                 };
+                let prev_is_for_in = if self.current > 0 {
+                    matches!(
+                        &self.tokens[self.current - 1].kind,
+                        TokenKind::Ident(s) if s == "in"
+                    )
+                } else {
+                    false
+                };
 
                 // mod::func(...) when mod is an import alias or built-in type (Box, Vec, String).
                 // Local enum types keep Enum::Variant(...) as EnumLit.
@@ -2597,7 +2605,7 @@ impl Parser {
                         span: call_span,
                         callee_span,
                     }))
-                } else if next_is_lbrace && !prev_is_if && !prev_is_match {
+                } else if next_is_lbrace && !prev_is_if && !prev_is_match && !prev_is_for_in {
                     // Lookahead: struct literal body must start with Ident or }
                     // If the token after { is a keyword (like `if`, `let`, `return`), it's likely a block.
                     let token_after_brace_idx = self.current + 2; // current=Ident, current+1={, current+2=token after {
@@ -2616,10 +2624,13 @@ impl Parser {
                             | TokenKind::Spawn
                             | TokenKind::Unsafe => true,
                             TokenKind::Ident(_) => {
-                                // `name = expr` is a statement, not a struct field
+                                // `name = expr` or `name += expr` is a statement, not a struct field
                                 let after_ident = token_after_brace_idx + 1;
                                 after_ident < self.tokens.len()
-                                    && matches!(self.tokens[after_ident].kind, TokenKind::Equals)
+                                    && matches!(
+                                        self.tokens[after_ident].kind,
+                                        TokenKind::Equals | TokenKind::PlusEquals
+                                    )
                             }
                             _ => false,
                         }

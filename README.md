@@ -175,8 +175,8 @@ Compile and run any example with the same pattern as the quick start above. For 
 | [examples/hello_world_safe.ion](examples/hello_world_safe.ion) | stdlib `io` module |
 | [examples/spawn_channel.ion](examples/spawn_channel.ion) | `spawn` with cross-thread channels |
 | [examples/http_server.ion](examples/http_server.ion) | Sockets, FFI, concurrent clients via `spawn` |
-| [examples/showcase.ion](examples/showcase.ion) | Mixed language features (includes spawn/channels) |
-| [examples/access_log.ion](examples/access_log.ion) | Log parsing, match guards, spawn, channels, fmt/io |
+| [examples/showcase.ion](examples/showcase.ion) | Mixed language features: tuples, `+=`, `push_byte`, spawn/channels |
+| [examples/access_log.ion](examples/access_log.ion) | Log parsing, `loop`/`break`, match guards, spawn, channels, fmt/io |
 | [examples/minimal.ion](examples/minimal.ion) | Smallest valid program |
 
 ## Project Structure

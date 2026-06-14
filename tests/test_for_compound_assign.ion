@@ -1,0 +1,13 @@
+fn main() -> int {
+    let mut values: Vec<int> = Vec::new();
+    values.push(1);
+    values.push(2);
+    values.push(3);
+
+    let mut sum: int = 0;
+    for v in values {
+        sum += v;
+    }
+
+    return sum;
+}

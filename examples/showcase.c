@@ -10,6 +10,23 @@ typedef struct {
     ion_sender_t tx_back;
 } ion_spawn_ctx_0;
 
+typedef struct Vec_int {
+    void* data;
+    size_t len;
+    size_t capacity;
+    size_t elem_size;
+} Vec_int;
+
+typedef struct tuple_ion_sender_t_ion_receiver_t {
+    ion_sender_t f0;
+    ion_receiver_t f1;
+} tuple_ion_sender_t_ion_receiver_t;
+
+typedef struct tuple_int_int {
+    int f0;
+    int f1;
+} tuple_int_int;
+
 typedef struct Point {
     int x;
     int y;
@@ -83,18 +100,6 @@ static Result_int_int Result_int_int_Err_new(int arg0) {
     return result;
 }
 
-typedef struct Vec_int {
-    void* data;
-    size_t len;
-    size_t capacity;
-    size_t elem_size;
-} Vec_int;
-
-typedef struct tuple_ion_sender_t_ion_receiver_t {
-    ion_sender_t f0;
-    ion_receiver_t f1;
-} tuple_ion_sender_t_ion_receiver_t;
-
 int add(int x, int y);
 int multiply(int x, int y);
 Point create_point(int x, int y);
@@ -108,6 +113,7 @@ int control_flow_example(void);
 int pattern_matching_example(void);
 int reference_example(void);
 int generic_example(void);
+int tuple_example(void);
 int spawn_channel_example(void);
 int complex_example(void);
 int main(void);
@@ -160,32 +166,36 @@ int vec_example(void) {
     }
     Option_int match_val_0 = *((Option_int*)(ion_vec_get((ion_vec_t*)(numbers), 0, sizeof(int))));
     switch (match_val_0.tag) {
-        case 0: // Some
+        case 0: { // Some
             int value = match_val_0.data.variant_0.arg0;
             if (value != 10) {
                 ret_val = 2;
                 goto epilogue;
             }
             break;
-        case 1: // None
+        }
+        case 1: { // None
             ret_val = 3;
             goto epilogue;
             break;
+        }
     }
     ion_vec_set((ion_vec_t*)(numbers), 1, &((int){25}), sizeof(int));
     Option_int match_val_1 = *((Option_int*)(ion_vec_pop((ion_vec_t*)(numbers), sizeof(int))));
     switch (match_val_1.tag) {
-        case 0: // Some
+        case 0: { // Some
             int value = match_val_1.data.variant_0.arg0;
             if (value != 30) {
                 ret_val = 4;
                 goto epilogue;
             }
             break;
-        case 1: // None
+        }
+        case 1: { // None
             ret_val = 5;
             goto epilogue;
             break;
+        }
     }
     ret_val = 0;
     goto epilogue;
@@ -206,12 +216,14 @@ int for_loop_example(void) {
         Option_int __for_opt_2192 = *((Option_int*)(ion_vec_get((ion_vec_t*)(__for_container_2192), __for_i_2192, sizeof(int))));
         Option_int match_val_2 = __for_opt_2192;
         switch (match_val_2.tag) {
-            case 0: // Some
+            case 0: { // Some
                 int v = match_val_2.data.variant_0.arg0;
                 sum = (sum + v);
                 break;
-            case 1: // None
+            }
+            case 1: { // None
                 break;
+            }
         }
         __for_step_2192:
         __for_i_2192 = (__for_i_2192 + 1);
@@ -233,7 +245,8 @@ int string_example(void) {
     ion_string_t* greeting = ion_string_new();
     ion_string_push_str(greeting, "Hello", 5);
     ion_string_push_str(greeting, ", ", 2);
-    ion_string_push_str(greeting, "Ion!", 4);
+    ion_string_push_str(greeting, "Ion", 3);
+    ion_string_push_byte(greeting, (unsigned char)((uint8_t)33));
     int len = ((greeting) ? (int)((ion_vec_t*)(greeting))->len : 0);
     if (len != 11) {
         ret_val = 1;
@@ -310,7 +323,7 @@ int pattern_matching_example(void) {
     Option_int opt = Option_int_Some_new(42);
     Option_int match_val_3 = opt;
     switch (match_val_3.tag) {
-        case 0: // Some
+        case 0: { // Some
             int v = match_val_3.data.variant_0.arg0;
             if ((v == 42)) {
             break;
@@ -318,41 +331,47 @@ int pattern_matching_example(void) {
             ret_val = 1;
             goto epilogue;
             break;
-        case 1: // None
+        }
+        case 1: { // None
             ret_val = 2;
             goto epilogue;
             break;
+        }
     }
     Result_int_int result = Result_int_int_Ok_new(100);
     Result_int_int match_val_4 = result;
     switch (match_val_4.tag) {
-        case 0: // Ok
+        case 0: { // Ok
             int value = match_val_4.data.variant_0.arg0;
             if (value != 100) {
                 ret_val = 3;
                 goto epilogue;
             }
             break;
-        case 1: // Err
+        }
+        case 1: { // Err
             ret_val = 4;
             goto epilogue;
             break;
+        }
     }
     Status status = Status_Ok_new(7);
     Status match_val_5 = status;
     switch (match_val_5.tag) {
-        case 0: // Ok
+        case 0: { // Ok
             int v = match_val_5.data.variant_0.value;
             if (v != 7) {
                 ret_val = 5;
                 goto epilogue;
             }
             break;
-        case 1: // Err
+        }
+        case 1: { // Err
             int _c = match_val_5.data.variant_1.code;
             ret_val = 6;
             goto epilogue;
             break;
+        }
     }
     ret_val = 0;
     goto epilogue;
@@ -393,12 +412,14 @@ int generic_example(void) {
     Option_int opt_int = Option_int_Some_new(42);
     Option_int match_val_6 = opt_int;
     switch (match_val_6.tag) {
-        case 0: // Some
+        case 0: { // Some
             break;
-        case 1: // None
+        }
+        case 1: { // None
             ret_val = 3;
             goto epilogue;
             break;
+        }
     }
     Vec_int* vec = ((Vec_int*)(ion_vec_new(sizeof(int))));
     ion_vec_push((ion_vec_t*)(vec), &((int){1}), sizeof(int));
@@ -406,6 +427,26 @@ int generic_example(void) {
     int vec_len = ((vec) ? (int)((ion_vec_t*)(vec))->len : 0);
     if (vec_len != 2) {
         ret_val = 4;
+        goto epilogue;
+    }
+    ret_val = 0;
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
+int tuple_example(void) {
+    int ret_val = 0;
+    tuple_int_int t = (tuple_int_int){.f0 = 3, .f1 = 4};
+    if ((t.f0 != 3) || (t.f1 != 4)) {
+        ret_val = 1;
+        goto epilogue;
+    }
+    tuple_int_int __ion_tuple_0 = t;
+    int a = __ion_tuple_0.f0;
+    int b = __ion_tuple_0.f1;
+    if ((a != 3) || (b != 4)) {
+        ret_val = 2;
         goto epilogue;
     }
     ret_val = 0;
@@ -461,31 +502,35 @@ int complex_example(void) {
     }
     Option_int match_val_7 = *((Option_int*)(ion_vec_get((ion_vec_t*)(numbers), 0, sizeof(int))));
     switch (match_val_7.tag) {
-        case 0: // Some
+        case 0: { // Some
             int value = match_val_7.data.variant_0.arg0;
             if (value != 1) {
                 ret_val = 2;
                 goto epilogue;
             }
             break;
-        case 1: // None
+        }
+        case 1: { // None
             ret_val = 3;
             goto epilogue;
             break;
+        }
     }
     Option_int match_val_8 = *((Option_int*)(ion_vec_get((ion_vec_t*)(numbers), 1, sizeof(int))));
     switch (match_val_8.tag) {
-        case 0: // Some
+        case 0: { // Some
             int value = match_val_8.data.variant_0.arg0;
             if (value != 3) {
                 ret_val = 4;
                 goto epilogue;
             }
             break;
-        case 1: // None
+        }
+        case 1: { // None
             ret_val = 5;
             goto epilogue;
             break;
+        }
     }
     ion_string_t* description = ion_string_from_literal("Numbers: ", 9);
     ion_string_push_str(description, "(", 1);
@@ -537,12 +582,16 @@ int main(void) {
         ret_val = 7;
         goto epilogue;
     }
-    if (spawn_channel_example() != 0) {
+    if (tuple_example() != 0) {
         ret_val = 8;
         goto epilogue;
     }
-    if (complex_example() != 0) {
+    if (spawn_channel_example() != 0) {
         ret_val = 9;
+        goto epilogue;
+    }
+    if (complex_example() != 0) {
+        ret_val = 10;
         goto epilogue;
     }
     ret_val = 0;

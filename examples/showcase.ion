@@ -110,7 +110,7 @@ fn for_loop_example() -> int {
 
     let mut sum: int = 0;
     for v in values {
-        sum = sum + v;
+        sum += v;
     }
 
     if sum != 6 {
@@ -127,7 +127,8 @@ fn string_example() -> int {
     let mut greeting: String = String::new();
     greeting.push_str("Hello");
     greeting.push_str(", ");
-    greeting.push_str("Ion!");
+    greeting.push_str("Ion");
+    String::push_byte(&mut greeting, 33 as u8);
 
     let len: int = greeting.len();
     if len != 11 {
@@ -165,7 +166,7 @@ fn while_example() -> int {
     let mut x: int = 0;
 
     while x < 3 {
-        x = x + 1;
+        x += 1;
     }
 
     if x != 3 {
@@ -288,7 +289,24 @@ fn generic_example() -> int {
 }
 
 // ============================================
-// 11. SPAWN AND CHANNELS - OS threads, move-only captures
+// 11. TUPLES - Literals, field access, destructuring
+// ============================================
+fn tuple_example() -> int {
+    let t: (int, int) = (3, 4);
+    if t.0 != 3 || t.1 != 4 {
+        return 1;
+    }
+
+    let (a, b) = t;
+    if a != 3 || b != 4 {
+        return 2;
+    }
+
+    return 0;
+}
+
+// ============================================
+// 12. SPAWN AND CHANNELS - OS threads, move-only captures
 // ============================================
 fn spawn_channel_example() -> int {
     let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
@@ -312,7 +330,7 @@ fn spawn_channel_example() -> int {
 }
 
 // ============================================
-// 12. COMPLEX EXAMPLE - Combining features
+// 13. COMPLEX EXAMPLE - Combining features
 // ============================================
 fn complex_example() -> int {
     let mut numbers: Vec<int> = Vec::new();
@@ -398,12 +416,16 @@ fn main() -> int {
         return 7;
     }
 
-    if spawn_channel_example() != 0 {
+    if tuple_example() != 0 {
         return 8;
     }
 
-    if complex_example() != 0 {
+    if spawn_channel_example() != 0 {
         return 9;
+    }
+
+    if complex_example() != 0 {
+        return 10;
     }
 
     return 0;

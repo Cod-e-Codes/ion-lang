@@ -17,6 +17,15 @@ End-to-end tests: Ion → C → gcc → run executable → assert exit code (or 
 
 The harness runs tests under `tests/` only. Files in `examples/` are documented demos - compile and run them manually (see [README.md](../../../README.md)); they are not in the integration manifest.
 
+After compiler codegen changes, regenerate committed `examples/*.c` from the matching `.ion` sources:
+
+```bash
+cargo build --release --bin ion-compiler
+for f in examples/*.ion; do ./target/release/ion-compiler "$f"; done
+```
+
+Link and run like integration tests (`gcc` + `runtime/ion_runtime.c` + `-lpthread`; on Windows MinGW add `-lws2_32`).
+
 ## Run tests
 
 From project root (Git Bash on Windows):

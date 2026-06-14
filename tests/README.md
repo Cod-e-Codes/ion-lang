@@ -167,6 +167,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_hex_literals.ion` - Hex integer literals (`0xFF`)
 - `test_bin_literals.ion` - Binary integer literals (`0b10101010`)
 - `test_compound_assign.ion` - Compound assignment (`+=`)
+- `test_for_compound_assign.ion` - `+=` inside a `for` loop body (exit 6)
 - `test_loop_basic.ion` - Infinite `loop { }` with `break`
 
 ### Match expression types

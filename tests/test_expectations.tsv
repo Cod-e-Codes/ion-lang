@@ -100,6 +100,7 @@ test_array_assignment.ion	run	0
 test_hex_literals.ion	run	255			
 test_bin_literals.ion	run	170			
 test_compound_assign.ion	run	42			
+test_for_compound_assign.ion	run	6			
 test_loop_basic.ion	run	17			
 test_match_result_type.ion	run	88			
 test_if_else_move_ok.ion	run	60			

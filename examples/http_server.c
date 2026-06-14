@@ -33,8 +33,8 @@ SockAddrInBytes create_sockaddr_in(uint16_t port) {
         uint16_t port_net = htons(port);
         uint16_t shift8 = 8;
         uint8_t port_high = (uint8_t)(port_net >> shift8);
-        uint16_t mask_255 = 255;
-        uint8_t port_low = (uint8_t)(port_net & mask_255);
+        uint16_t mask = 255;
+        uint8_t port_low = (uint8_t)(port_net & mask);
         uint8_t addr[16] = {(uint8_t)2, (uint8_t)0, port_low, port_high, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0};
         ret_val = (SockAddrInBytes){{0}} /* ARRAY_FIELD:data:addr */;
         memcpy(&ret_val.data, &addr, sizeof(ret_val.data));

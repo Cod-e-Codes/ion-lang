@@ -79,14 +79,14 @@ fn scan_logs(code_tx: Sender<int>, expected: int) -> int {
 
         match kind {
             HttpClass::ClientError if code == 401 => {
-                auth_failures = auth_failures + 1;
+                auth_failures += 1;
             }
             HttpClass::ClientError => {}
             HttpClass::ServerError => {}
             HttpClass::Success => {}
         };
         send(&code_tx, code);
-        parsed = parsed + 1;
+        parsed += 1;
     }
 
     return auth_failures;
@@ -104,12 +104,15 @@ fn main() -> int {
         let mut rx: Receiver<int> = code_rx;
         let mut server_errors: int = 0;
         let mut received: int = 0;
-        while received < valid_log_count() {
+        loop {
+            if received >= valid_log_count() {
+                break;
+            }
             let code: int = recv(&mut rx);
             if code >= 500 {
-                server_errors = server_errors + 1;
+                server_errors += 1;
             }
-            received = received + 1;
+            received += 1;
         }
         send(&done_tx, server_errors);
     };
