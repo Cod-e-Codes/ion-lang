@@ -7,7 +7,7 @@
 extern "C" {
     fn ion_net_init();
     fn socket(domain: int, sock_type: int, protocol: int) -> int;
-    fn bind(sockfd: &int, addr: &u8, addrlen: int) -> int;
+    fn bind(sockfd: &int, addr: &SockAddrIn, addrlen: int) -> int;
     fn listen(sockfd: &int, backlog: int) -> int;
     fn accept(sockfd: &int, addr: &mut u8, addrlen: &mut int) -> int;
     fn recv_sys(sockfd: &int, buf: &mut u8, len: int, flags: int) -> int;
@@ -16,27 +16,21 @@ extern "C" {
     fn htons(hostshort: u16) -> u16;
 }
 
-struct SockAddrInBytes {
-    data: [u8; 16];
+struct SockAddrIn {
+    sin_family: u16;
+    sin_port: u16;
+    sin_addr: u32;
+    sin_zero: [u8; 8];
 }
 
-fn create_sockaddr_in(port: u16) -> SockAddrInBytes {
-    // sockaddr_in: family (2), port (network order), addr (0), padding
+fn create_sockaddr_in(port: u16) -> SockAddrIn {
     unsafe {
-        let port_net: u16 = htons(port);
-        let shift8: u16 = 8;
-        let port_high: u8 = (port_net >> shift8) as u8;
-        let mask: u16 = 0xFF;
-        let port_low: u8 = (port_net & mask) as u8;
-
-        let addr: [u8; 16] = [
-            2 as u8, 0 as u8,
-            port_low, port_high,
-            0 as u8, 0 as u8, 0 as u8, 0 as u8,
-            0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
-        ];
-
-        return SockAddrInBytes { data: addr };
+        return SockAddrIn {
+            sin_family: 2,
+            sin_port: htons(port),
+            sin_addr: 0,
+            sin_zero: [0; 8],
+        };
     }
 }
 
@@ -77,14 +71,18 @@ fn main() -> int {
     unsafe {
         ion_net_init();
 
-        let server_fd: int = socket(2, 1, 6);
+        let af_inet: int = 2;
+        let sock_stream: int = 1;
+        let ipproto_tcp: int = 6;
+
+        let server_fd: int = socket(af_inet, sock_stream, ipproto_tcp);
         if server_fd < 0 {
             return 1;
         }
 
-        let sockaddr: SockAddrInBytes = create_sockaddr_in(8080);
+        let sockaddr: SockAddrIn = create_sockaddr_in(8080);
 
-        let bind_result: int = bind(&server_fd, &sockaddr.data[0], 16);
+        let bind_result: int = bind(&server_fd, &sockaddr, 16);
         if bind_result < 0 {
             close(&server_fd);
             return 2;

@@ -9,13 +9,16 @@ typedef struct {
     int client_fd;
 } ion_spawn_ctx_0;
 
-typedef struct SockAddrInBytes {
-    uint8_t data[16];
-} SockAddrInBytes;
+typedef struct SockAddrIn {
+    uint16_t sin_family;
+    uint16_t sin_port;
+    uint32_t sin_addr;
+    uint8_t sin_zero[8];
+} SockAddrIn;
 
 extern void ion_net_init(void);
 extern int socket(int domain, int sock_type, int protocol);
-extern int bind(int sockfd, uint8_t* addr, int addrlen);
+extern int bind(int sockfd, SockAddrIn* addr, int addrlen);
 extern int listen(int sockfd, int backlog);
 extern int accept(int sockfd, uint8_t* addr, int* addrlen);
 extern int recv_sys(int sockfd, uint8_t* buf, int len, int flags);
@@ -23,21 +26,14 @@ extern int send_sys(int sockfd, uint8_t* buf, int len, int flags);
 extern int close(int fd);
 extern uint16_t htons(uint16_t hostshort);
 
-SockAddrInBytes create_sockaddr_in(uint16_t port);
+SockAddrIn create_sockaddr_in(uint16_t port);
 int handle_client(int client_fd);
 void dispatch_client(int client_fd);
 int main(void);
-SockAddrInBytes create_sockaddr_in(uint16_t port) {
-    SockAddrInBytes ret_val = {0};
+SockAddrIn create_sockaddr_in(uint16_t port) {
+    SockAddrIn ret_val = {0};
     {
-        uint16_t port_net = htons(port);
-        uint16_t shift8 = 8;
-        uint8_t port_high = (uint8_t)(port_net >> shift8);
-        uint16_t mask = 255;
-        uint8_t port_low = (uint8_t)(port_net & mask);
-        uint8_t addr[16] = {(uint8_t)2, (uint8_t)0, port_low, port_high, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0, (uint8_t)0};
-        ret_val = (SockAddrInBytes){{0}} /* ARRAY_FIELD:data:addr */;
-        memcpy(&ret_val.data, &addr, sizeof(ret_val.data));
+        ret_val = (SockAddrIn){.sin_family = 2, .sin_port = htons(port), .sin_addr = 0, .sin_zero = {0}};
         goto epilogue;
     }
     goto epilogue;
@@ -88,13 +84,16 @@ int main(void) {
     int ret_val = 0;
     {
         ion_net_init();
-        int server_fd = socket(2, 1, 6);
+        int af_inet = 2;
+        int sock_stream = 1;
+        int ipproto_tcp = 6;
+        int server_fd = socket(af_inet, sock_stream, ipproto_tcp);
         if (server_fd < 0) {
             ret_val = 1;
             goto epilogue;
         }
-        SockAddrInBytes sockaddr = create_sockaddr_in(8080);
-        int bind_result = bind(server_fd, &sockaddr.data[0], 16);
+        SockAddrIn sockaddr = create_sockaddr_in(8080);
+        int bind_result = bind(server_fd, &sockaddr, 16);
         if (bind_result < 0) {
             close(server_fd);
             ret_val = 2;
