@@ -167,6 +167,12 @@ This parses imported modules, generates `.c` and `.h` per module, compiles objec
 
 ## Example Programs
 
+Each example has a matching `examples/*.c` checked in as a compiler-output snapshot (ownership, spawn, channel lowering, bounds checks). Those files are verbose: importing stdlib or other modules inlines merged C for those dependencies. Ion targets GNU C (GCC/Clang), not strict ISO C or MSVC. Regenerate after codegen changes:
+
+```bash
+for f in examples/*.ion; do ./target/release/ion-compiler "$f"; done
+```
+
 Compile and run any example with the same pattern as the quick start above. For `http_server.ion`, add `-Drecv_sys=recv -Dsend_sys=send` when linking.
 
 | File | What it demonstrates |

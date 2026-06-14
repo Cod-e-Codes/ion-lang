@@ -15,7 +15,7 @@ paths:
 
 End-to-end tests: Ion → C → gcc → run executable → assert exit code (or assert compile failure).
 
-The harness runs tests under `tests/` only. Files in `examples/` are documented demos - compile and run them manually (see [README.md](../../../README.md)); they are not in the integration manifest.
+The harness runs tests under `tests/` only. Files in `examples/` are documented demos - compile and run them manually (see [README.md](../../../README.md)); they are not in the integration manifest. Committed `examples/*.c` files are intentional codegen snapshots (see README Example Programs).
 
 After compiler codegen changes, regenerate committed `examples/*.c` from the matching `.ion` sources:
 

@@ -186,7 +186,7 @@ fn main() {
 
         // Generate C code
         let mut codegen = cgen::Codegen::new();
-        let c_code = codegen.generate(&ir);
+        let c_code = codegen.generate(&ir, &input_file);
 
         // Determine output filename
         let output_file = if input_file.ends_with(".ion") {
