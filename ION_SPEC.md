@@ -1169,12 +1169,16 @@ Each such pattern must produce a clear, actionable compiler error.
 The `ion-lsp` binary and VS Code/Cursor extension provide:
 
 - Syntax highlighting (TextMate grammar, no server required)
-- Parse and type diagnostics (multiple type-check errors per file when independent, e.g. one per function)
-- Hover: variable types at use sites and `let` binding identifiers; symbol docs at fn/struct/enum definitions
-- Completion: keywords, builtins, and file symbols (no prefix filtering yet)
-- Go to definition: variables, function calls (`foo`, `mod::func`), and user-defined methods; builtins (`Vec::push`, etc.) have no source location
+- Parse, import-resolution, and type diagnostics (multiple type-check errors per file when independent)
+- Hover: expression types, symbol docs (fn/struct/enum/type alias/extern fn/builtins), and call signatures
+- Completion: prefix-filtered keywords, builtins, local symbols, `alias::item` module imports, and struct/enum members after `.` or `Type::`
+- Go to definition: variables, functions (`foo`, `mod::func`), user methods, struct fields, enum variants, and type aliases
+- Find references, document outline, signature help, and semantic tokens (functions, structs, enums, types, fields)
+- Workspace refresh: re-checks open files when a watched `.ion` dependency changes on disk
 
-The CLI `ion-compiler` still reports the first type-check error only. The LSP uses `TypeChecker::check_program_collecting` to gather multiple diagnostics in one `publish_diagnostics` call.
+Built-in methods (`Vec::push`, `String::len`, etc.) show signature hover but have no source location for go-to-definition.
+
+The CLI `ion-compiler` still reports the first type-check error only. The LSP uses `TypeChecker::check_program_collecting` to gather multiple diagnostics in one `publish_diagnostics` call. Import failures are reported per `import` statement via `Compiler::load_imports`.
 
 Build with `cargo build --release --bin ion-lsp`. Rebuild after compiler or LSP changes; reload the editor window so `ion.lspPath` picks up the new binary. Set `ion.lspPath` in editor settings to the executable path.
 
@@ -1185,7 +1189,8 @@ Build with `cargo build --release --bin ion-lsp`. Rebuild after compiler or LSP 
 - `if`/`else` merge: ownership after an `if` is merged from branches that can fall through to the following code. A move in a branch that always `return`s, `break`s, or `continue`s does not block use after the `if`. If two fall-through paths disagree (one moved, one valid), it is still an error.
 - `while`/`for` loops: a non-copy variable moved anywhere in the loop body is an error (repeated iteration would need the binding again); copy types and borrows are unchanged
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
-- LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (not defined in user source)
+- LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (signature hover only)
+- LSP go-to-definition for type names in type annotations (no source spans on `Type` AST nodes)
 - Function types: named functions only; no fn literals/closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
 - Tuple values: no nested tuples, `==` on tuples, struct fields holding tuples, or generic `(T1, T2)` parameters
 

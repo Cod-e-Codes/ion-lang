@@ -2172,6 +2172,7 @@ impl Parser {
                         expr = Expr::FieldAccess(FieldAccessExpr {
                             base: Box::new(expr),
                             field: field_name,
+                            field_span: method_span,
                             span,
                         });
                         // Continue the loop to check for more field accesses
@@ -2464,6 +2465,7 @@ impl Parser {
                     self.advance(); // consume second :
 
                     let variant_name_idx = self.current;
+                    let variant_span = Span::from_token(&self.tokens[variant_name_idx]);
                     let variant_name = if let TokenKind::Ident(ref ident_name) =
                         self.tokens[variant_name_idx].kind
                     {
@@ -2472,7 +2474,7 @@ impl Parser {
                         return Err(ParseError::UnexpectedToken {
                             expected: "variant name".to_string(),
                             got: self.tokens[variant_name_idx].kind.clone(),
-                            span: Span::from_token(&self.tokens[variant_name_idx]),
+                            span: variant_span,
                         });
                     };
                     self.advance(); // consume variant name
@@ -2543,7 +2545,9 @@ impl Parser {
 
                     Ok(Expr::EnumLit(EnumLitExpr {
                         enum_name,
+                        enum_name_span: span,
                         variant: variant_name,
+                        variant_span,
                         args,
                         named_fields,
                         span: lit_span,

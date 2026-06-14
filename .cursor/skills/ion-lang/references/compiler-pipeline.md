@@ -71,6 +71,6 @@
 
 **Multi (`--mode multi`):** per-module IR → `.c` + `.h` each → compile objects → link with runtime.
 
-## LSP path (`src/lsp/server.rs`)
+## LSP path (`src/lsp/server.rs`, `src/lsp/util.rs`)
 
-Differs from the CLI for the **current file**: lexer → parser on buffer text (not reading the file from disk). Then `register_imports` runs `parse_module` recursively for each imported file on disk to build `module_exports`, then `check_program_collecting` runs on the buffer AST. Multiple type-check diagnostics are published in one LSP notification when errors are independent (e.g. per function). See `ion-lsp-vscode` skill.
+Differs from the CLI for the **current file**: lexer → parser on buffer text (not reading the file from disk). Then `load_imports` runs `parse_module` per import on disk (per-import diagnostics; partial exports on failure), then `check_program_collecting_with_source` type-checks the merged program while seeding LSP symbols from the buffer AST only. Expression-level LSP data (types, references) is recorded only for functions in the open file so merged stdlib spans do not collide by line/column. See `ion-lsp-vscode` skill.

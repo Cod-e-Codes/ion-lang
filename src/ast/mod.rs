@@ -354,13 +354,16 @@ pub struct StructLitField {
 pub struct FieldAccessExpr {
     pub base: Box<Expr>,
     pub field: String,
+    pub field_span: Span,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct EnumLitExpr {
     pub enum_name: String,
+    pub enum_name_span: Span,
     pub variant: String,
+    pub variant_span: Span,
     pub args: Vec<Expr>, // For tuple variants: Enum::Variant(expr1, expr2)
     pub named_fields: Option<Vec<(String, Expr)>>, // For struct variants: Enum::Variant { field: expr }
     pub span: Span,

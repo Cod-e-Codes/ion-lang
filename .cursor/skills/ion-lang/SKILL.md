@@ -96,4 +96,4 @@ Read these when the task matches:
 - Multi-file mode: `--mode multi --output <name> <main.ion>` generates per-module `.c`/`.h`.
 - Stdlib lives in `stdlib/` (`io.ion`, `fmt.ion`, `fs.ion`, `result.ion`); imported module functions are emitted as `{alias}_{name}` in single-file merge mode (e.g. `io::print_int` -> `io_print_int`).
 - Integration tests: add `tests/test_*.ion` plus one row in `tests/test_expectations.tsv` (see `ion-integration-tests` skill). Run `cd tests && ./test_runner.sh` to verify.
-- LSP parses the **open buffer** in memory (lexer → parser), then `register_imports` which **fully `parse_module`s imported files from disk**. Parser/tc/import changes may need LSP updates (`ion-lsp-vscode` skill).
+- LSP parses the **open buffer** in memory (lexer → parser), then `load_imports` which **fully `parse_module`s imported files from disk** (per-import errors are published). Parser/tc/import changes may need LSP updates (`ion-lsp-vscode` skill).

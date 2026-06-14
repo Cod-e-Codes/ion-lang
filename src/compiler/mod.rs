@@ -120,13 +120,34 @@ impl Compiler {
         from_file: &Path,
         imports: &[ImportStmt],
     ) -> Result<(), CompileError> {
+        let errors = self.load_imports(from_file, imports);
+        if let Some((_, err)) = errors.into_iter().next() {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Load imports one by one, recording per-import errors without stopping at the first failure.
+    pub fn load_imports(
+        &mut self,
+        from_file: &Path,
+        imports: &[ImportStmt],
+    ) -> Vec<(Span, CompileError)> {
         let canonical_from = from_file
             .canonicalize()
             .unwrap_or_else(|_| from_file.to_path_buf());
 
+        let mut errors = Vec::new();
         for import in imports {
             let import_path = self.resolve_import_path(&import.path, &canonical_from);
-            let imported_module = self.parse_module(&import_path)?;
+            let imported_module = match self.parse_module(&import_path) {
+                Ok(module) => module,
+                Err(err) => {
+                    errors.push((import.span, err));
+                    continue;
+                }
+            };
 
             let mut exports = ModuleExports {
                 functions: HashMap::new(),
@@ -157,7 +178,7 @@ impl Compiler {
             self.module_exports.insert(import.alias.clone(), exports);
         }
 
-        Ok(())
+        errors
     }
 
     /// Get all parsed modules

@@ -63,7 +63,7 @@ Define AST variants in `src/ast/mod.rs` before writing parser branches that cons
 Touch this for imports, multi-file mode, or qualified names - not only when editing `import` syntax in the parser:
 
 - `parse_module` - recursive lex+parse per file, cycle detection, module cache
-- `register_imports` / `ModuleExports` - builds `alias::item` maps for tc (CLI and LSP)
+- `register_imports` / `load_imports` / `ModuleExports` - builds `alias::item` maps for tc (CLI and LSP)
 - `merge_modules` - single-file codegen merges imported ASTs into one program
 - `resolve_import_path` - relative path resolution from importing file
 

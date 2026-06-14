@@ -18,9 +18,9 @@ paths:
 
 | Piece | Location |
 |-------|----------|
-| LSP server | `src/lsp/server.rs`, `src/bin/ion-lsp.rs` |
+| LSP server | `src/lsp/server.rs`, `src/lsp/util.rs`, `src/bin/ion-lsp.rs` |
 | VS Code extension | `ion-vscode/` (TypeScript + TextMate grammar) |
-| Compiler reuse | `lexer`, `parser`, `tc` on buffer; `register_imports` → `parse_module` for imports on disk |
+| Compiler reuse | `lexer`, `parser`, `tc` on buffer; `load_imports` → `parse_module` for imports on disk |
 
 ## Build LSP
 
@@ -64,14 +64,16 @@ Adjust path for OS (no `.exe` on Linux/macOS).
 `src/lsp/server.rs` implements `tower_lsp::LanguageServer`. In `check_file`:
 
 1. On `did_open` / `did_change` - **lexer → parser** on the in-memory buffer (unsaved edits included; does not re-read the file from disk)
-2. **`Compiler::register_imports`** - for each import, **`parse_module` on disk** (full lex+parse of dependency tree) to populate `module_exports` for qualified names
-3. **Type-check** - `tc::TypeChecker` on the buffer AST, with exports from step 2 (`check_program_collecting` publishes all independent type errors)
-4. Publish diagnostics from lexer, parser, or type-check errors (multiple TC errors when reported by `check_program_collecting`)
-5. Hover - variable types at use sites and `let` binding identifiers; symbol docs at fn/struct/enum definitions
-6. Completion - keywords, builtins, file symbols (no prefix filtering)
-7. Go to definition - variables, function calls (`foo`, `mod::func`), user-defined methods; cross-file for imports
+2. **`Compiler::load_imports`** - per-import `parse_module` on disk; failed imports publish diagnostics at the `import` span while successful imports still register exports
+3. **Type-check** - `tc::TypeChecker::check_program_collecting_with_source` on merged program, symbols seeded from buffer AST (`check_program_collecting` for unit tests)
+4. Publish diagnostics from lexer, parser, import resolution, or type-check errors
+5. **Hover** - expression types, symbol docs, builtin signatures
+6. **Completion** - prefix-filtered; context-aware for `alias::` and `Type.` / `expr.`
+7. **Go to definition** - variables, calls, methods, fields, variants, type aliases; cross-file via `module_paths`
+8. **References**, **document symbols**, **signature help**, **semantic tokens**
+9. **`did_change_watched_files`** - re-check open files whose import dependencies changed
 
-Known limitations (ION_SPEC §10.2): built-in methods (`Vec::push`, etc.) do not go to definition; completion has no prefix filtering.
+Known limitations (ION_SPEC §10.2): built-in methods have signature hover but no go-to-definition target; type names in annotations have no goto (no spans on `Type` nodes).
 
 ### CLI vs LSP error text
 
@@ -90,10 +92,10 @@ The CLI prints `Type check error: UseAfterMove { ... }` (`{:?}` on `TypeCheckErr
 
 Parser or type checker changes often need no LSP code if error types already map to strings. Update LSP when adding:
 
-- New keywords (completion list)
-- New builtins (completion/hover)
+- New keywords or builtins (`src/lsp/util.rs` lists)
 - New diagnostic categories or positions
 - Import resolution behavior
+- New symbols to record in `tc::LspInfo`
 
 After LSP changes:
 

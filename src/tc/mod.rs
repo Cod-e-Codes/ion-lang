@@ -56,14 +56,55 @@ struct VariableInfo {
     mut_borrow_count: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LspSymbolKind {
+    Function,
+    Struct,
+    Enum,
+    Field,
+    Variant,
+    TypeAlias,
+    Variable,
+    Module,
+    Builtin,
+}
+
+#[derive(Debug, Clone)]
+pub struct LspCompletionItem {
+    pub label: String,
+    pub kind: LspSymbolKind,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LspDocumentSymbol {
+    pub name: String,
+    pub kind: LspSymbolKind,
+    pub span: Span,
+    pub children: Vec<LspDocumentSymbol>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LspSignatureHelp {
+    pub label: String,
+    pub active_parameter: Option<u32>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LspInfo {
     pub references: HashMap<Span, LspTarget>,
     pub types: HashMap<Span, Type>,
-    /// Hover text keyed by definition span (functions, structs, enums).
+    /// Hover text keyed by definition span (functions, structs, enums, aliases, extern fns, builtins).
     pub hover_docs: HashMap<Span, String>,
-    /// Top-level and imported symbol names for completion.
-    pub completion_symbols: Vec<String>,
+    pub completions: Vec<LspCompletionItem>,
+    pub document_symbols: Vec<LspDocumentSymbol>,
+    pub signatures: HashMap<Span, LspSignatureHelp>,
+    /// Qualified items per import alias (e.g. `io` -> `io::print`).
+    pub module_items: HashMap<String, Vec<LspCompletionItem>>,
+    /// Struct field names for member completion.
+    pub struct_members: HashMap<String, Vec<LspCompletionItem>>,
+    /// Enum variant names for member completion.
+    pub enum_variants: HashMap<String, Vec<LspCompletionItem>>,
 }
 
 /// Go-to-definition target: span and optional file (None = current file).
@@ -169,6 +210,8 @@ pub struct TypeChecker {
     type_param_scopes: Vec<Vec<String>>,
     // Borrows registered in nested scopes (released on scope pop)
     borrow_scopes: Vec<Vec<(String, bool)>>,
+    // When false, skip recording expression-level LSP data (avoids span collisions from merged imports).
+    lsp_recording: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -203,6 +246,7 @@ impl TypeChecker {
             lsp_info: LspInfo::default(),
             type_param_scopes: Vec::new(),
             borrow_scopes: Vec::new(),
+            lsp_recording: true,
         }
     }
 
@@ -231,12 +275,268 @@ impl TypeChecker {
     }
 
     fn record_hover_doc(&mut self, span: Span, doc: String) {
+        if !self.lsp_recording {
+            return;
+        }
         self.lsp_info.hover_docs.insert(span, doc);
     }
 
-    fn record_completion_symbol(&mut self, name: &str) {
-        if !self.lsp_info.completion_symbols.contains(&name.to_string()) {
-            self.lsp_info.completion_symbols.push(name.to_string());
+    fn record_completion(&mut self, label: &str, kind: LspSymbolKind, detail: Option<String>) {
+        let label = label.to_string();
+        if self
+            .lsp_info
+            .completions
+            .iter()
+            .any(|item| item.label == label)
+        {
+            return;
+        }
+        self.lsp_info.completions.push(LspCompletionItem {
+            label,
+            kind,
+            detail,
+        });
+    }
+
+    fn record_expr_type(&mut self, span: Span, ty: &Type) {
+        if !self.lsp_recording {
+            return;
+        }
+        self.lsp_info.types.insert(span, ty.clone());
+    }
+
+    fn record_signature(&mut self, span: Span, label: String, active_parameter: Option<u32>) {
+        if !self.lsp_recording {
+            return;
+        }
+        self.lsp_info.signatures.insert(
+            span,
+            LspSignatureHelp {
+                label,
+                active_parameter,
+            },
+        );
+    }
+
+    fn fn_hover_doc(
+        name: &str,
+        generics: &[String],
+        params: &[Param],
+        ret: &Option<Type>,
+    ) -> String {
+        let params: Vec<String> = params
+            .iter()
+            .map(|p| format!("{}: {}", p.name, type_to_string(&p.ty)))
+            .collect();
+        let ret = ret
+            .as_ref()
+            .map(type_to_string)
+            .unwrap_or_else(|| "void".to_string());
+        let generics = if generics.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", generics.join(", "))
+        };
+        format!("fn {}{}({}) -> {}", name, generics, params.join(", "), ret)
+    }
+
+    fn seed_lsp_symbols(&mut self, source: &Program) {
+        for alias in &source.imports {
+            self.record_completion(&alias.alias, LspSymbolKind::Module, None);
+        }
+
+        for alias in &source.type_aliases {
+            let generics = if alias.generics.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", alias.generics.join(", "))
+            };
+            let doc = format!(
+                "type {}{} = {}",
+                alias.name,
+                generics,
+                type_to_string(&alias.target)
+            );
+            self.record_hover_doc(alias.span, doc);
+            self.record_completion(
+                &alias.name,
+                LspSymbolKind::TypeAlias,
+                Some(type_to_string(&alias.target)),
+            );
+            self.lsp_info.document_symbols.push(LspDocumentSymbol {
+                name: alias.name.clone(),
+                kind: LspSymbolKind::TypeAlias,
+                span: alias.span,
+                children: Vec::new(),
+            });
+        }
+
+        for s in &source.structs {
+            let fields: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
+            let generics = if s.generics.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", s.generics.join(", "))
+            };
+            self.record_hover_doc(
+                s.span,
+                format!("struct {}{} {{ {} }}", s.name, generics, fields.join(", ")),
+            );
+            self.record_completion(&s.name, LspSymbolKind::Struct, None);
+            let field_children: Vec<LspDocumentSymbol> = s
+                .fields
+                .iter()
+                .map(|f| LspDocumentSymbol {
+                    name: f.name.clone(),
+                    kind: LspSymbolKind::Field,
+                    span: f.span,
+                    children: Vec::new(),
+                })
+                .collect();
+            let member_items: Vec<LspCompletionItem> = s
+                .fields
+                .iter()
+                .map(|f| LspCompletionItem {
+                    label: f.name.clone(),
+                    kind: LspSymbolKind::Field,
+                    detail: Some(type_to_string(&f.ty)),
+                })
+                .collect();
+            self.lsp_info
+                .struct_members
+                .insert(s.name.clone(), member_items);
+            self.lsp_info.document_symbols.push(LspDocumentSymbol {
+                name: s.name.clone(),
+                kind: LspSymbolKind::Struct,
+                span: s.span,
+                children: field_children,
+            });
+        }
+
+        for e in &source.enums {
+            let variants: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
+            let generics = if e.generics.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", e.generics.join(", "))
+            };
+            self.record_hover_doc(
+                e.span,
+                format!("enum {}{} {{ {} }}", e.name, generics, variants.join(", ")),
+            );
+            self.record_completion(&e.name, LspSymbolKind::Enum, None);
+            let variant_children: Vec<LspDocumentSymbol> = e
+                .variants
+                .iter()
+                .map(|v| LspDocumentSymbol {
+                    name: v.name.clone(),
+                    kind: LspSymbolKind::Variant,
+                    span: v.span,
+                    children: Vec::new(),
+                })
+                .collect();
+            let variant_items: Vec<LspCompletionItem> = e
+                .variants
+                .iter()
+                .map(|v| LspCompletionItem {
+                    label: v.name.clone(),
+                    kind: LspSymbolKind::Variant,
+                    detail: None,
+                })
+                .collect();
+            self.lsp_info
+                .enum_variants
+                .insert(e.name.clone(), variant_items);
+            for v in &e.variants {
+                self.record_hover_doc(v.span, format!("{}::{}", e.name, v.name));
+            }
+            self.lsp_info.document_symbols.push(LspDocumentSymbol {
+                name: e.name.clone(),
+                kind: LspSymbolKind::Enum,
+                span: e.span,
+                children: variant_children,
+            });
+        }
+
+        for function in &source.functions {
+            let doc = Self::fn_hover_doc(
+                &function.name,
+                &function.generics,
+                &function.params,
+                &function.return_type,
+            );
+            self.record_hover_doc(function.span, doc);
+            self.record_completion(
+                &function.name,
+                LspSymbolKind::Function,
+                function.return_type.as_ref().map(type_to_string),
+            );
+            self.lsp_info.document_symbols.push(LspDocumentSymbol {
+                name: function.name.clone(),
+                kind: LspSymbolKind::Function,
+                span: function.span,
+                children: Vec::new(),
+            });
+        }
+
+        for block in &source.extern_blocks {
+            for extern_fn in &block.functions {
+                let doc = Self::fn_hover_doc(
+                    &extern_fn.name,
+                    &[],
+                    &extern_fn.params,
+                    &extern_fn.return_type,
+                );
+                self.record_hover_doc(
+                    extern_fn.span,
+                    format!("extern \"{}\" {}", block.linkage, doc),
+                );
+                self.record_completion(
+                    &extern_fn.name,
+                    LspSymbolKind::Function,
+                    extern_fn.return_type.as_ref().map(type_to_string),
+                );
+                self.lsp_info.document_symbols.push(LspDocumentSymbol {
+                    name: extern_fn.name.clone(),
+                    kind: LspSymbolKind::Function,
+                    span: extern_fn.span,
+                    children: Vec::new(),
+                });
+            }
+        }
+    }
+
+    fn seed_module_items(&mut self) {
+        for (alias, exports) in &self.module_imports {
+            let mut items = Vec::new();
+            for (name, func) in &exports.functions {
+                let label = format!("{alias}::{name}");
+                items.push(LspCompletionItem {
+                    label,
+                    kind: LspSymbolKind::Function,
+                    detail: Some(Self::fn_hover_doc(
+                        name,
+                        &func.generics,
+                        &func.params,
+                        &func.return_type,
+                    )),
+                });
+            }
+            for name in exports.structs.keys() {
+                items.push(LspCompletionItem {
+                    label: format!("{alias}::{name}"),
+                    kind: LspSymbolKind::Struct,
+                    detail: None,
+                });
+            }
+            for name in exports.enums.keys() {
+                items.push(LspCompletionItem {
+                    label: format!("{alias}::{name}"),
+                    kind: LspSymbolKind::Enum,
+                    detail: None,
+                });
+            }
+            self.lsp_info.module_items.insert(alias.clone(), items);
         }
     }
 
@@ -255,7 +555,74 @@ impl TypeChecker {
     }
 
     fn record_reference(&mut self, use_span: Span, target: LspTarget) {
+        if !self.lsp_recording {
+            return;
+        }
         self.lsp_info.references.insert(use_span, target);
+    }
+
+    fn lookup_type_target(&self, name: &str) -> Option<LspTarget> {
+        if let Some(s) = self.structs.get(name) {
+            return Some(LspTarget {
+                span: s.span,
+                file: None,
+            });
+        }
+        if let Some(e) = self.enums.get(name) {
+            return Some(LspTarget {
+                span: e.span,
+                file: None,
+            });
+        }
+        if let Some(a) = self.type_aliases.get(name) {
+            return Some(LspTarget {
+                span: a.span,
+                file: None,
+            });
+        }
+        None
+    }
+
+    fn lookup_variant_target(&self, enum_name: &str, variant: &str) -> Option<LspTarget> {
+        let enum_decl = self.enums.get(enum_name)?;
+        let variant_decl = enum_decl.variants.iter().find(|v| v.name == variant)?;
+        Some(LspTarget {
+            span: variant_decl.span,
+            file: None,
+        })
+    }
+
+    fn lookup_field_target(&self, struct_name: &str, field: &str) -> Option<LspTarget> {
+        let struct_decl = self.structs.get(struct_name)?;
+        let field_decl = struct_decl.fields.iter().find(|f| f.name == field)?;
+        Some(LspTarget {
+            span: field_decl.span,
+            file: None,
+        })
+    }
+
+    fn builtin_signature(qualified: &str) -> Option<&'static str> {
+        match qualified {
+            "Vec::new" => Some("fn Vec::new() -> Vec<T>"),
+            "Vec::with_capacity" => Some("fn Vec::with_capacity(cap: int) -> Vec<T>"),
+            "Vec::push" => Some("fn Vec::push(vec: &mut Vec<T>, value: T)"),
+            "Vec::pop" => Some("fn Vec::pop(vec: &mut Vec<T>) -> Option<T>"),
+            "Vec::len" => Some("fn Vec::len(vec: &Vec<T>) -> int"),
+            "Vec::capacity" => Some("fn Vec::capacity(vec: &Vec<T>) -> int"),
+            "Vec::get" => Some("fn Vec::get(vec: &Vec<T>, index: int) -> Option<T>"),
+            "Vec::set" => Some("fn Vec::set(vec: &mut Vec<T>, index: int, value: T) -> int"),
+            "String::new" => Some("fn String::new() -> String"),
+            "String::from" => Some("fn String::from(s: &str) -> String"),
+            "String::len" => Some("fn String::len(s: &String) -> int"),
+            "String::push_str" => Some("fn String::push_str(s: &mut String, other: &str)"),
+            "String::push_byte" => Some("fn String::push_byte(s: &mut String, b: u8)"),
+            "Box::new" => Some("fn Box::new<T>(value: T) -> Box<T>"),
+            "Box::unwrap" => Some("fn Box::unwrap<T>(box: Box<T>) -> T"),
+            "channel" => Some("fn channel<T>() -> (Sender<T>, Receiver<T>)"),
+            "send" => Some("fn send(sender: &Sender<T>, value: T)"),
+            "recv" => Some("fn recv(receiver: &mut Receiver<T>) -> T"),
+            _ => None,
+        }
     }
 
     fn lookup_fn_target(&self, callee: &str) -> Option<LspTarget> {
@@ -296,6 +663,17 @@ impl TypeChecker {
         &mut self,
         program: &Program,
     ) -> (TypeCheckResult, Vec<TypeCheckError>) {
+        self.check_program_collecting_with_source(program, program)
+    }
+
+    pub fn check_program_collecting_with_source(
+        &mut self,
+        program: &Program,
+        source: &Program,
+    ) -> (TypeCheckResult, Vec<TypeCheckError>) {
+        self.lsp_info = LspInfo::default();
+        self.seed_lsp_symbols(source);
+        self.seed_module_items();
         let mut errors = Vec::new();
 
         // Record struct declarations
@@ -367,65 +745,16 @@ impl TypeChecker {
             }
         }
 
-        for s in &program.structs {
-            self.record_completion_symbol(&s.name);
-            let fields: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
-            let generics = if s.generics.is_empty() {
-                String::new()
-            } else {
-                format!("<{}>", s.generics.join(", "))
-            };
-            self.record_hover_doc(
-                s.span,
-                format!("struct {}{} {{ {} }}", s.name, generics, fields.join(", ")),
-            );
-        }
-        for e in &program.enums {
-            self.record_completion_symbol(&e.name);
-            let variants: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
-            let generics = if e.generics.is_empty() {
-                String::new()
-            } else {
-                format!("<{}>", e.generics.join(", "))
-            };
-            self.record_hover_doc(
-                e.span,
-                format!("enum {}{} {{ {} }}", e.name, generics, variants.join(", ")),
-            );
-        }
+        let source_fn_names: std::collections::HashSet<String> =
+            source.functions.iter().map(|f| f.name.clone()).collect();
+
         for function in &program.functions {
-            if function.pub_ {
-                self.record_completion_symbol(&function.name);
-            }
-            let params: Vec<String> = function
-                .params
-                .iter()
-                .map(|p| format!("{}: {}", p.name, type_to_string(&p.ty)))
-                .collect();
-            let ret = function
-                .return_type
-                .as_ref()
-                .map(type_to_string)
-                .unwrap_or_else(|| "void".to_string());
-            let generics = if function.generics.is_empty() {
-                String::new()
-            } else {
-                format!("<{}>", function.generics.join(", "))
-            };
-            self.record_hover_doc(
-                function.span,
-                format!(
-                    "fn {}{}({}) -> {}",
-                    function.name,
-                    generics,
-                    params.join(", "),
-                    ret
-                ),
-            );
+            self.lsp_recording = source_fn_names.contains(&function.name);
             if let Err(e) = self.check_function(function) {
                 errors.push(e);
             }
         }
+        self.lsp_recording = true;
 
         (
             TypeCheckResult {
@@ -1028,7 +1357,7 @@ impl TypeChecker {
                         Self::new_variable_info(var_type.clone(), let_stmt.span),
                     );
                     if !let_stmt.name.is_empty() {
-                        self.lsp_info.types.insert(let_stmt.name_span, var_type);
+                        self.record_expr_type(let_stmt.name_span, &var_type);
                     }
                 } else if let Some(ref type_ann) = let_stmt.type_ann {
                     // Resolve type annotation - convert Struct(name) to Enum(name) if it's actually an enum
@@ -1050,9 +1379,7 @@ impl TypeChecker {
                         Self::new_variable_info(resolved_type.clone(), let_stmt.span),
                     );
                     if !let_stmt.name.is_empty() {
-                        self.lsp_info
-                            .types
-                            .insert(let_stmt.name_span, resolved_type);
+                        self.record_expr_type(let_stmt.name_span, &resolved_type);
                     }
                 } else {
                     return Err(TypeCheckError::Message(format!(
@@ -1634,7 +1961,9 @@ impl TypeChecker {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> Result<Type, TypeCheckError> {
-        self.check_expr_with_context(expr, false)
+        let ty = self.check_expr_with_context(expr, false)?;
+        self.record_expr_type(expr.span(), &ty);
+        Ok(ty)
     }
 
     fn check_expr_borrow_operand(&mut self, expr: &Expr) -> Result<Type, TypeCheckError> {
@@ -1684,13 +2013,22 @@ impl TypeChecker {
                             )));
                         }
                         // Return function type for module function references
-                        let func_decl =
-                            module_exports.functions.get(item_name).ok_or_else(|| {
-                                TypeCheckError::UndefinedVariable {
-                                    name: format!("{}::{}", module_name, item_name),
-                                    span: var_expr.span,
-                                }
-                            })?;
+                        let func_decl = module_exports
+                            .functions
+                            .get(item_name)
+                            .ok_or_else(|| TypeCheckError::UndefinedVariable {
+                                name: format!("{}::{}", module_name, item_name),
+                                span: var_expr.span,
+                            })?
+                            .clone();
+                        let module_file = self.module_paths.get(module_name).cloned();
+                        self.record_reference(
+                            var_expr.span,
+                            LspTarget {
+                                span: func_decl.span,
+                                file: module_file,
+                            },
+                        );
                         Ok(fn_type_from_signature(
                             &func_decl.params,
                             &func_decl.return_type,
@@ -1725,10 +2063,17 @@ impl TypeChecker {
                             file: None,
                         },
                     );
-                    self.lsp_info.types.insert(var_expr.span, var_ty.clone());
+                    self.record_expr_type(var_expr.span, &var_ty);
 
                     Ok(var_ty)
-                } else if let Some(func_decl) = self.functions.get(&var_expr.name) {
+                } else if let Some(func_decl) = self.functions.get(&var_expr.name).cloned() {
+                    self.record_reference(
+                        var_expr.span,
+                        LspTarget {
+                            span: func_decl.span,
+                            file: None,
+                        },
+                    );
                     Ok(fn_type_from_signature(
                         &func_decl.params,
                         &func_decl.return_type,
@@ -1904,7 +2249,13 @@ impl TypeChecker {
                                 got: acc.field.clone(),
                                 span: acc.span,
                             })?;
-                        Ok(field.ty.clone())
+                        let field_ty = field.ty.clone();
+                        let struct_name = name.clone();
+                        let field_name = acc.field.clone();
+                        if let Some(target) = self.lookup_field_target(&struct_name, &field_name) {
+                            self.record_reference(acc.field_span, target);
+                        }
+                        Ok(field_ty)
                     }
                     Type::Generic { name, params } => {
                         let decl = self.structs.get(&name).ok_or_else(|| {
@@ -1940,7 +2291,13 @@ impl TypeChecker {
                                 got: acc.field.clone(),
                                 span: acc.span,
                             })?;
-                        Ok(substitute_generic_types_impl(&field.ty, &substitutions))
+                        let field_ty = substitute_generic_types_impl(&field.ty, &substitutions);
+                        let struct_name = name.clone();
+                        let field_name = acc.field.clone();
+                        if let Some(target) = self.lookup_field_target(&struct_name, &field_name) {
+                            self.record_reference(acc.field_span, target);
+                        }
+                        Ok(field_ty)
                     }
                     Type::String => match acc.field.as_str() {
                         "data" => Ok(Type::RawPtr {
@@ -2232,6 +2589,24 @@ impl TypeChecker {
                     }
 
                     // Return the function's return type
+                    let callee = format!("{}::{}", enum_lit.enum_name, enum_lit.variant);
+                    self.record_reference(
+                        enum_lit.variant_span,
+                        LspTarget {
+                            span: func_decl.span,
+                            file: self.module_paths.get(&enum_lit.enum_name).cloned(),
+                        },
+                    );
+                    self.record_signature(
+                        enum_lit.span,
+                        Self::fn_hover_doc(
+                            &callee,
+                            &func_decl.generics,
+                            &func_decl.params,
+                            &func_decl.return_type,
+                        ),
+                        None,
+                    );
                     return Ok(return_type.unwrap_or(Type::Int));
                 }
 
@@ -2256,6 +2631,15 @@ impl TypeChecker {
                         got: enum_lit.variant.clone(),
                         span: enum_lit.span,
                     })?;
+
+                if let Some(target) = self.lookup_type_target(&enum_lit.enum_name) {
+                    self.record_reference(enum_lit.enum_name_span, target);
+                }
+                if let Some(target) =
+                    self.lookup_variant_target(&enum_lit.enum_name, &enum_lit.variant)
+                {
+                    self.record_reference(enum_lit.variant_span, target);
+                }
 
                 // Check argument count matches
                 if enum_lit.args.len() != variant.payload_types.len() {
@@ -2484,6 +2868,10 @@ impl TypeChecker {
             Expr::Call(call_expr) => {
                 // Check if this is a built-in function first
                 if let Some(return_type) = self.check_builtin_call(call_expr)? {
+                    if let Some(sig) = Self::builtin_signature(&call_expr.callee) {
+                        self.record_hover_doc(call_expr.callee_span, sig.to_string());
+                        self.record_signature(call_expr.span, sig.to_string(), None);
+                    }
                     return Ok(return_type);
                 }
 
@@ -2790,7 +3178,22 @@ impl TypeChecker {
                 // Return the function's return type, or int if void
                 if let Some(target) = self.lookup_fn_target(&call_expr.callee) {
                     self.record_reference(call_expr.callee_span, target);
+                } else if let Some((module, func)) = call_expr.callee.split_once("::")
+                    && let Some(enum_target) = self.lookup_variant_target(module, func)
+                {
+                    self.record_reference(call_expr.callee_span, enum_target);
                 }
+
+                self.record_signature(
+                    call_expr.span,
+                    Self::fn_hover_doc(
+                        &call_expr.callee,
+                        &fn_generics,
+                        &func_decl_params,
+                        &return_type_opt,
+                    ),
+                    None,
+                );
 
                 if let Some(ret) = return_type_opt {
                     Ok(substitute_generic_types_impl(
@@ -2863,6 +3266,10 @@ impl TypeChecker {
                 // Step 10: Type-check the desugared call and return its type
                 // Check if this is a built-in function first
                 if let Some(return_type) = self.check_builtin_call(&desugared_call)? {
+                    if let Some(sig) = Self::builtin_signature(&qualified_name) {
+                        self.record_hover_doc(method_call.method_span, sig.to_string());
+                        self.record_signature(method_call.span, sig.to_string(), None);
+                    }
                     return Ok(return_type);
                 }
 
@@ -2951,6 +3358,12 @@ impl TypeChecker {
                 if let Some(target) = self.lookup_fn_target(&desugared_call.callee) {
                     self.record_reference(method_call.method_span, target);
                 }
+
+                self.record_signature(
+                    method_call.span,
+                    Self::fn_hover_doc(&desugared_call.callee, &[], &params, &return_type_opt),
+                    None,
+                );
 
                 Ok(return_type_opt.unwrap_or(Type::Int))
             }
@@ -3997,6 +4410,147 @@ fn collect_expr_var_refs(
 mod tests {
     use super::*;
     use crate::parser;
+
+    #[test]
+    fn enum_variant_hover_spans_are_distinct() {
+        let src = r#"enum HttpClass {
+    Success;
+    ClientError;
+    ServerError;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = parser::Parser::new(tokens).parse().unwrap();
+        let mut checker = TypeChecker::new();
+        let (result, errors) = checker.check_program_collecting(&program);
+        assert!(errors.is_empty());
+        let e = &program.enums[0];
+        let mut spans = Vec::new();
+        for v in &e.variants {
+            assert!(
+                !spans.contains(&v.span),
+                "duplicate variant span for {}",
+                v.name
+            );
+            spans.push(v.span);
+            let doc = result
+                .lsp_info
+                .hover_docs
+                .get(&v.span)
+                .expect("variant hover doc");
+            assert_eq!(doc, &format!("HttpClass::{}", v.name));
+        }
+    }
+
+    #[test]
+    fn access_log_file_enum_variant_spans_not_overlapped_by_types() {
+        use crate::compiler::Compiler;
+        use std::path::Path;
+
+        let path = Path::new("examples/access_log.ion");
+        let src = std::fs::read_to_string(path).expect("access_log.ion");
+        let tokens = crate::lexer::Lexer::new(&src).tokenize().unwrap();
+        let ast = parser::Parser::new(tokens).parse().unwrap();
+        let mut compiler = Compiler::new();
+        let _ = compiler.load_imports(path, &ast.imports);
+        let program = compiler.merge_modules(&ast, path);
+        let mut checker = TypeChecker::new();
+        checker.set_module_exports(compiler.get_module_exports().clone());
+        let mut module_paths = std::collections::HashMap::new();
+        for import in &ast.imports {
+            module_paths.insert(
+                import.alias.clone(),
+                compiler.resolve_import_path(&import.path, path),
+            );
+        }
+        checker.set_module_paths(module_paths);
+        let (result, errors) = checker.check_program_collecting_with_source(&program, &ast);
+        assert!(errors.is_empty(), "{errors:?}");
+        let http_class = ast
+            .enums
+            .iter()
+            .find(|e| e.name == "HttpClass")
+            .expect("HttpClass");
+        for v in &http_class.variants {
+            for (span, ty) in &result.lsp_info.types {
+                if spans_overlap(*span, v.span) {
+                    panic!(
+                        "type `{}` at line {} col {} (w {}) overlaps variant {} at line {} col {}",
+                        type_to_string(ty),
+                        span.line,
+                        span.column,
+                        span.end - span.start,
+                        v.name,
+                        v.span.line,
+                        v.span.column
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn access_log_enum_variant_hover_not_shadowed_by_types() {
+        let src = r#"
+enum HttpClass {
+    Success;
+    ClientError;
+    ServerError;
+}
+
+fn classify(code: int) -> int {
+    let mut kind: HttpClass = HttpClass::ClientError;
+    if code >= 200 && code < 300 {
+        kind = HttpClass::Success;
+    } else if code >= 500 && code < 600 {
+        kind = HttpClass::ServerError;
+    }
+    match kind {
+        HttpClass::ClientError if code == 401 => {}
+        HttpClass::ClientError => {}
+        HttpClass::ServerError => {}
+        HttpClass::Success => {}
+    };
+    return 0;
+}
+"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = parser::Parser::new(tokens).parse().unwrap();
+        let mut checker = TypeChecker::new();
+        let (result, errors) = checker.check_program_collecting(&program);
+        assert!(errors.is_empty(), "{errors:?}");
+        let http_class = &program.enums[0];
+        for v in &http_class.variants {
+            let doc = result.lsp_info.hover_docs.get(&v.span);
+            assert_eq!(
+                doc.map(String::as_str),
+                Some(format!("HttpClass::{}", v.name).as_str()),
+                "hover doc for {}",
+                v.name
+            );
+            assert!(
+                !result.lsp_info.types.contains_key(&v.span),
+                "expression type shadowing variant {} hover",
+                v.name
+            );
+            for (span, ty) in &result.lsp_info.types {
+                if spans_overlap(*span, v.span) {
+                    panic!(
+                        "type `{}` at {:?} overlaps variant {} span {:?}",
+                        type_to_string(ty),
+                        span,
+                        v.name,
+                        v.span
+                    );
+                }
+            }
+        }
+    }
+
+    fn spans_overlap(a: Span, b: Span) -> bool {
+        a.line == b.line
+            && a.column < b.column + (b.end - b.start)
+            && b.column < a.column + (a.end - a.start)
+    }
 
     #[test]
     fn check_program_collecting_reports_multiple_function_errors() {
