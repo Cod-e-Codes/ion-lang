@@ -1,0 +1,11 @@
+fn take(s: String) {
+    let _ = s;
+}
+
+fn main() -> int {
+    let x = String::from("hi");
+    let r = &x;
+    take(x);
+    let _ = r;
+    return 0;
+}

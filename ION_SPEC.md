@@ -726,6 +726,7 @@ The following borrowing rules apply:
   - Any number of `&T` borrows, and **no** `&mut T` borrows, or
   - Exactly one `&mut T` borrow, and **no** `&T` borrows.
 - Borrows are restricted to the lexical scope of the function in which they are created (see 5.4).
+- A non-copy value cannot be moved (assignment, call argument, `return`, etc.) while any lasting borrow of that value is active.
 
 #### 5.4 No-Escape Rule (Formal)
 

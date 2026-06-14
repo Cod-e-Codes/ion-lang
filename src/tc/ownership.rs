@@ -126,6 +126,14 @@ impl TypeChecker {
                     return Ok(());
                 }
 
+                if var_info.shared_borrow_count > 0 || var_info.mut_borrow_count > 0 {
+                    return Err(TypeCheckError::BorrowConflict {
+                        name: var_expr.name.clone(),
+                        description: "while it is borrowed".to_string(),
+                        span: var_expr.span,
+                    });
+                }
+
                 // Mark as moved
                 var_info.state = OwnershipState::Moved;
                 Ok(())
