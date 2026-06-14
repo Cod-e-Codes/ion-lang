@@ -1,6 +1,87 @@
 use super::*;
 
 impl TypeChecker {
+    pub(crate) fn push_borrow_scope(&mut self) {
+        self.borrow_scopes.push(Vec::new());
+    }
+
+    pub(crate) fn pop_borrow_scope(&mut self) {
+        if let Some(scope) = self.borrow_scopes.pop() {
+            for (owner, mutable) in scope {
+                self.release_borrow(&owner, mutable);
+            }
+        }
+    }
+
+    pub(crate) fn check_borrow_allowed(
+        &self,
+        owner: &str,
+        mutable: bool,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        let info = self
+            .variables
+            .get(owner)
+            .ok_or_else(|| TypeCheckError::UndefinedVariable {
+                name: owner.to_string(),
+                span,
+            })?;
+
+        if mutable {
+            if info.shared_borrow_count > 0 || info.mut_borrow_count > 0 {
+                return Err(TypeCheckError::BorrowConflict {
+                    name: owner.to_string(),
+                    description: "as mutable while it is already borrowed".to_string(),
+                    span,
+                });
+            }
+        } else if info.mut_borrow_count > 0 {
+            return Err(TypeCheckError::BorrowConflict {
+                name: owner.to_string(),
+                description: "as shared while it is mutably borrowed".to_string(),
+                span,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn register_borrow(
+        &mut self,
+        owner: &str,
+        mutable: bool,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        self.check_borrow_allowed(owner, mutable, span)?;
+
+        let info = self
+            .variables
+            .get_mut(owner)
+            .expect("owner exists after check");
+
+        if mutable {
+            info.mut_borrow_count += 1;
+        } else {
+            info.shared_borrow_count += 1;
+        }
+
+        if let Some(scope) = self.borrow_scopes.last_mut() {
+            scope.push((owner.to_string(), mutable));
+        }
+
+        Ok(())
+    }
+
+    fn release_borrow(&mut self, owner: &str, mutable: bool) {
+        if let Some(info) = self.variables.get_mut(owner) {
+            if mutable {
+                info.mut_borrow_count = info.mut_borrow_count.saturating_sub(1);
+            } else {
+                info.shared_borrow_count = info.shared_borrow_count.saturating_sub(1);
+            }
+        }
+    }
+
     /// Check expression for moves and mark variables as Moved.
     /// This is called before using an expression in contexts that move ownership
     /// (assignment, return, function call arguments).

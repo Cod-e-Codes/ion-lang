@@ -3,6 +3,10 @@ test_basic.ion	run	42
 test_arithmetic.ion	run	30			
 test_move_basic.ion	run	10			
 test_ref_valid.ion	run	0			
+test_double_mut_borrow_error.ion	error		BorrowConflict		
+test_mut_shared_borrow_error.ion	error		BorrowConflict		
+test_mut_borrow_block_ok.ion	run	62			
+test_shared_borrow_ok.ion	run	63			
 test_send_basic.ion	run	42			
 test_defer_basic.ion	run	7			
 test_defer_block.ion	run	1			

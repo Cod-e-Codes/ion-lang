@@ -1,0 +1,6 @@
+fn main() -> int {
+    let x = 5;
+    let _a = &x;
+    let _b = &x;
+    return 63;
+}

@@ -1,0 +1,8 @@
+fn main() -> int {
+    let mut x = 5;
+    if true {
+        let _a = &mut x;
+    }
+    let _b = &mut x;
+    return 62;
+}

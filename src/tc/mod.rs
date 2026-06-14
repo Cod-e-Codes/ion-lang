@@ -52,6 +52,8 @@ struct VariableInfo {
     ty: Type,
     state: OwnershipState,
     definition_span: Span,
+    shared_borrow_count: u32,
+    mut_borrow_count: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -86,6 +88,11 @@ pub enum TypeCheckError {
         name: String,
         span: Span,
     },
+    BorrowConflict {
+        name: String,
+        description: String,
+        span: Span,
+    },
     ReferenceEscape {
         description: String,
         span: Span,
@@ -116,6 +123,15 @@ impl std::fmt::Display for TypeCheckError {
                 f,
                 "line {}: UseAfterMove: variable '{}' was moved",
                 span.line, name
+            ),
+            TypeCheckError::BorrowConflict {
+                name,
+                description,
+                span,
+            } => write!(
+                f,
+                "line {}: BorrowConflict: cannot borrow '{}' {}",
+                span.line, name, description
             ),
             TypeCheckError::ReferenceEscape { description, span } => {
                 write!(f, "line {}: ReferenceEscape: {}", span.line, description)
@@ -151,6 +167,8 @@ pub struct TypeChecker {
     pub lsp_info: LspInfo,
     // Active function generic type parameter names (innermost scope last)
     type_param_scopes: Vec<Vec<String>>,
+    // Borrows registered in nested scopes (released on scope pop)
+    borrow_scopes: Vec<Vec<(String, bool)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +202,17 @@ impl TypeChecker {
             current_return_type: None,
             lsp_info: LspInfo::default(),
             type_param_scopes: Vec::new(),
+            borrow_scopes: Vec::new(),
+        }
+    }
+
+    fn new_variable_info(ty: Type, definition_span: Span) -> VariableInfo {
+        VariableInfo {
+            ty,
+            state: OwnershipState::Valid,
+            definition_span,
+            shared_borrow_count: 0,
+            mut_borrow_count: 0,
         }
     }
 
@@ -701,18 +730,16 @@ impl TypeChecker {
             let resolved_param_ty = self.resolve_type_name(&param.ty)?;
             self.variables.insert(
                 param.name.clone(),
-                VariableInfo {
-                    ty: resolved_param_ty,
-                    state: OwnershipState::Valid,
-                    definition_span: function.span, // Params defined at function declaration
-                },
+                Self::new_variable_info(resolved_param_ty, function.span),
             );
         }
 
         // Check function body
+        self.push_borrow_scope();
         for stmt in &function.body.statements {
             self.check_stmt(stmt)?;
         }
+        self.pop_borrow_scope();
 
         // Restore previous scope and return type
         self.variables = prev_vars;
@@ -795,11 +822,7 @@ impl TypeChecker {
                                     Pattern::Binding { name, .. } => {
                                         self.variables.insert(
                                             name.clone(),
-                                            VariableInfo {
-                                                ty: sender_ty,
-                                                state: OwnershipState::Valid,
-                                                definition_span: let_stmt.span,
-                                            },
+                                            Self::new_variable_info(sender_ty, let_stmt.span),
                                         );
                                     }
                                     _ => {
@@ -815,11 +838,7 @@ impl TypeChecker {
                                     Pattern::Binding { name, .. } => {
                                         self.variables.insert(
                                             name.clone(),
-                                            VariableInfo {
-                                                ty: receiver_ty,
-                                                state: OwnershipState::Valid,
-                                                definition_span: let_stmt.span,
-                                            },
+                                            Self::new_variable_info(receiver_ty, let_stmt.span),
                                         );
                                     }
                                     _ => {
@@ -881,11 +900,7 @@ impl TypeChecker {
                             Pattern::Binding { name, .. } => {
                                 self.variables.insert(
                                     name.clone(),
-                                    VariableInfo {
-                                        ty: elem_ty.clone(),
-                                        state: OwnershipState::Valid,
-                                        definition_span: let_stmt.span,
-                                    },
+                                    Self::new_variable_info(elem_ty.clone(), let_stmt.span),
                                 );
                             }
                             _ => {
@@ -1000,14 +1015,17 @@ impl TypeChecker {
                     // This handles cases like `let y = x;` where `x` is moved to `y`
                     self.check_expr_for_moves(init)?;
 
+                    // Lasting borrows from `let r = &x` / `let r = &mut x`
+                    if let Expr::Ref(ref_expr) = init
+                        && let Expr::Var(var_expr) = ref_expr.inner.as_ref()
+                    {
+                        self.register_borrow(&var_expr.name, ref_expr.mutable, var_expr.span)?;
+                    }
+
                     // New variable starts as Valid (it owns the value from init)
                     self.variables.insert(
                         let_stmt.name.clone(),
-                        VariableInfo {
-                            ty: var_type.clone(),
-                            state: OwnershipState::Valid,
-                            definition_span: let_stmt.span,
-                        },
+                        Self::new_variable_info(var_type.clone(), let_stmt.span),
                     );
                     if !let_stmt.name.is_empty() {
                         self.lsp_info.types.insert(let_stmt.name_span, var_type);
@@ -1029,11 +1047,7 @@ impl TypeChecker {
                     // Variable declared without init - store the type, state is Valid but uninitialized
                     self.variables.insert(
                         let_stmt.name.clone(),
-                        VariableInfo {
-                            ty: resolved_type.clone(),
-                            state: OwnershipState::Valid,
-                            definition_span: let_stmt.span,
-                        },
+                        Self::new_variable_info(resolved_type.clone(), let_stmt.span),
                     );
                     if !let_stmt.name.is_empty() {
                         self.lsp_info
@@ -1134,17 +1148,21 @@ impl TypeChecker {
 
                 // Then-branch: type-check with its own copy of the environment
                 self.variables = before.clone();
+                self.push_borrow_scope();
                 for inner in &if_stmt.then_block.statements {
                     self.check_stmt(inner)?;
                 }
+                self.pop_borrow_scope();
                 let then_env = self.variables.clone();
 
                 // Else-branch: same starting environment; if no else, treat as no-op.
                 let else_env = if let Some(ref else_blk) = if_stmt.else_block {
                     self.variables = before.clone();
+                    self.push_borrow_scope();
                     for inner in &else_blk.statements {
                         self.check_stmt(inner)?;
                     }
+                    self.pop_borrow_scope();
                     self.variables.clone()
                 } else {
                     before.clone()
@@ -1191,6 +1209,8 @@ impl TypeChecker {
 
                     if let Some(info) = merged.get_mut(name) {
                         info.state = merged_state;
+                        info.shared_borrow_count = prev_info.shared_borrow_count;
+                        info.mut_borrow_count = prev_info.mut_borrow_count;
                     }
                 }
 
@@ -1238,19 +1258,15 @@ impl TypeChecker {
                 let parent_vars = self.variables.clone();
                 self.variables.clear();
                 for (name, ty) in captured_infos {
-                    self.variables.insert(
-                        name,
-                        VariableInfo {
-                            ty,
-                            state: OwnershipState::Valid,
-                            definition_span: spawn_stmt.span, // Captured vars defined at spawn
-                        },
-                    );
+                    self.variables
+                        .insert(name, Self::new_variable_info(ty, spawn_stmt.span));
                 }
                 // Check the body of the spawn block
+                self.push_borrow_scope();
                 for inner in &spawn_stmt.body.statements {
                     self.check_stmt(inner)?;
                 }
+                self.pop_borrow_scope();
                 // Restore parent scope (with captured variables already marked moved).
                 self.variables = parent_vars;
             }
@@ -1266,9 +1282,11 @@ impl TypeChecker {
                 }
                 self.variables = before.clone();
                 self.loop_depth += 1;
+                self.push_borrow_scope();
                 for inner in &while_stmt.body.statements {
                     self.check_stmt(inner)?;
                 }
+                self.pop_borrow_scope();
                 self.loop_depth -= 1;
                 let body_env = self.variables.clone();
 
@@ -1296,6 +1314,8 @@ impl TypeChecker {
 
                     if let Some(info) = merged.get_mut(name) {
                         info.state = merged_state;
+                        info.shared_borrow_count = prev_info.shared_borrow_count;
+                        info.mut_borrow_count = prev_info.mut_borrow_count;
                     }
                 }
 
@@ -1304,9 +1324,11 @@ impl TypeChecker {
             Stmt::Loop(loop_stmt) => {
                 let before = self.variables.clone();
                 self.loop_depth += 1;
+                self.push_borrow_scope();
                 for inner in &loop_stmt.body.statements {
                     self.check_stmt(inner)?;
                 }
+                self.pop_borrow_scope();
                 self.loop_depth -= 1;
                 let body_env = self.variables.clone();
 
@@ -1330,6 +1352,8 @@ impl TypeChecker {
 
                     if let Some(info) = merged.get_mut(name) {
                         info.state = merged_state;
+                        info.shared_borrow_count = prev_info.shared_borrow_count;
+                        info.mut_borrow_count = prev_info.mut_borrow_count;
                     }
                 }
 
@@ -1595,9 +1619,11 @@ impl TypeChecker {
                 self.unsafe_context_depth += 1;
 
                 // Check body
+                self.push_borrow_scope();
                 for inner in &unsafe_stmt.body.statements {
                     self.check_stmt(inner)?;
                 }
+                self.pop_borrow_scope();
 
                 // Exit unsafe context
                 self.unsafe_context_depth -= 1;
@@ -1703,10 +1729,20 @@ impl TypeChecker {
                 }
             }
             Expr::Ref(ref_expr) => {
-                // Check the inner expression
-                let inner_type = self.check_expr(&ref_expr.inner)?;
+                let inner_type = match ref_expr.inner.as_ref() {
+                    Expr::Var(var_expr) => {
+                        self.check_borrow_allowed(&var_expr.name, ref_expr.mutable, var_expr.span)?;
+                        self.variables
+                            .get(&var_expr.name)
+                            .map(|info| info.ty.clone())
+                            .ok_or_else(|| TypeCheckError::UndefinedVariable {
+                                name: var_expr.name.clone(),
+                                span: var_expr.span,
+                            })?
+                    }
+                    _ => self.check_expr(&ref_expr.inner)?,
+                };
 
-                // Return the reference type
                 Ok(Type::Ref {
                     inner: Box::new(inner_type),
                     mutable: ref_expr.mutable,
@@ -3605,11 +3641,7 @@ impl TypeChecker {
                                             // Add binding to scope with the concrete field type
                                             self.variables.insert(
                                                 name.clone(),
-                                                VariableInfo {
-                                                    ty: concrete_field_ty,
-                                                    state: OwnershipState::Valid,
-                                                    definition_span: *span,
-                                                },
+                                                Self::new_variable_info(concrete_field_ty, *span),
                                             );
                                         }
                                         Pattern::Variant { .. } => {
@@ -3648,11 +3680,7 @@ impl TypeChecker {
                                         // Add binding to scope with the concrete payload type
                                         self.variables.insert(
                                             name.clone(),
-                                            VariableInfo {
-                                                ty: concrete_payload_ty,
-                                                state: OwnershipState::Valid,
-                                                definition_span: *span,
-                                            },
+                                            Self::new_variable_info(concrete_payload_ty, *span),
                                         );
                                     }
                                     Pattern::Variant { .. } => {
@@ -3673,11 +3701,7 @@ impl TypeChecker {
                 // Binding pattern binds the entire matched value
                 self.variables.insert(
                     name.clone(),
-                    VariableInfo {
-                        ty: expr_ty.clone(),
-                        state: OwnershipState::Valid,
-                        definition_span: *span,
-                    },
+                    Self::new_variable_info(expr_ty.clone(), *span),
                 );
                 Ok(())
             }

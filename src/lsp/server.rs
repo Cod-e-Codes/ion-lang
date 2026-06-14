@@ -326,6 +326,14 @@ fn diagnostic_from_tc_error(err: &TypeCheckError) -> (crate::ast::Span, String) 
             format!("Type mismatch: expected {}, got {}", expected, got),
         ),
         TypeCheckError::UseAfterMove { span, name } => (*span, format!("Use after move: {}", name)),
+        TypeCheckError::BorrowConflict {
+            span,
+            name,
+            description,
+        } => (
+            *span,
+            format!("Borrow conflict: cannot borrow '{}' {}", name, description),
+        ),
         TypeCheckError::ReferenceEscape { span, description } => {
             (*span, format!("Reference escape: {}", description))
         }
