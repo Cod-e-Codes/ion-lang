@@ -191,6 +191,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_match_expr_rvalue.ion` - `match` as rvalue in `let` binding (exit 91)
 - `test_match_arm_type_mismatch.ion` - Mismatched arm result types (negative)
 - `test_match_arm_divergent_rvalue.ion` - Diverging arm mixed with value arm in rvalue `match` (negative)
+- `test_match_arm_if_else_value_rvalue.ion` - `if`/`else` value branches unify in rvalue `match` (exit 80)
+- `test_match_arm_if_else_mixed_rvalue.ion` - Mixed diverging and value paths within one rvalue arm (negative)
 
 ### if/else ownership merge
 - `test_if_else_move_ok.ion` - Move in diverging branch; use after `if` (exit 60)

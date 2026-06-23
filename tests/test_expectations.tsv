@@ -143,6 +143,8 @@ test_if_bool_required.ion	error		bool.*if condition\|if condition.*bool
 test_break_continue_error.ion	error		break statement outside of loop		
 test_match_arm_type_mismatch.ion	error		TypeMismatch		
 test_match_arm_divergent_rvalue.ion	error		diverging match arm		
+test_match_arm_if_else_value_rvalue.ion	run	80		
+test_match_arm_if_else_mixed_rvalue.ion	error		diverging and value-producing paths		
 test_if_else_move_error.ion	error		UseAfterMove		
 test_fn_type_mismatch.ion	error		TypeMismatch		
 test_struct_field_drop.ion	cgen			ion_string_free(h.inner.s)	

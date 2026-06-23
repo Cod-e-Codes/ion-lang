@@ -627,7 +627,7 @@ Ion supports a **local, Hindley–Milner-inspired inference**:
 
 - Function parameter and return types **must be annotated** (no inference across function boundaries).
 - Generic type parameters on functions and types must be explicit at declaration sites, but may usually be inferred at call sites when unambiguous.
-- `match` expressions: non-diverging arms must produce the same type (trailing expression or unit for an empty block). Arms that always `return`, `break`, or `continue` do not contribute a value to arm unification (see also Section 5.2). A match used as an rvalue where one arm diverges and another produces a value is a compile error. Numeric coercion between arm types follows the same rules as assignment.
+- `match` expressions: non-diverging arms must produce the same type (trailing expression or unit for an empty block). Arms that always `return`, `break`, or `continue` do not contribute a value to arm unification (see also Section 5.2). A match used as an rvalue where one arm diverges and another produces a value is a compile error. Within a single arm, control-flow paths that mix `return`/`break`/`continue` with value-producing fall-through are also a compile error. Numeric coercion between arm types follows the same rules as assignment.
 
 The inference engine is intentionally limited:
 

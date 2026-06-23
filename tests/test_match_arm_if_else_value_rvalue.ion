@@ -1,0 +1,25 @@
+// Rvalue match: if/else with value-producing branches unifies with other value arms.
+enum E {
+    A(int);
+    B(int);
+}
+
+fn pick(c: bool, e: E) -> int {
+    let n: int = match e {
+        E::A(x) => {
+            if c {
+                x;
+            } else {
+                x + 1;
+            }
+        },
+        E::B(v) => {
+            v + 10;
+        },
+    };
+    return n;
+}
+
+fn main() -> int {
+    return pick(true, E::A(80));
+}

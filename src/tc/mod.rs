@@ -3770,28 +3770,113 @@ impl TypeChecker {
     fn infer_block_result_type(
         &mut self,
         block: &Block,
-        _span: Span,
+        span: Span,
     ) -> Result<MatchArmValue, TypeCheckError> {
-        for stmt in block.statements.iter().rev() {
-            match stmt {
-                Stmt::Return(ret) => {
-                    if ret.value.is_some() {
-                        return Ok(MatchArmValue::Diverges);
-                    }
-                    return Err(TypeCheckError::TypeMismatch {
+        self.infer_stmts_result_type(&block.statements, span)
+    }
+
+    fn infer_stmts_result_type(
+        &mut self,
+        stmts: &[Stmt],
+        span: Span,
+    ) -> Result<MatchArmValue, TypeCheckError> {
+        if stmts.is_empty() {
+            return Ok(MatchArmValue::Unit);
+        }
+        self.infer_stmts_result_from(stmts, 0, span)
+    }
+
+    fn infer_stmts_result_from(
+        &mut self,
+        stmts: &[Stmt],
+        idx: usize,
+        span: Span,
+    ) -> Result<MatchArmValue, TypeCheckError> {
+        if idx >= stmts.len() {
+            return Ok(MatchArmValue::Unit);
+        }
+
+        let is_last = idx + 1 == stmts.len();
+        match &stmts[idx] {
+            Stmt::Return(ret) => {
+                if ret.value.is_some() {
+                    Ok(MatchArmValue::Diverges)
+                } else {
+                    Err(TypeCheckError::TypeMismatch {
                         expected: "return value in match arm".to_string(),
                         got: "no return value".to_string(),
                         span: ret.span,
-                    });
+                    })
                 }
-                Stmt::Break(_) | Stmt::Continue(_) => return Ok(MatchArmValue::Diverges),
-                Stmt::Expr(expr_stmt) => {
-                    return Ok(MatchArmValue::Value(self.check_expr(&expr_stmt.expr)?));
-                }
-                _ => {}
             }
+            Stmt::Break(_) | Stmt::Continue(_) => Ok(MatchArmValue::Diverges),
+            Stmt::Expr(expr_stmt) => {
+                if is_last {
+                    Ok(MatchArmValue::Value(self.check_expr(&expr_stmt.expr)?))
+                } else {
+                    self.infer_stmts_result_from(stmts, idx + 1, span)
+                }
+            }
+            Stmt::If(if_stmt) => {
+                let then_r = self.infer_block_result_type(&if_stmt.then_block, span)?;
+                if let Some(else_blk) = &if_stmt.else_block {
+                    let else_r = self.infer_block_result_type(else_blk, span)?;
+                    if is_last {
+                        self.merge_match_arm_branches(then_r, else_r, if_stmt.span)
+                    } else {
+                        let rest_r = self.infer_stmts_result_from(stmts, idx + 1, span)?;
+                        let true_path = Self::match_arm_path_after_block(then_r, &rest_r);
+                        let false_path = Self::match_arm_path_after_block(else_r, &rest_r);
+                        self.merge_match_arm_branches(true_path, false_path, if_stmt.span)
+                    }
+                } else if is_last {
+                    self.merge_match_arm_branches(then_r, MatchArmValue::Unit, if_stmt.span)
+                } else {
+                    let rest_r = self.infer_stmts_result_from(stmts, idx + 1, span)?;
+                    self.merge_match_arm_branches(then_r, rest_r, if_stmt.span)
+                }
+            }
+            Stmt::Let(_)
+            | Stmt::Defer(_)
+            | Stmt::Spawn(_)
+            | Stmt::While(_)
+            | Stmt::Loop(_)
+            | Stmt::For(_)
+            | Stmt::UnsafeBlock(_) => self.infer_stmts_result_from(stmts, idx + 1, span),
         }
-        Ok(MatchArmValue::Unit)
+    }
+
+    fn match_arm_path_after_block(
+        block_result: MatchArmValue,
+        continuation: &MatchArmValue,
+    ) -> MatchArmValue {
+        match block_result {
+            MatchArmValue::Diverges => MatchArmValue::Diverges,
+            _ => continuation.clone(),
+        }
+    }
+
+    fn merge_match_arm_branches(
+        &mut self,
+        left: MatchArmValue,
+        right: MatchArmValue,
+        span: Span,
+    ) -> Result<MatchArmValue, TypeCheckError> {
+        match (left, right) {
+            (MatchArmValue::Diverges, MatchArmValue::Diverges) => Ok(MatchArmValue::Diverges),
+            (MatchArmValue::Diverges, MatchArmValue::Unit)
+            | (MatchArmValue::Unit, MatchArmValue::Diverges) => Ok(MatchArmValue::Unit),
+            (MatchArmValue::Diverges, MatchArmValue::Value(_))
+            | (MatchArmValue::Value(_), MatchArmValue::Diverges) => Err(TypeCheckError::Message(
+                "match arm has both diverging and value-producing paths".to_string(),
+            )),
+            (MatchArmValue::Unit, MatchArmValue::Unit) => Ok(MatchArmValue::Unit),
+            (MatchArmValue::Unit, MatchArmValue::Value(ty))
+            | (MatchArmValue::Value(ty), MatchArmValue::Unit) => Ok(MatchArmValue::Value(ty)),
+            (MatchArmValue::Value(left_ty), MatchArmValue::Value(right_ty)) => Ok(
+                MatchArmValue::Value(self.unify_match_arm_types(&left_ty, &right_ty, span)?),
+            ),
+        }
     }
 
     /// Unify types from match arms; numeric coercion follows assignment rules.
@@ -4173,10 +4258,11 @@ impl TypeChecker {
 }
 
 /// How a match arm contributes to rvalue unification.
+#[derive(Clone)]
 enum MatchArmValue {
-    /// `return`, `break`, or `continue` — arm does not produce a match value.
+    /// `return`, `break`, or `continue`; arm does not produce a match value.
     Diverges,
-    /// Empty block or statements only — unit (`void`).
+    /// Empty block or statements only; unit (`void`).
     Unit,
     /// Trailing expression statement.
     Value(Type),
