@@ -228,23 +228,37 @@ impl Compiler {
                 .get(&canonical_module)
                 .or_else(|| module_aliases.get(module_path));
 
-            // Add public structs
+            // Include all structs/enums from imported modules so merged pub function
+            // bodies type-check (private types used only inside a module).
             for s in &module_program.structs {
-                if s.pub_
-                    && !merged
-                        .structs
-                        .iter()
-                        .any(|existing| existing.name == s.name)
+                if !merged
+                    .structs
+                    .iter()
+                    .any(|existing| existing.name == s.name)
                 {
                     merged.structs.push(s.clone());
                 }
             }
 
-            // Add public enums
             for e in &module_program.enums {
-                if e.pub_ && !merged.enums.iter().any(|existing| existing.name == e.name) {
+                if !merged.enums.iter().any(|existing| existing.name == e.name) {
                     merged.enums.push(e.clone());
                 }
+            }
+
+            // Private helpers referenced by merged pub functions must be present too.
+            for f in &module_program.functions {
+                if f.pub_ {
+                    continue;
+                }
+                if merged
+                    .functions
+                    .iter()
+                    .any(|existing| existing.name == f.name)
+                {
+                    continue;
+                }
+                merged.functions.push(f.clone());
             }
 
             // Add public functions, prefixed with import alias to avoid name collisions
@@ -291,6 +305,20 @@ impl Compiler {
     }
 
     /// Map canonical module paths to the import alias used from the main file's import tree.
+    pub fn import_aliases_from_main(
+        &self,
+        main_path: &Path,
+        main_program: &Program,
+    ) -> HashMap<PathBuf, String> {
+        let mut out = HashMap::new();
+        let main_canonical = main_path
+            .canonicalize()
+            .unwrap_or_else(|_| main_path.to_path_buf());
+        self.collect_module_aliases(&main_canonical, &main_program.imports, &mut out);
+        out
+    }
+
+    /// Map canonical module paths to the import alias used from the main file's import tree.
     fn collect_module_aliases(
         &self,
         from_file: &Path,
@@ -314,5 +342,42 @@ impl Compiler {
 impl Default for Compiler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn merge_modules_includes_private_structs_and_functions_from_imports() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let main_path = root.join("test_multi_struct.ion");
+        let mut compiler = Compiler::new();
+        let main_program = compiler
+            .parse_module(&main_path)
+            .expect("parse test_multi_struct.ion");
+        let merged = compiler.merge_modules(&main_program, &main_path);
+
+        assert!(
+            merged.structs.iter().any(|s| s.name == "Item"),
+            "expected private struct Item from struct_lib.ion"
+        );
+        assert!(
+            merged.functions.iter().any(|f| f.name == "lib_compute"),
+            "expected mangled pub fn from struct_lib.ion, got: {:?}",
+            merged.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+        assert!(
+            merged.functions.iter().any(|f| f.name == "line_total"),
+            "expected private helper fn from struct_lib.ion for type checking"
+        );
+
+        let mut checker = crate::tc::TypeChecker::new();
+        checker.set_module_exports(compiler.get_module_exports().clone());
+        checker
+            .check_program(&merged)
+            .expect("merged program should type-check");
     }
 }

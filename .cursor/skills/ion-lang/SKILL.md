@@ -55,7 +55,15 @@ cd tests && ./test_runner.sh
 cargo clippy -- -D warnings
 ```
 
-**Windows:** Stop `ion-lsp` / `ion-compiler` before rebuilding if you get "Access is denied". Use Git Bash for `test_runner.sh`. From PowerShell:
+**Windows:** Stop `ion-lsp` / `ion-compiler` before rebuilding if you get "Access is denied". After compiler library changes (`src/compiler`, `src/tc`, `src/cgen`), rebuild and reload the language server so diagnostics match the CLI:
+
+```bash
+cargo build --release --bin ion-compiler --bin ion-lsp
+```
+
+Then reload the editor window (Cursor: Developer: Reload Window). The LSP uses `merge_modules` for type checking but does not run multi-file codegen; no separate LSP source changes were required for the multi-file fixes.
+
+Use Git Bash for `test_runner.sh`. From PowerShell:
 
 ```powershell
 & 'C:\Program Files\Git\bin\bash.exe' -lc 'cd /c/Users/Cody/Projects/GitHub/Personal/Active/ion-lang && <command>'

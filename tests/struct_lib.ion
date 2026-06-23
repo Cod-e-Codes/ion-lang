@@ -1,0 +1,13 @@
+struct Item {
+    price: int;
+    qty: int;
+}
+
+fn line_total(item: Item) -> int {
+    return item.price * item.qty;
+}
+
+pub fn compute() -> int {
+    let row: Item = Item { price: 10, qty: 3 };
+    return line_total(row);
+}

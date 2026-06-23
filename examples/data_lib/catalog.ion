@@ -1,0 +1,31 @@
+struct Product {
+    unit_price: int;
+    quantity: int;
+}
+
+fn line_total(product: Product) -> int {
+    return product.unit_price * product.quantity;
+}
+
+pub fn catalog_line_count() -> int {
+    return 3;
+}
+
+pub fn catalog_grand_total() -> int {
+    let row0: Product = Product { unit_price: 1200, quantity: 2 };
+    let row1: Product = Product { unit_price: 350, quantity: 5 };
+    let row2: Product = Product { unit_price: 99, quantity: 10 };
+    let total0: int = line_total(row0);
+    let total1: int = line_total(row1);
+    let total2: int = line_total(row2);
+    return total0 + total1 + total2;
+}
+
+pub fn catalog_units_in_stock() -> int {
+    let quantities: [int; 3] = [2, 5, 10];
+    let mut units: int = 0;
+    for qty in quantities {
+        units = units + qty;
+    }
+    return units;
+}

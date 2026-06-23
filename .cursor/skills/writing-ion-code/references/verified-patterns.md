@@ -120,8 +120,10 @@ Non-`pub` items are file-private. Qualified names use `alias::item`.
 Multi-file compile (manual):
 
 ```bash
-./target/release/ion-compiler --mode multi --output app main.ion
+./target/release/ion-compiler --mode multi --output app path/to/main.ion
 ```
+
+Multi-file mode prefixes each module's C symbols (`io_print_int`, `fmt_print_int`) so stdlib modules can link together. The compiler walks up from the current directory to find `runtime/`. Spawn captures move by value even for `int`; use a helper function if the same constant is needed after `spawn` (see `examples/channel_worker.ion`).
 
 ## Channel send expressions
 

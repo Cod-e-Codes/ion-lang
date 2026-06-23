@@ -140,6 +140,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_unsafe_basic.ion` - Unsafe blocks
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls (negative test)
 - `test_multifile.ion` - Multi-file compilation
+- `test_multi_struct.ion` - Multi-file module with private struct in library
+- `test_multi_fmt_io.ion` - Multi-file link with both `fmt` and `io` stdlib modules
 
 ### Numeric types and aliases
 - `test_bool_literal.ion` - Boolean literals (`true`, `false`)

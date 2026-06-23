@@ -167,13 +167,25 @@ This parses imported modules, generates `.c` and `.h` per module, compiles objec
 
 ## Example Programs
 
-Each example has a matching `examples/*.c` checked in as a compiler-output snapshot (ownership, spawn, channel lowering, bounds checks). Those files are verbose: importing stdlib or other modules inlines merged C for those dependencies. Ion targets GNU C (GCC/Clang), not strict ISO C or MSVC. Regenerate after codegen changes:
+Top-level `examples/*.ion` files each have a checked-in merged `examples/*.c` codegen snapshot. Regenerate after compiler codegen changes:
 
 ```bash
 for f in examples/*.ion; do ./target/release/ion-compiler "$f"; done
+./target/release/ion-compiler examples/text_summary/text_summary.ion
 ```
 
-Compile and run any example with the same pattern as the quick start above. For `http_server.ion`, add `-Drecv_sys=recv -Dsend_sys=send` when linking.
+Top-level single-file examples (including `channel_worker.ion`) commit a merged `.c` snapshot next to the `.ion`. The `text_summary/` subdirectory also commits one `.c` (it needs `sample.txt`). Multi-file `examples/data_lib/` keeps only `.ion` sources; see [examples/data_lib/README.md](examples/data_lib/README.md) for build output (`.c`/`.h` generated in place, not committed).
+
+Compile and run any single-file example:
+
+```bash
+./target/release/ion-compiler examples/spawn_channel.ion
+gcc examples/spawn_channel.c runtime/ion_runtime.c -o spawn_channel \
+    -I. -Iruntime -lpthread -lws2_32   # omit -lws2_32 on Linux/macOS
+./spawn_channel
+```
+
+For `http_server.ion`, add `-Drecv_sys=recv -Dsend_sys=send` when linking.
 
 | File | What it demonstrates |
 |------|---------------------|
@@ -184,6 +196,17 @@ Compile and run any example with the same pattern as the quick start above. For 
 | [examples/showcase.ion](examples/showcase.ion) | Mixed language features: tuples, `+=`, `push_byte`, spawn/channels |
 | [examples/access_log.ion](examples/access_log.ion) | Log parsing, `loop`/`break`, match guards, spawn, channels, fmt/io |
 | [examples/minimal.ion](examples/minimal.ion) | Smallest valid program |
+| [examples/channel_worker.ion](examples/channel_worker.ion) | Channel worker: `spawn` sums jobs from a channel |
+| [examples/text_summary/text_summary.ion](examples/text_summary/text_summary.ion) | `fs` file read, string iteration, line/word/byte counts |
+| [examples/data_lib/main.ion](examples/data_lib/main.ion) | Multi-module library (`catalog.ion`); see [data_lib/README.md](examples/data_lib/README.md) |
+
+Build `data_lib` (multi-file; codegen is ephemeral, not in git):
+
+```bash
+cd examples/data_lib
+../../target/release/ion-compiler --mode multi --output data_lib main.ion
+./data_lib    # or data_lib.exe on Windows
+```
 
 ## Project Structure
 

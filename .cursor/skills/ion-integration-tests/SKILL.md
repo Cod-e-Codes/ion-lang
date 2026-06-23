@@ -15,14 +15,19 @@ paths:
 
 End-to-end tests: Ion → C → gcc → run executable → assert exit code (or assert compile failure).
 
-The harness runs tests under `tests/` only. Files in `examples/` are documented demos - compile and run them manually (see [README.md](../../../README.md)); they are not in the integration manifest. Committed `examples/*.c` files are intentional codegen snapshots (see README Example Programs).
+The harness runs tests under `tests/` only. Files in `examples/` are documented demos - compile and run them manually (see [README.md](../../../README.md)); they are not in the integration manifest.
 
-After compiler codegen changes, regenerate committed `examples/*.c` from the matching `.ion` sources:
+**Example output policy:** Top-level single-file examples commit one merged `.c` next to the `.ion`. `text_summary/` commits one `.c` plus `sample.txt`. Multi-file `data_lib/` keeps `.ion` only (see `examples/data_lib/README.md`).
+
+After compiler codegen changes, regenerate committed example `.c` files:
 
 ```bash
 cargo build --release --bin ion-compiler
 for f in examples/*.ion; do ./target/release/ion-compiler "$f"; done
+./target/release/ion-compiler examples/text_summary/text_summary.ion
 ```
+
+Multi-file `examples/data_lib/` has no committed `.c`; see `examples/data_lib/README.md`.
 
 Link and run like integration tests (`gcc` + `runtime/ion_runtime.c` + `-lpthread`; on Windows MinGW add `-lws2_32`).
 

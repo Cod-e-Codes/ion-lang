@@ -69,6 +69,8 @@ pub struct Codegen {
     loop_continue_label: Option<String>,
     /// When true (single-file merge), module calls use `{alias}_{func}` C names.
     mangle_merged_module_calls: bool,
+    /// Set during multi-file codegen: prefix this module's functions (`io_print_int`).
+    multi_file_module: Option<String>,
 }
 
 impl Default for Codegen {
@@ -102,20 +104,36 @@ impl Codegen {
             epilogue_label: "epilogue".to_string(),
             loop_continue_label: None,
             mangle_merged_module_calls: false,
+            multi_file_module: None,
         }
     }
 
     fn resolve_c_function_name(&self, callee: &str) -> String {
-        if self.mangle_merged_module_calls
-            && let Some(mangled) = mangle_module_callee(callee)
-        {
+        if callee == "main" {
+            return "main".to_string();
+        }
+        if self.extern_functions.contains_key(callee) {
+            return callee.to_string();
+        }
+        let mangle_modules = self.mangle_merged_module_calls || self.multi_file_module.is_some();
+        if mangle_modules && let Some(mangled) = mangle_module_callee(callee) {
             return mangled;
+        }
+        if let Some(module) = &self.multi_file_module {
+            if callee.contains("::") {
+                return callee.split("::").last().unwrap_or(callee).to_string();
+            }
+            return format!("{}_{}", module, callee);
         }
         if callee.contains("::") {
             callee.split("::").last().unwrap_or(callee).to_string()
         } else {
             callee.to_string()
         }
+    }
+
+    fn module_c_symbol(&self, ion_name: &str) -> String {
+        self.resolve_c_function_name(ion_name)
     }
 
     fn emit_generated_banner(&mut self, source_ion: &str) {
@@ -489,13 +507,15 @@ impl Codegen {
     pub fn generate_module_source(
         &mut self,
         program: &IRProgram,
-        module_name: &str,
+        symbol_prefix: &str,
         source_ion: &str,
         imports: &[String],
+        header_stem: &str,
     ) -> String {
         self.output.clear();
         self.indent_level = 0;
         self.mangle_merged_module_calls = false;
+        self.multi_file_module = Some(symbol_prefix.to_string());
         // Build enum map for variant index lookups
         self.enum_map.clear();
         for e in &program.enums {
@@ -511,6 +531,27 @@ impl Codegen {
         self.spawn_forward_decls.clear();
         self.spawn_definitions.clear();
 
+        self.extern_functions.clear();
+        self.function_return_types.clear();
+        self.function_param_types.clear();
+        for extern_block in &program.extern_blocks {
+            for ext_fn in &extern_block.functions {
+                self.extern_functions.insert(
+                    ext_fn.name.clone(),
+                    ext_fn.params.iter().map(|p| p.ty.clone()).collect(),
+                );
+            }
+        }
+        for function in &program.functions {
+            let c_name = format!("{}_{}", symbol_prefix, function.name);
+            self.function_return_types
+                .insert(c_name.clone(), function.return_type.clone());
+            self.function_param_types.insert(
+                c_name,
+                function.params.iter().map(|p| p.ty.clone()).collect(),
+            );
+        }
+
         self.emit_generated_banner(source_ion);
 
         // Generate includes
@@ -521,10 +562,10 @@ impl Codegen {
         // The compiler will add -I. -I.. -Iruntime -I../runtime to find it
         self.writeln("#include \"ion_runtime.h\"");
         // Include the module's own header
-        self.writeln(&format!("#include \"{}.h\"", module_name));
+        self.writeln(&format!("#include \"{}.h\"", header_stem));
         // Include headers for imported modules
         for import_name in imports {
-            if import_name != module_name {
+            if import_name != header_stem {
                 self.writeln(&format!("#include \"{}.h\"", import_name));
             }
         }
@@ -800,16 +841,22 @@ impl Codegen {
             self.write(&spawn_defs);
         }
 
+        self.multi_file_module = None;
         self.output.clone()
     }
 
     /// Generate C header file for a module (for multi-file mode)
-    pub fn generate_module_header(&mut self, program: &Program, module_name: &str) -> String {
+    pub fn generate_module_header(
+        &mut self,
+        program: &Program,
+        symbol_prefix: &str,
+        header_stem: &str,
+    ) -> String {
         self.output.clear();
         self.indent_level = 0;
 
         // Generate include guard
-        let guard_name = format!("ION_{}_H", module_name.to_uppercase().replace("-", "_"));
+        let guard_name = format!("ION_{}_H", header_stem.to_uppercase().replace("-", "_"));
         self.writeln(&format!("#ifndef {}", guard_name));
         self.writeln(&format!("#define {}", guard_name));
         self.writeln("");
@@ -859,7 +906,8 @@ impl Codegen {
                     .as_ref()
                     .map(type_to_c_impl)
                     .unwrap_or_else(|| "void".to_string());
-                self.write(&format!("{} {}(", return_type, func.name));
+                let c_name = format!("{}_{}", symbol_prefix, func.name);
+                self.write(&format!("{} {}(", return_type, c_name));
                 if func.params.is_empty() {
                     self.write("void");
                 } else {
@@ -1219,7 +1267,8 @@ impl Codegen {
             })
             .unwrap_or_else(|| "void".to_string());
 
-        self.write(&format!("{} {}(", return_type, function.name));
+        let c_name = self.module_c_symbol(&function.name);
+        self.write(&format!("{} {}(", return_type, c_name));
 
         // Generate parameters
         if function.params.is_empty() {
@@ -4793,5 +4842,29 @@ fn collect_generic_from_expr(
             collect_generic_from_expr(index, instantiations);
             collect_generic_from_expr(value, instantiations);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multi_file_resolves_module_local_symbols() {
+        let mut cg = Codegen::new();
+        cg.multi_file_module = Some("fmt".to_string());
+        assert_eq!(cg.module_c_symbol("print_int"), "fmt_print_int");
+        assert_eq!(cg.module_c_symbol("io::print_int"), "io_print_int");
+        cg.extern_functions.insert(
+            "write".to_string(),
+            vec![
+                Type::Int,
+                Type::RawPtr {
+                    inner: Box::new(Type::U8),
+                },
+                Type::Int,
+            ],
+        );
+        assert_eq!(cg.module_c_symbol("write"), "write");
     }
 }

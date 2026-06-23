@@ -95,13 +95,18 @@ fn main() {
         let mut module_names: std::collections::HashMap<PathBuf, String> =
             std::collections::HashMap::new();
         for module_path in modules.keys() {
-            let module_name = module_path
+            let file_stem = module_path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("module")
                 .to_string();
-            module_names.insert(module_path.clone(), module_name);
+            let canonical = module_path
+                .canonicalize()
+                .unwrap_or_else(|_| module_path.clone());
+            module_names.insert(canonical, file_stem);
         }
+
+        let module_aliases = compiler.import_aliases_from_main(input_path, &ast);
 
         // Generate .c and .h files for each module
         let mut object_files = Vec::new();
@@ -110,18 +115,26 @@ fn main() {
             let ir = ir::IRBuilder::build(module_program);
 
             // Generate module name from file path
-            let module_name = module_path
+            let file_stem = module_path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("module")
                 .to_string();
+            let canonical_module = module_path
+                .canonicalize()
+                .unwrap_or_else(|_| module_path.clone());
+            let symbol_prefix = module_aliases
+                .get(&canonical_module)
+                .cloned()
+                .unwrap_or_else(|| file_stem.clone());
 
             // Collect imported module names for header includes
             let mut import_names = Vec::new();
             for import in &module_program.imports {
                 // Resolve import path to get the actual module path
                 let import_path = compiler.resolve_import_path(&import.path, module_path);
-                if let Some(imported_module_name) = module_names.get(&import_path) {
+                let canonical_import = import_path.canonicalize().unwrap_or(import_path);
+                if let Some(imported_module_name) = module_names.get(&canonical_import) {
                     import_names.push(imported_module_name.clone());
                 }
             }
@@ -129,23 +142,29 @@ fn main() {
             // Generate .c file
             let mut codegen = cgen::Codegen::new();
             let source_ion = module_path.to_string_lossy();
-            let c_code =
-                codegen.generate_module_source(&ir, &module_name, &source_ion, &import_names);
-            let c_file = format!("{}.c", module_name);
+            let c_code = codegen.generate_module_source(
+                &ir,
+                &symbol_prefix,
+                &source_ion,
+                &import_names,
+                &file_stem,
+            );
+            let c_file = format!("{}.c", file_stem);
             if let Err(err) = fs::write(&c_file, c_code) {
                 eprintln!("Error writing C file '{}': {}", c_file, err);
                 process::exit(1);
             }
 
             // Generate .h file
-            let header_code = codegen.generate_module_header(module_program, &module_name);
-            let h_file = format!("{}.h", module_name);
+            let header_code =
+                codegen.generate_module_header(module_program, &symbol_prefix, &file_stem);
+            let h_file = format!("{}.h", file_stem);
             if let Err(err) = fs::write(&h_file, header_code) {
                 eprintln!("Error writing header file '{}': {}", h_file, err);
                 process::exit(1);
             }
 
-            let object_file = format!("{}.o", module_name);
+            let object_file = format!("{}.o", file_stem);
             object_files.push((c_file, object_file));
         }
 
@@ -207,21 +226,41 @@ fn main() {
     }
 }
 
+fn find_runtime_dir() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let header = dir.join("runtime").join("ion_runtime.h");
+        if header.exists() {
+            return Some(dir.join("runtime"));
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+fn runtime_include_args(runtime_dir: &Path) -> Vec<String> {
+    let mut args = vec![
+        "-I.".to_string(),
+        "-I..".to_string(),
+        "-Iruntime".to_string(),
+        "-I../runtime".to_string(),
+    ];
+    if let Some(parent) = runtime_dir.parent() {
+        args.push(format!("-I{}", parent.display()));
+    }
+    args.push(format!("-I{}", runtime_dir.display()));
+    args
+}
+
 fn compile_to_object(c_file: &str, object_file: &str) -> Result<(), String> {
     use std::process::Command;
 
     // Detect C compiler (gcc, clang, or user-specified via CC env var)
     let cc = std::env::var("CC").unwrap_or_else(|_| "gcc".to_string());
 
-    // Determine runtime include path based on current directory
-    // Try to find runtime directory relative to current working directory
-    let runtime_include = if Path::new("runtime/ion_runtime.h").exists() {
-        "runtime"
-    } else if Path::new("../runtime/ion_runtime.h").exists() {
-        "../runtime"
-    } else {
-        "runtime" // Default, compiler will search
-    };
+    let runtime_dir = find_runtime_dir().unwrap_or_else(|| PathBuf::from("runtime"));
 
     // Get the current working directory (where all files are generated)
     let current_dir = std::env::current_dir()
@@ -229,17 +268,18 @@ fn compile_to_object(c_file: &str, object_file: &str) -> Result<(), String> {
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from("."));
 
-    let output = Command::new(&cc)
-        .arg("-c")
+    let mut cmd = Command::new(&cc);
+    cmd.arg("-c")
         .arg(c_file)
         .arg("-o")
         .arg(object_file)
-        .arg("-I.") // Current directory (where headers should be)
-        .arg(format!("-I{}", current_dir.display())) // Explicit current directory as absolute path
-        .arg("-I..")
-        .arg("-Iruntime")
-        .arg("-I../runtime")
-        .arg(format!("-I{}", runtime_include))
+        .arg("-I.")
+        .arg(format!("-I{}", current_dir.display()));
+    for include in runtime_include_args(&runtime_dir) {
+        cmd.arg(include);
+    }
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to execute {}: {}", cc, e))?;
 
@@ -254,25 +294,28 @@ fn compile_to_object(c_file: &str, object_file: &str) -> Result<(), String> {
 fn link_executable(object_files: &[String], executable_name: &str) -> Result<(), String> {
     use std::process::Command;
 
-    // Detect C compiler (gcc, clang, or user-specified via CC env var)
     let cc = std::env::var("CC").unwrap_or_else(|_| "gcc".to_string());
 
-    // Check if runtime exists and add it
-    let mut args = vec!["-o", executable_name];
+    let mut args: Vec<String> = vec!["-o".to_string(), executable_name.to_string()];
     for obj_file in object_files {
-        args.push(obj_file);
+        args.push(obj_file.clone());
     }
 
-    // Add runtime if it exists
-    if Path::new("../runtime/ion_runtime.c").exists() {
-        args.push("../runtime/ion_runtime.c");
+    if let Some(runtime_dir) = find_runtime_dir() {
+        let runtime_c = runtime_dir.join("ion_runtime.c");
+        if runtime_c.exists() {
+            args.push(runtime_c.to_string_lossy().into_owned());
+        }
+    } else if Path::new("runtime/ion_runtime.c").exists() {
+        args.push("runtime/ion_runtime.c".to_string());
+    } else if Path::new("../runtime/ion_runtime.c").exists() {
+        args.push("../runtime/ion_runtime.c".to_string());
     }
 
-    // Add standard libraries
-    args.push("-lm"); // Math library
-    args.push("-lpthread"); // Thread library for channels and spawn
+    args.push("-lm".to_string());
+    args.push("-lpthread".to_string());
     if cfg!(windows) {
-        args.push("-lws2_32");
+        args.push("-lws2_32".to_string());
     }
 
     let output = Command::new(&cc)

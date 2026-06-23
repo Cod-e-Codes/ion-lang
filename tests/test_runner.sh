@@ -194,13 +194,13 @@ test_cgen_grep() {
     return 0
 }
 
-test_multifile() {
-    if [ ! -f "test_multifile.ion" ] || [ ! -f "utils.ion" ]; then
-        return 0
-    fi
+run_multi_test() {
+    local main_ion="$1"
+    local expected_exit="$2"
+    local output_name="${3:-${main_ion%.ion}}"
 
     test_count=$((test_count + 1))
-    echo -n "Testing test_multifile (multi-file mode)... "
+    echo -n "Testing ${output_name} (multi-file mode)... "
 
     local compiler_abs="$COMPILER"
     if [ "${COMPILER:0:1}" != "/" ]; then
@@ -211,7 +211,7 @@ test_multifile() {
     fi
 
     local compile_output
-    compile_output=$("$compiler_abs" --mode multi --output test_multifile test_multifile.ion 2>&1)
+    compile_output=$("$compiler_abs" --mode multi --output "$output_name" "$main_ion" 2>&1)
     local compile_exit=$?
     if [ "$compile_exit" -ne 0 ]; then
         echo -e "${RED}FAIL${NC} - Multi-file compilation failed"
@@ -220,38 +220,47 @@ test_multifile() {
         return 1
     fi
 
-    if [ ! -f "test_multifile.c" ] || [ ! -f "test_multifile.h" ] || [ ! -f "utils.c" ] || [ ! -f "utils.h" ]; then
-        echo -e "${RED}FAIL${NC} - Generated files missing"
-        fail_count=$((fail_count + 1))
-        rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile.o utils.o 2>/dev/null
-        return 1
-    fi
-
-    local multifile_cc="$CC test_multifile.c utils.c $(c_include_flags) \"$RUNTIME_OBJ\" $(c_link_libs) -o test_multifile${EXE_SUFFIX}"
-    if ! eval "$multifile_cc" 2>/dev/null; then
-        echo -e "${RED}FAIL${NC} - C compilation failed"
-        fail_count=$((fail_count + 1))
-        return 1
-    fi
-
-    if [ ! -f "test_multifile${EXE_SUFFIX}" ]; then
+    if [ ! -f "${output_name}${EXE_SUFFIX}" ]; then
         echo -e "${RED}FAIL${NC} - Executable not generated"
         fail_count=$((fail_count + 1))
-        rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile${EXE_SUFFIX} test_multifile.o utils.o 2>/dev/null
         return 1
     fi
 
-    ./test_multifile${EXE_SUFFIX} > /dev/null 2>&1
+    "./${output_name}${EXE_SUFFIX}" > /dev/null 2>&1
     local actual_exit=$?
-    if [ "$actual_exit" -eq 27 ]; then
+    if [ "$actual_exit" -eq "$expected_exit" ]; then
         echo -e "${GREEN}PASS${NC}"
         pass_count=$((pass_count + 1))
     else
-        echo -e "${RED}FAIL${NC} - Expected exit code 27, got $actual_exit"
+        echo -e "${RED}FAIL${NC} - Expected exit code $expected_exit, got $actual_exit"
         fail_count=$((fail_count + 1))
     fi
 
-    rm -f test_multifile.c test_multifile.h utils.c utils.h test_multifile test_multifile${EXE_SUFFIX} test_multifile.o utils.o 2>/dev/null
+    rm -f "${output_name}${EXE_SUFFIX}" "${output_name}.c" "${output_name}.h" "${output_name}.o" 2>/dev/null
+    rm -f utils.c utils.h utils.o struct_lib.c struct_lib.h struct_lib.o 2>/dev/null
+    rm -f fmt.c fmt.h fmt.o io.c io.h io.o 2>/dev/null
+    return 0
+}
+
+test_multifile() {
+    if [ ! -f "test_multifile.ion" ] || [ ! -f "utils.ion" ]; then
+        return 0
+    fi
+    run_multi_test "test_multifile.ion" 27 "test_multifile"
+}
+
+test_multi_struct() {
+    if [ ! -f "test_multi_struct.ion" ] || [ ! -f "struct_lib.ion" ]; then
+        return 0
+    fi
+    run_multi_test "test_multi_struct.ion" 30 "test_multi_struct"
+}
+
+test_multi_fmt_io() {
+    if [ ! -f "test_multi_fmt_io.ion" ]; then
+        return 0
+    fi
+    run_multi_test "test_multi_fmt_io.ion" 42 "test_multi_fmt_io"
 }
 
 strip_cr() {
@@ -391,6 +400,8 @@ echo ""
 
 run_manifest "test_expectations.tsv"
 test_multifile || true
+test_multi_struct || true
+test_multi_fmt_io || true
 
 echo ""
 echo "========================="

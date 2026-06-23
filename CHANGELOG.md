@@ -8,6 +8,8 @@
 - **LSP**: diagnostics, hover, completion, go-to-definition; multi-error reporting; symbol table mirroring; diagnostics cleared on close; hover fixes for `let` bindings and module-qualified calls.
 - **Tooling**: GitHub Actions CI (Linux and Windows), pinned toolchain, `test_expectations.tsv` manifest, `--version`, line-numbered errors, Cursor agent skills. Split `tc` and `cgen` into submodules. Documented checked-in `examples/*.c` codegen snapshots in README and integration-test skill; regenerated example C output. Fixed `researching-pl-literature` skill `paper-seeds` reference formatting.
 - **Fixes**: match rvalue codegen, `Vec` struct drops, channel codegen, parser handling of `alias::call()`, scope-drop for moved-into-call bindings, HTTP server on Windows, integration harness on Windows. Integer indexing and `Vec<i32>` inference in the type checker. Match rvalue arms: reject diverging arms mixed with value arms; structural control-flow analysis for arm bodies (nested `if`/`else`, `loop` without `break`, `unsafe` blocks); reject mixed diverge and value-producing paths within one arm; cgen assigns through `if`/`else` value branches.
+- **Examples**: `text_summary` (fixture file), `data_lib` (multi-module), `channel_worker` (flat single-file).
+- **Multi-file fixes**: merge private struct types for cross-module type checking; per-module C symbol prefixes in multi-file codegen (`io_print_int`); walk-up `runtime/` discovery for nested build directories. Integration tests `test_multi_struct`, `test_multi_fmt_io`. Example policy: single-file examples commit `.c` snapshots; `data_lib` multi-file keeps `.ion` only.
 
 ## 2025-12
 

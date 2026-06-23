@@ -36,6 +36,7 @@ examples/showcase
 
 # Do NOT ignore .c or .ion source files in examples
 !examples/*.c
+!examples/**/*.c
 !examples/*.ion
 
 # ------------------------------------

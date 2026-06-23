@@ -1,0 +1,5 @@
+import "struct_lib.ion" as lib;
+
+fn main() -> int {
+    return lib::compute();
+}

@@ -1,0 +1,3 @@
+Ion is move-only.
+Channels carry work between threads.
+No garbage collector here.

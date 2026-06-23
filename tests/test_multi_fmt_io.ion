@@ -1,0 +1,8 @@
+import "../stdlib/fmt.ion" as fmt;
+import "../stdlib/io.ion" as io;
+
+fn main() -> int {
+    let s: String = fmt::int_to_string(42);
+    io::println(s);
+    return 42;
+}
