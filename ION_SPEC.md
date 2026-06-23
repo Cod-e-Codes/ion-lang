@@ -512,6 +512,7 @@ Fixed-size arrays `[T; N]` have the following safety properties:
   - Bounds checking can be disabled in `unsafe` blocks for performance-critical code
 - **Compile-time size**: Array size `N` must be a compile-time constant
 - **Stack allocation**: Arrays are allocated on the stack by default
+- **Index type**: The index expression may be any integer type (`int`, `i32`, `u32`, etc.).
 
 **Safe array access:**
 ```ion
@@ -996,6 +997,7 @@ impl<T> Vec<T> {
 Note that:
 
 - `Vec<T>` is `Send` if `T: Send`.
+- `Vec::new()` and `Vec::with_capacity()` infer `T` from a `let` type annotation when present (e.g. `let v: Vec<i32> = Vec::new()`).
 - `Vec::get()` and `Vec::pop()` return `Option<T>` to handle out-of-bounds or empty cases.
 - `Vec::set()` requires a mutable reference and returns an error code (0 for success, non-zero for failure).
 

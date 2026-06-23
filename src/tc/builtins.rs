@@ -71,9 +71,9 @@ impl TypeChecker {
                 });
             }
             let cap_ty = self.check_expr(&call_expr.args[0])?;
-            if !types_equal(&cap_ty, &Type::Int) {
+            if !self.is_integer_type(&cap_ty) {
                 return Err(TypeCheckError::TypeMismatch {
-                    expected: "int".to_string(),
+                    expected: "integer type".to_string(),
                     got: type_to_string(&cap_ty),
                     span: call_expr.args[0].span(),
                 });
@@ -151,14 +151,18 @@ impl TypeChecker {
             } = vec_ty
                 && let Type::Vec { ref elem_type } = **inner_ty
             {
-                if !types_equal(&value_ty, elem_type) {
+                let resolved_value_ty = self.resolve_type_name(&value_ty)?;
+                let resolved_elem_ty = self.resolve_type_name(elem_type)?;
+                let numeric_coerced =
+                    Self::can_coerce_numeric(&resolved_value_ty, &resolved_elem_ty);
+                if !numeric_coerced && !types_equal(&resolved_value_ty, &resolved_elem_ty) {
                     return Err(TypeCheckError::TypeMismatch {
                         expected: type_to_string(elem_type),
                         got: type_to_string(&value_ty),
                         span: call_expr.args[1].span(),
                     });
                 }
-                return Ok(Some(Type::Int)); // void return
+                return Ok(Some(Type::Void)); // void return
             }
             return Err(TypeCheckError::TypeMismatch {
                 expected: "&mut Vec<T>".to_string(),
@@ -215,9 +219,9 @@ impl TypeChecker {
             }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
             let index_ty = self.check_expr(&call_expr.args[1])?;
-            if !types_equal(&index_ty, &Type::Int) {
+            if !self.is_integer_type(&index_ty) {
                 return Err(TypeCheckError::TypeMismatch {
-                    expected: "int".to_string(),
+                    expected: "integer type".to_string(),
                     got: type_to_string(&index_ty),
                     span: call_expr.args[1].span(),
                 });
@@ -259,9 +263,9 @@ impl TypeChecker {
             let vec_ty = self.check_expr(&call_expr.args[0])?;
             let index_ty = self.check_expr(&call_expr.args[1])?;
             let value_ty = self.check_expr(&call_expr.args[2])?;
-            if !types_equal(&index_ty, &Type::Int) {
+            if !self.is_integer_type(&index_ty) {
                 return Err(TypeCheckError::TypeMismatch {
-                    expected: "int".to_string(),
+                    expected: "integer type".to_string(),
                     got: type_to_string(&index_ty),
                     span: call_expr.args[1].span(),
                 });
@@ -272,7 +276,11 @@ impl TypeChecker {
             } = vec_ty
                 && let Type::Vec { ref elem_type } = **inner_ty
             {
-                if !types_equal(&value_ty, elem_type) {
+                let resolved_value_ty = self.resolve_type_name(&value_ty)?;
+                let resolved_elem_ty = self.resolve_type_name(elem_type)?;
+                let numeric_coerced =
+                    Self::can_coerce_numeric(&resolved_value_ty, &resolved_elem_ty);
+                if !numeric_coerced && !types_equal(&resolved_value_ty, &resolved_elem_ty) {
                     return Err(TypeCheckError::TypeMismatch {
                         expected: type_to_string(elem_type),
                         got: type_to_string(&value_ty),
@@ -357,7 +365,7 @@ impl TypeChecker {
             } = str_ty
                 && let Type::String = **inner_ty
             {
-                return Ok(Some(Type::Int)); // void return
+                return Ok(Some(Type::Void)); // void return
             }
             return Err(TypeCheckError::TypeMismatch {
                 expected: "&mut String".to_string(),
@@ -390,7 +398,7 @@ impl TypeChecker {
                         span: call_expr.args[1].span(),
                     });
                 }
-                return Ok(Some(Type::Int)); // void return
+                return Ok(Some(Type::Void)); // void return
             }
             return Err(TypeCheckError::TypeMismatch {
                 expected: "&mut String".to_string(),

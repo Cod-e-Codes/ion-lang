@@ -1,0 +1,38 @@
+// Vec<i32> with context-inferred Vec::new and i32 indices
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<i32> = Vec::new();
+    let cap: i32 = 4;
+    let mut _spare: Vec<i32> = Vec::with_capacity(cap);
+    Vec::push(&mut v, 10);
+
+    let idx: i32 = 0;
+    match Vec::get(&v, idx) {
+        Option::Some(value) => {
+            if value != 10 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+
+    Vec::set(&mut v, idx, 20);
+    match Vec::get(&v, 0) {
+        Option::Some(value) => {
+            if value != 20 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    };
+
+    return 0;
+}

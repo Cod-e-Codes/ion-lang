@@ -113,6 +113,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_push_pop.ion` - Vec push and pop operations
 - `test_vec_get_set.ion` - Vec get and set operations
 - `test_vec_capacity.ion` - Vec capacity management
+- `test_vec_i32.ion` - `Vec<i32>` with annotated `Vec::new`, `i32` indices
+- `test_index_i32.ion` - Array indexing with `i32` index variables
 
 ### Modules and FFI
 - `test_module_basic.ion` - Module system and imports
@@ -123,6 +125,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_array_basic.ion` - Fixed-size arrays
 - `test_array_literal.ion` - Array literals
 - `test_array_indexing.ion` - Array indexing operations
+- `test_index_i32.ion` - Array indexing with `i32` index variables
 - `test_array_bounds_safe.ion` - Array bounds checking with valid indices (Safety Enhancement)
 - `test_unsafe_array_indexing.ion` - Unsafe array indexing without bounds checking (Safety Enhancement)
 - `test_slice_bounds_codegen.ion` - Slice bounds checking in generated C (codegen grep)

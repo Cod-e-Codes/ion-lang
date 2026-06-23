@@ -281,7 +281,8 @@ impl TypeChecker {
     pub(crate) fn is_copy_type(ty: &Type) -> bool {
         matches!(
             ty,
-            Type::Int
+            Type::Void
+                | Type::Int
                 | Type::Bool
                 | Type::F32
                 | Type::F64

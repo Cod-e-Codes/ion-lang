@@ -55,6 +55,8 @@ test_vec_new.ion	run	0
 test_vec_push_pop.ion	run	0			
 test_vec_get_set.ion	run	0			
 test_vec_capacity.ion	run	0			
+test_vec_i32.ion	run	0			
+test_index_i32.ion	run	0			
 test_string_new.ion	run	0			
 test_string_push_str.ion	run	0			
 test_string_push_byte.ion	run	79			

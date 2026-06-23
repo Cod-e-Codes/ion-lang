@@ -1354,6 +1354,7 @@ fn mangle_type_name(base: &str, params: &[Type]) -> String {
 
 fn type_name_for_mangle(ty: &Type) -> String {
     match ty {
+        Type::Void => "void".to_string(),
         Type::Int => "int".to_string(),
         Type::Bool => "bool".to_string(),
         Type::F32 => "f32".to_string(),
@@ -1731,7 +1732,8 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
                 .collect(),
             return_type: Box::new(substitute_type(return_type, substitutions)),
         },
-        Type::Int
+        Type::Void
+        | Type::Int
         | Type::Bool
         | Type::F32
         | Type::F64

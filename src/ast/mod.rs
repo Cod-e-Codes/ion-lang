@@ -94,6 +94,7 @@ pub struct Param {
 
 #[derive(Debug, Clone)]
 pub enum Type {
+    Void,
     Int,
     Bool,
     F32,

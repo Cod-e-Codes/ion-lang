@@ -79,7 +79,7 @@ use crate::ast::*;
 pub(crate) fn fn_type_from_signature(params: &[Param], return_type: &Option<Type>) -> Type {
     Type::Fn {
         params: params.iter().map(|p| p.ty.clone()).collect(),
-        return_type: Box::new(return_type.clone().unwrap_or(Type::Int)),
+        return_type: Box::new(return_type.clone().unwrap_or(Type::Void)),
     }
 }
 
@@ -87,6 +87,7 @@ pub(crate) fn types_equal(a: &Type, b: &Type) -> bool {
     // Note: Type alias resolution should happen before calling types_equal
     // The caller should use resolve_type_name first
     match (a, b) {
+        (Type::Void, Type::Void) => true,
         (Type::Int, Type::Int) => true,
         (Type::Bool, Type::Bool) => true,
         (Type::F32, Type::F32) => true,
@@ -196,6 +197,7 @@ pub(crate) fn types_equal(a: &Type, b: &Type) -> bool {
 
 pub fn type_to_string(ty: &Type) -> String {
     match ty {
+        Type::Void => "void".to_string(),
         Type::Int => "int".to_string(),
         Type::Bool => "bool".to_string(),
         Type::F32 => "f32".to_string(),

@@ -123,7 +123,8 @@ pub(crate) fn substitute_type_params(
             return_type: Box::new(substitute_type_params(return_type, substitutions)),
         },
         // Primitive types don't need substitution
-        Type::Int
+        Type::Void
+        | Type::Int
         | Type::Bool
         | Type::F32
         | Type::F64
@@ -248,6 +249,7 @@ pub(crate) fn fn_type_to_c_decl(ty: &Type, name: &str) -> String {
 
 pub(crate) fn type_to_c_impl(ty: &Type) -> String {
     match ty {
+        Type::Void => "void".to_string(),
         Type::Int => "int".to_string(),
         Type::Bool => "int".to_string(), // C doesn't have native bool, use int with 0/1
         Type::F32 => "float".to_string(),

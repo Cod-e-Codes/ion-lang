@@ -2387,8 +2387,12 @@ impl Codegen {
                 };
 
                 // Handle special built-in functions
+                let builtin_return_type = match resolved_callee.as_str() {
+                    "Vec::new" | "Vec::with_capacity" => type_context.or(return_type.as_ref()),
+                    _ => return_type.as_ref(),
+                };
                 if let Some(code) =
-                    self.generate_builtin_call(resolved_callee.as_str(), args, return_type.as_ref())
+                    self.generate_builtin_call(resolved_callee.as_str(), args, builtin_return_type)
                 {
                     self.write(&code);
                 } else {
@@ -3534,7 +3538,8 @@ fn collect_slice_types_impl(
 
 fn collect_slice_types_from_type(ty: &Type, slice_types: &mut std::collections::HashSet<String>) {
     match ty {
-        Type::Int
+        Type::Void
+        | Type::Int
         | Type::Bool
         | Type::F32
         | Type::F64

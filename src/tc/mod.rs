@@ -1304,29 +1304,38 @@ impl TypeChecker {
                         let numeric_coerced =
                             Self::can_coerce_numeric(&resolved_init_type, type_ann);
 
-                        // Check for array element type coercion: [int; N] can be coerced to [u8; N] if element types can be coerced
-                        let array_elem_coerced = if let Type::Array {
-                            inner: init_elem,
-                            size: init_size,
-                        } = &resolved_init_type
-                        {
-                            if let Type::Array {
-                                inner: ann_elem,
-                                size: ann_size,
-                            } = type_ann
-                            {
+                        // Check for container element coercion (array, Vec)
+                        let container_elem_coerced = match (&resolved_init_type, type_ann) {
+                            (
+                                Type::Array {
+                                    inner: init_elem,
+                                    size: init_size,
+                                },
+                                Type::Array {
+                                    inner: ann_elem,
+                                    size: ann_size,
+                                },
+                            ) => {
                                 init_size == ann_size
                                     && Self::can_coerce_numeric(init_elem, ann_elem)
-                            } else {
-                                false
                             }
-                        } else {
-                            false
+                            (
+                                Type::Vec {
+                                    elem_type: init_elem,
+                                },
+                                Type::Vec {
+                                    elem_type: ann_elem,
+                                },
+                            ) => {
+                                types_equal(init_elem, ann_elem)
+                                    || Self::can_coerce_numeric(init_elem, ann_elem)
+                            }
+                            _ => false,
                         };
 
                         if !coerced
                             && !numeric_coerced
-                            && !array_elem_coerced
+                            && !container_elem_coerced
                             && !types_equal(&resolved_init_type, type_ann)
                         {
                             return Err(TypeCheckError::TypeMismatch {
@@ -2499,7 +2508,7 @@ impl TypeChecker {
                     });
                 }
 
-                Ok(Type::Int)
+                Ok(Type::Void)
             }
             Expr::Recv(recv_expr) => {
                 // recv(receiver): receiver must be &mut Receiver<T>, expression type is T.
@@ -2615,7 +2624,7 @@ impl TypeChecker {
                         ),
                         None,
                     );
-                    return Ok(return_type.unwrap_or(Type::Int));
+                    return Ok(return_type.unwrap_or(Type::Void));
                 }
 
                 // Verify enum exists and clone to avoid borrow issues
@@ -3216,7 +3225,7 @@ impl TypeChecker {
                         &generic_substitutions,
                     ))
                 } else {
-                    Ok(Type::Int)
+                    Ok(Type::Void)
                 }
             }
             Expr::MethodCall(method_call) => {
@@ -3380,7 +3389,7 @@ impl TypeChecker {
                     None,
                 );
 
-                Ok(return_type_opt.unwrap_or(Type::Int))
+                Ok(return_type_opt.unwrap_or(Type::Void))
             }
             Expr::TupleLit(tuple_lit) => {
                 if tuple_lit.elements.is_empty() {
@@ -3449,9 +3458,9 @@ impl TypeChecker {
 
                 // Check index expression is integer
                 let index_ty = self.check_expr(&index_expr.index)?;
-                if !types_equal(&index_ty, &Type::Int) {
+                if !self.is_integer_type(&index_ty) {
                     return Err(TypeCheckError::TypeMismatch {
-                        expected: "int".to_string(),
+                        expected: "integer type".to_string(),
                         got: type_to_string(&index_ty),
                         span: index_expr.index.span(),
                     });
@@ -3539,7 +3548,7 @@ impl TypeChecker {
                         }
 
                         // Assignment returns unit type (void) in Ion
-                        Ok(Type::Int) // Using Int as placeholder for unit/void
+                        Ok(Type::Void)
                     }
                     Expr::Index(index_expr) => {
                         // Array element assignment: arr[i] = value
@@ -3564,7 +3573,7 @@ impl TypeChecker {
                                 }
 
                                 // Assignment returns unit type
-                                Ok(Type::Int) // Using Int as placeholder for unit/void
+                                Ok(Type::Void)
                             }
                             Type::Ref { inner, .. } => {
                                 // Indexing a reference to an array
@@ -3587,7 +3596,7 @@ impl TypeChecker {
                                             });
                                         }
 
-                                        Ok(Type::Int)
+                                        Ok(Type::Void)
                                     }
                                     _ => Err(TypeCheckError::TypeMismatch {
                                         expected: "array type for indexed assignment".to_string(),
@@ -3756,8 +3765,9 @@ impl TypeChecker {
         for stmt in block.statements.iter().rev() {
             match stmt {
                 Stmt::Return(ret) => {
-                    if let Some(ref value) = ret.value {
-                        return self.check_expr(value);
+                    if ret.value.is_some() {
+                        // return exits the enclosing function; arm contributes no value
+                        return Ok(Type::Void);
                     }
                     return Err(TypeCheckError::TypeMismatch {
                         expected: "return value in match arm".to_string(),
@@ -3772,7 +3782,7 @@ impl TypeChecker {
             }
         }
         // Arms that only run statements (e.g. empty None branch, if guards) produce unit.
-        Ok(Type::Int)
+        Ok(Type::Void)
     }
 
     /// Unify types from match arms; numeric coercion follows assignment rules.
@@ -3901,7 +3911,8 @@ impl TypeChecker {
     /// Used to enforce the no-escape rule.
     fn is_reference_containing(&self, ty: &Type) -> bool {
         match ty {
-            Type::Int
+            Type::Void
+            | Type::Int
             | Type::Bool
             | Type::F32
             | Type::F64
@@ -3974,6 +3985,7 @@ impl TypeChecker {
     fn is_send(&self, ty: &Type) -> bool {
         match ty {
             // Primitives are Send
+            Type::Void => true,
             Type::Int => true,
             Type::Bool => true,
             Type::F32 => true,
