@@ -114,7 +114,6 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_get_set.ion` - Vec get and set operations
 - `test_vec_capacity.ion` - Vec capacity management
 - `test_vec_i32.ion` - `Vec<i32>` with annotated `Vec::new`, `i32` indices
-- `test_index_i32.ion` - Array indexing with `i32` index variables
 
 ### Modules and FFI
 - `test_module_basic.ion` - Module system and imports
