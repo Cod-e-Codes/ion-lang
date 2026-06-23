@@ -36,7 +36,7 @@ Known limitations: [ION_SPEC.md section 10.2](ION_SPEC.md#102-known-limitations)
 
 ### Prerequisites
 
-- Rust stable (see `rust-toolchain.toml`)
+- Rust 1.96.0 (see `rust-toolchain.toml`; `rustup update` if your toolchain is older)
 - A C compiler: GCC or Clang (on Windows, use MinGW GCC for generated C; MSVC is not the primary target)
 - Git Bash on Windows for `tests/test_runner.sh`
 

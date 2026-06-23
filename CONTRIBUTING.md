@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust stable (`rust-toolchain.toml` pins the channel)
+- Rust 1.96.0 (`rust-toolchain.toml` pins the version; run `rustup update` if `rustc --version` is older)
 - GCC or Clang (MinGW on Windows for generated C)
 - Git Bash on Windows for integration tests
 
