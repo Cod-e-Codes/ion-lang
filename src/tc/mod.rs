@@ -4294,25 +4294,11 @@ fn block_contains_break(block: &Block) -> bool {
                     return true;
                 }
             }
-            Stmt::While(while_stmt) => {
-                if block_contains_break(&while_stmt.body) {
-                    return true;
-                }
-            }
-            Stmt::Loop(loop_stmt) => {
-                if block_contains_break(&loop_stmt.body) {
-                    return true;
-                }
-            }
-            Stmt::For(for_stmt) => {
-                if block_contains_break(&for_stmt.body) {
-                    return true;
-                }
-            }
-            Stmt::UnsafeBlock(unsafe_stmt) => {
-                if block_contains_break(&unsafe_stmt.body) {
-                    return true;
-                }
+            Stmt::While(while_stmt) if block_contains_break(&while_stmt.body) => return true,
+            Stmt::Loop(loop_stmt) if block_contains_break(&loop_stmt.body) => return true,
+            Stmt::For(for_stmt) if block_contains_break(&for_stmt.body) => return true,
+            Stmt::UnsafeBlock(unsafe_stmt) if block_contains_break(&unsafe_stmt.body) => {
+                return true;
             }
             _ => {}
         }
