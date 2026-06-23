@@ -39,7 +39,10 @@ Environment overrides:
 
 ```bash
 COMPILER=../target/debug/ion-compiler CC=clang ./test_runner.sh
+RUNTIME_OBJ=/tmp/ion_runtime.o ./test_runner.sh
 ```
+
+**Harness link step:** On startup, `test_runner.sh` precompiles `runtime/ion_runtime.c` once to `RUNTIME_OBJ` (default `.ion_test_runtime.o`) and links that object for each `run` test and `test_multifile`. Same `gcc` flags as before; manual example compiles below still use `ion_runtime.c` directly.
 
 **Windows:** Use Git Bash, not WSL. Rebuild release after compiler changes. Stop `ion-lsp` if build fails with "Access is denied".
 

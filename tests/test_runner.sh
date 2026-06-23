@@ -10,13 +10,55 @@ if [ -f "${COMPILER}.exe" ] && [ ! -x "$COMPILER" ]; then
     COMPILER="${COMPILER}.exe"
 fi
 CC="${CC:-gcc}"
+RUNTIME_OBJ="${RUNTIME_OBJ:-.ion_test_runtime.o}"
 
 EXE_SUFFIX=""
-if command -v uname >/dev/null 2>&1; then
+is_windows_host() {
+    command -v uname >/dev/null 2>&1 || return 1
     case "$(uname -s)" in
-        MINGW*|MSYS*|CYGWIN*) EXE_SUFFIX=".exe" ;;
+        MINGW*|MSYS*|CYGWIN*) return 0 ;;
+        *) return 1 ;;
     esac
+}
+if is_windows_host; then
+    EXE_SUFFIX=".exe"
 fi
+
+resolve_runtime_src() {
+    if [ -f "../runtime/ion_runtime.c" ]; then
+        printf '%s' "../runtime/ion_runtime.c"
+    elif [ -f "runtime/ion_runtime.c" ]; then
+        printf '%s' "runtime/ion_runtime.c"
+    fi
+}
+
+c_include_flags() {
+    printf '%s' "-I. -I.. -Iruntime -I../runtime"
+}
+
+c_link_libs() {
+    local libs="-lpthread"
+    if is_windows_host; then
+        libs="$libs -lws2_32"
+    fi
+    printf '%s' "$libs"
+}
+
+precompile_runtime() {
+    local runtime_src
+    runtime_src="$(resolve_runtime_src)"
+    if [ -z "$runtime_src" ]; then
+        echo -e "${RED}ERROR${NC} - ion_runtime.c not found"
+        exit 1
+    fi
+    if [ -f "$RUNTIME_OBJ" ] && [ ! "$runtime_src" -nt "$RUNTIME_OBJ" ]; then
+        return 0
+    fi
+    if ! $CC -c "$runtime_src" $(c_include_flags) -o "$RUNTIME_OBJ" 2>/dev/null; then
+        echo -e "${RED}ERROR${NC} - Failed to precompile runtime ($runtime_src)"
+        exit 1
+    fi
+}
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -48,19 +90,7 @@ test_file() {
         return 1
     fi
 
-    local compile_cmd="$CC \"$c_file\""
-    if [ -f "../runtime/ion_runtime.c" ]; then
-        compile_cmd="$compile_cmd ../runtime/ion_runtime.c"
-    elif [ -f "runtime/ion_runtime.c" ]; then
-        compile_cmd="$compile_cmd runtime/ion_runtime.c"
-    fi
-    compile_cmd="$compile_cmd -I. -I.. -Iruntime -I../runtime -lpthread"
-    if command -v uname >/dev/null 2>&1; then
-        case "$(uname -s)" in
-            MINGW*|MSYS*|CYGWIN*) compile_cmd="$compile_cmd -lws2_32" ;;
-        esac
-    fi
-    compile_cmd="$compile_cmd -o \"${test_name}${EXE_SUFFIX}\""
+    local compile_cmd="$CC \"$c_file\" \"$RUNTIME_OBJ\" $(c_include_flags) $(c_link_libs) -o \"${test_name}${EXE_SUFFIX}\""
     if ! eval "$compile_cmd" 2>/dev/null; then
         echo -e "${RED}FAIL${NC} - C compilation failed"
         fail_count=$((fail_count + 1))
@@ -197,13 +227,7 @@ test_multifile() {
         return 1
     fi
 
-    local multifile_cc="$CC test_multifile.c utils.c -I. -I.. -Iruntime -I../runtime ../runtime/ion_runtime.c -lpthread"
-    if command -v uname >/dev/null 2>&1; then
-        case "$(uname -s)" in
-            MINGW*|MSYS*|CYGWIN*) multifile_cc="$multifile_cc -lws2_32" ;;
-        esac
-    fi
-    multifile_cc="$multifile_cc -o test_multifile${EXE_SUFFIX}"
+    local multifile_cc="$CC test_multifile.c utils.c $(c_include_flags) \"$RUNTIME_OBJ\" $(c_link_libs) -o test_multifile${EXE_SUFFIX}"
     if ! eval "$multifile_cc" 2>/dev/null; then
         echo -e "${RED}FAIL${NC} - C compilation failed"
         fail_count=$((fail_count + 1))
@@ -358,6 +382,8 @@ echo "========================="
 echo ""
 
 cd "$(dirname "$0")" || exit 1
+
+precompile_runtime
 
 verify_harness_tsv_parser
 verify_harness_cgen_empty_pattern

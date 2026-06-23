@@ -32,7 +32,7 @@ Copy and track progress:
 - [ ] 7. Codegen - C output in `src/cgen/` (`mod.rs`, `types.rs`, `builtins.rs`, `drop.rs`) (+ runtime/ if new runtime support)
 - [ ] 8. Tests - integration test in tests/ (see ion-integration-tests skill)
 - [ ] 9. LSP - update src/lsp/ if diagnostics/hover/completion affected
-- [ ] 10. cargo test && cargo build --release && tests/test_runner.sh
+- [ ] 10. cargo test && cargo build --release && tests/test_runner.sh (harness precompiles `runtime/ion_runtime.c` once per run)
 ```
 
 For new syntax: **lexer → AST → parser** (tokens must exist before the parser can consume them; AST shapes should be defined before parser returns them). Skip stages that don't apply (e.g., parser-only bugfix may not touch IR).
@@ -87,7 +87,7 @@ Add new `TypeCheckError` variants only when existing ones can't express the fail
 ### IR and codegen
 
 - `IRBuilder::build` - keep lowering deterministic
-- `cgen` - generated C must compile with `gcc` + `runtime/ion_runtime.c` + `-lpthread`
+- `cgen` - generated C must compile with `gcc` + `runtime/ion_runtime.c` (or precompiled `.o` via `test_runner.sh`) + `-lpthread`
 - Multi-file: test with `--mode multi` if imports or visibility involved
 
 ### Runtime (`runtime/`)

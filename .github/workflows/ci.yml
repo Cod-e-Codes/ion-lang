@@ -18,6 +18,8 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: Swatinem/rust-cache@v2
+
       - run: cargo fmt --check
       - run: cargo test
       - run: cargo clippy -- -D warnings
@@ -26,25 +28,28 @@ jobs:
       - run: cargo build --release --bin ion-lsp
       - run: ./target/release/ion-compiler --version
 
+      - name: Integration tests (Linux)
+        shell: bash
+        env:
+          COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+        run: cd tests && bash test_runner.sh
+
   integration:
     permissions:
       contents: read
 
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@1.96.0
 
+      - uses: Swatinem/rust-cache@v2
+
       - run: cargo build --release --bin ion-compiler
 
-      - name: Integration tests
+      - name: Integration tests (Windows)
         shell: bash
         env:
           COMPILER: ${{ github.workspace }}/target/release/ion-compiler

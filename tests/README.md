@@ -26,6 +26,8 @@ The harness defaults to `../target/release/ion-compiler`. Rebuild it after compi
 cargo build --release
 ```
 
+At startup the harness precompiles `runtime/ion_runtime.c` once to `.ion_test_runtime.o` (override with `RUNTIME_OBJ`) and links that object for every `run` test and `test_multifile`, instead of recompiling the runtime per test.
+
 If the release build fails with "Access is denied", stop `ion-lsp` (or any running `ion-compiler` / `ion-lsp` process) and retry. You can also build only the compiler:
 
 ```bash
@@ -281,6 +283,7 @@ Special cases (not in the manifest):
 
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
 - `CC`: C compiler to use (default: `gcc`)
+- `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 
 Example:
 ```bash
