@@ -1,0 +1,18 @@
+// Rvalue match: diverging arm (return) must not unify with a value-producing arm.
+enum E {
+    A(int);
+    B(int);
+}
+
+fn main() -> int {
+    let e: E = E::A(0);
+    let n: int = match e {
+        E::A(_) => {
+            return 1;
+        },
+        E::B(v) => {
+            v;
+        },
+    };
+    return n;
+}

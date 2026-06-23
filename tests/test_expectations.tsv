@@ -132,7 +132,7 @@ test_ref_return_error.ion	error		ReferenceEscape
 test_ref_return_error2.ion	error		ReferenceEscape\|TypeMismatch		
 test_channel_ref_error.ion	error		Send element type for channel		
 test_send_ref_error.ion	error		Send element type for channel		
-test_spawn_ref_error.ion	error		Send value for spawn capture
+test_spawn_ref_error.ion	error		Send value for spawn capture		
 test_spawn_borrow_error.ion	error		BorrowConflict		
 test_spawn_move_error.ion	error		UseAfterMove		
 test_struct_ref_error.ion	error		ReferenceEscape		
@@ -142,6 +142,7 @@ test_unsafe_extern_required.ion	error		must be inside an unsafe block
 test_if_bool_required.ion	error		bool.*if condition\|if condition.*bool		
 test_break_continue_error.ion	error		break statement outside of loop		
 test_match_arm_type_mismatch.ion	error		TypeMismatch		
+test_match_arm_divergent_rvalue.ion	error		diverging match arm		
 test_if_else_move_error.ion	error		UseAfterMove		
 test_fn_type_mismatch.ion	error		TypeMismatch		
 test_struct_field_drop.ion	cgen			ion_string_free(h.inner.s)	

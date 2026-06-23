@@ -2804,7 +2804,8 @@ impl TypeChecker {
 
                 // Check exhaustiveness: all variants must be covered
                 let mut covered_variants: Vec<String> = Vec::new();
-                let mut match_result_type: Option<Type> = None;
+                let mut match_value_type: Option<Type> = None;
+                let mut has_diverging_arm = false;
                 let expr_ty_clone = expr_ty.clone();
 
                 for arm in &match_expr.arms {
@@ -2857,15 +2858,26 @@ impl TypeChecker {
                     for stmt in &arm.body.statements {
                         self.check_stmt(stmt)?;
                     }
-                    let arm_ty = self.infer_block_result_type(&arm.body, arm.span)?;
-                    match &match_result_type {
-                        None => match_result_type = Some(arm_ty),
-                        Some(prev) => {
-                            match_result_type =
-                                Some(self.unify_match_arm_types(prev, &arm_ty, arm.span)?);
+                    match self.infer_block_result_type(&arm.body, arm.span)? {
+                        MatchArmValue::Diverges => has_diverging_arm = true,
+                        MatchArmValue::Unit => {}
+                        MatchArmValue::Value(arm_ty) => {
+                            match_value_type = Some(match match_value_type {
+                                None => arm_ty,
+                                Some(prev) => {
+                                    self.unify_match_arm_types(&prev, &arm_ty, arm.span)?
+                                }
+                            });
                         }
                     }
                     self.variables = prev_vars;
+                }
+
+                if has_diverging_arm && match_value_type.is_some() {
+                    return Err(TypeCheckError::Message(
+                        "diverging match arm produces no value but other arms produce a value"
+                            .to_string(),
+                    ));
                 }
 
                 // Check exhaustiveness
@@ -2878,9 +2890,7 @@ impl TypeChecker {
                     }
                 }
 
-                Ok(match_result_type.ok_or_else(|| {
-                    TypeCheckError::Message("Match expression has no arms".to_string())
-                })?)
+                Ok(match_value_type.unwrap_or(Type::Void))
             }
             Expr::Call(call_expr) => {
                 // Check if this is a built-in function first
@@ -3756,18 +3766,17 @@ impl TypeChecker {
         }
     }
 
-    /// Infer the value type produced by a match arm block (trailing expression or return value).
+    /// Infer what value a match arm contributes to expression unification.
     fn infer_block_result_type(
         &mut self,
         block: &Block,
         _span: Span,
-    ) -> Result<Type, TypeCheckError> {
+    ) -> Result<MatchArmValue, TypeCheckError> {
         for stmt in block.statements.iter().rev() {
             match stmt {
                 Stmt::Return(ret) => {
                     if ret.value.is_some() {
-                        // return exits the enclosing function; arm contributes no value
-                        return Ok(Type::Void);
+                        return Ok(MatchArmValue::Diverges);
                     }
                     return Err(TypeCheckError::TypeMismatch {
                         expected: "return value in match arm".to_string(),
@@ -3775,14 +3784,14 @@ impl TypeChecker {
                         span: ret.span,
                     });
                 }
+                Stmt::Break(_) | Stmt::Continue(_) => return Ok(MatchArmValue::Diverges),
                 Stmt::Expr(expr_stmt) => {
-                    return self.check_expr(&expr_stmt.expr);
+                    return Ok(MatchArmValue::Value(self.check_expr(&expr_stmt.expr)?));
                 }
                 _ => {}
             }
         }
-        // Arms that only run statements (e.g. empty None branch, if guards) produce unit.
-        Ok(Type::Void)
+        Ok(MatchArmValue::Unit)
     }
 
     /// Unify types from match arms; numeric coercion follows assignment rules.
@@ -4161,6 +4170,16 @@ impl TypeChecker {
             }
         }
     }
+}
+
+/// How a match arm contributes to rvalue unification.
+enum MatchArmValue {
+    /// `return`, `break`, or `continue` — arm does not produce a match value.
+    Diverges,
+    /// Empty block or statements only — unit (`void`).
+    Unit,
+    /// Trailing expression statement.
+    Value(Type),
 }
 
 /// True when control flow can leave this block and continue at the enclosing merge point.
