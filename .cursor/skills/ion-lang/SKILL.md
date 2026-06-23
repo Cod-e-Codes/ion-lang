@@ -75,6 +75,7 @@ Read these when the task matches:
 
 | Skill | When |
 |-------|------|
+| `writing-ion-code` | Writing new `.ion` programs, examples, or application logic |
 | `adding-ion-features` | Compiler work in `src/`, `runtime/`, `stdlib/`, or `ION_SPEC.md` |
 | `ion-integration-tests` | Adding or running `.ion` integration tests in `tests/` |
 | `ion-lsp-vscode` | LSP server or VS Code/Cursor extension in `ion-vscode/` |
