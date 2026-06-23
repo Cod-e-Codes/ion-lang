@@ -3479,30 +3479,106 @@ impl Codegen {
         result_var: &str,
         result_type: &Type,
     ) {
-        let result_idx = body.statements.iter().rposition(|stmt| {
-            matches!(stmt, IRStmt::Return(r) if r.value.is_some())
-                || matches!(stmt, IRStmt::Expr(_))
-        });
-        let prefix_len = result_idx.unwrap_or(body.statements.len());
-        let prefix = IRBlock {
-            name: body.name.clone(),
-            statements: body.statements[..prefix_len].to_vec(),
-            defers: body.defers.clone(),
-        };
-        self.generate_block(&prefix);
-        if let Some(idx) = result_idx {
-            self.write_indent();
-            self.write(&format!("{} = ", result_var));
-            match &body.statements[idx] {
-                IRStmt::Return(ret) => {
-                    if let Some(ref value) = ret.value {
-                        self.generate_expr_with_type(value, Some(result_type));
-                    }
+        self.emit_match_arm_result_from_stmts(&body.statements, 0, result_var, result_type);
+    }
+
+    fn emit_match_arm_result_from_stmts(
+        &mut self,
+        stmts: &[IRStmt],
+        idx: usize,
+        result_var: &str,
+        result_type: &Type,
+    ) {
+        if idx >= stmts.len() {
+            return;
+        }
+
+        let is_last = idx + 1 == stmts.len();
+        match &stmts[idx] {
+            IRStmt::Return(ret) => {
+                self.write_indent();
+                self.write("return");
+                if let Some(ref value) = ret.value {
+                    self.write(" ");
+                    self.generate_expr_with_type(value, Some(result_type));
                 }
-                IRStmt::Expr(expr) => self.generate_expr_with_type(expr, Some(result_type)),
-                _ => {}
+                self.writeln(";");
             }
-            self.writeln(";");
+            IRStmt::Break => {
+                self.write_indent();
+                self.writeln("break;");
+            }
+            IRStmt::Continue => {
+                self.write_indent();
+                self.writeln("continue;");
+            }
+            IRStmt::Expr(expr) => {
+                if is_last {
+                    self.write_indent();
+                    self.write(&format!("{} = ", result_var));
+                    self.generate_expr_with_type(expr, Some(result_type));
+                    self.writeln(";");
+                } else {
+                    self.generate_stmt(&stmts[idx]);
+                    self.emit_match_arm_result_from_stmts(stmts, idx + 1, result_var, result_type);
+                }
+            }
+            IRStmt::If(ir_if) => {
+                if is_last {
+                    self.write_indent();
+                    self.write("if (");
+                    self.generate_expr(&ir_if.cond);
+                    self.writeln(") {");
+                    self.indent_level += 1;
+                    self.emit_match_arm_result_from_stmts(
+                        &ir_if.then_block.statements,
+                        0,
+                        result_var,
+                        result_type,
+                    );
+                    self.indent_level -= 1;
+                    if let Some(else_blk) = &ir_if.else_block {
+                        self.write_indent();
+                        self.writeln("} else {");
+                        self.indent_level += 1;
+                        self.emit_match_arm_result_from_stmts(
+                            &else_blk.statements,
+                            0,
+                            result_var,
+                            result_type,
+                        );
+                        self.indent_level -= 1;
+                    }
+                    self.write_indent();
+                    self.writeln("}");
+                } else {
+                    self.generate_stmt(&stmts[idx]);
+                    self.emit_match_arm_result_from_stmts(stmts, idx + 1, result_var, result_type);
+                }
+            }
+            IRStmt::UnsafeBlock(unsafe_blk) => {
+                self.write_indent();
+                self.writeln("{");
+                self.indent_level += 1;
+                if is_last {
+                    self.emit_match_arm_result_from_stmts(
+                        &unsafe_blk.body.statements,
+                        0,
+                        result_var,
+                        result_type,
+                    );
+                } else {
+                    self.generate_block(&unsafe_blk.body);
+                    self.emit_match_arm_result_from_stmts(stmts, idx + 1, result_var, result_type);
+                }
+                self.indent_level -= 1;
+                self.write_indent();
+                self.writeln("}");
+            }
+            _ => {
+                self.generate_stmt(&stmts[idx]);
+                self.emit_match_arm_result_from_stmts(stmts, idx + 1, result_var, result_type);
+            }
         }
     }
 }

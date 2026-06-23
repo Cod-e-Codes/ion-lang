@@ -3836,13 +3836,25 @@ impl TypeChecker {
                     self.merge_match_arm_branches(then_r, rest_r, if_stmt.span)
                 }
             }
-            Stmt::Let(_)
-            | Stmt::Defer(_)
-            | Stmt::Spawn(_)
-            | Stmt::While(_)
-            | Stmt::Loop(_)
-            | Stmt::For(_)
-            | Stmt::UnsafeBlock(_) => self.infer_stmts_result_from(stmts, idx + 1, span),
+            Stmt::Let(_) | Stmt::Defer(_) | Stmt::Spawn(_) | Stmt::While(_) | Stmt::For(_) => {
+                self.infer_stmts_result_from(stmts, idx + 1, span)
+            }
+            Stmt::Loop(loop_stmt) => {
+                if block_contains_break(&loop_stmt.body) {
+                    self.infer_stmts_result_from(stmts, idx + 1, span)
+                } else {
+                    Ok(MatchArmValue::Diverges)
+                }
+            }
+            Stmt::UnsafeBlock(unsafe_stmt) => {
+                if is_last {
+                    self.infer_block_result_type(&unsafe_stmt.body, span)
+                } else {
+                    let inner_r = self.infer_block_result_type(&unsafe_stmt.body, span)?;
+                    let rest_r = self.infer_stmts_result_from(stmts, idx + 1, span)?;
+                    self.merge_match_arm_branches(inner_r, rest_r, unsafe_stmt.span)
+                }
+            }
         }
     }
 
@@ -4268,6 +4280,46 @@ enum MatchArmValue {
     Value(Type),
 }
 
+fn block_contains_break(block: &Block) -> bool {
+    for stmt in &block.statements {
+        match stmt {
+            Stmt::Break(_) => return true,
+            Stmt::If(if_stmt) => {
+                if block_contains_break(&if_stmt.then_block) {
+                    return true;
+                }
+                if let Some(else_blk) = &if_stmt.else_block
+                    && block_contains_break(else_blk)
+                {
+                    return true;
+                }
+            }
+            Stmt::While(while_stmt) => {
+                if block_contains_break(&while_stmt.body) {
+                    return true;
+                }
+            }
+            Stmt::Loop(loop_stmt) => {
+                if block_contains_break(&loop_stmt.body) {
+                    return true;
+                }
+            }
+            Stmt::For(for_stmt) => {
+                if block_contains_break(&for_stmt.body) {
+                    return true;
+                }
+            }
+            Stmt::UnsafeBlock(unsafe_stmt) => {
+                if block_contains_break(&unsafe_stmt.body) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True when control flow can leave this block and continue at the enclosing merge point.
 fn block_falls_through(block: &Block) -> bool {
     if block.statements.is_empty() {
@@ -4542,6 +4594,50 @@ fn collect_expr_var_refs(
 mod tests {
     use super::*;
     use crate::parser;
+
+    #[test]
+    fn match_arm_loop_without_break_is_diverging_with_value_arm() {
+        let src = r#"enum E { A(int); B(int); }
+fn main() -> int {
+    let e: E = E::A(0);
+    let n: int = match e {
+        E::A(_) => { loop { } 42; },
+        E::B(v) => { v; },
+    };
+    return n;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = parser::Parser::new(tokens).parse().unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_program(&program).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("diverging match arm"),
+            "expected cross-arm diverge error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn match_arm_unsafe_return_then_value_is_mixed() {
+        let src = r#"enum E { A(int); B(int); }
+fn main() -> int {
+    let e: E = E::A(0);
+    let n: int = match e {
+        E::A(_) => { unsafe { return 1; } 42; },
+        E::B(v) => { v; },
+    };
+    return n;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = parser::Parser::new(tokens).parse().unwrap();
+        let mut checker = TypeChecker::new();
+        let err = checker.check_program(&program).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("diverging and value-producing paths"),
+            "expected mixed-path error, got: {msg}"
+        );
+    }
 
     #[test]
     fn enum_variant_hover_spans_are_distinct() {
