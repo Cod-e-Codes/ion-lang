@@ -1,13 +1,21 @@
 import "../stdlib/fmt.ion" as fmt;
 
 fn main() -> int {
-    let s: String = fmt::int_to_string(12345);
-    if String::len(&s) != 5 {
+    let zero: String = fmt::int_to_string(0);
+    if zero != String::from("0") {
         return 1;
     }
-    let neg: String = fmt::int_to_string(-99);
-    if String::len(&neg) != 3 {
+    let pos: String = fmt::int_to_string(12345);
+    if pos != String::from("12345") {
         return 2;
+    }
+    let neg: String = fmt::int_to_string(-99);
+    if neg != String::from("-99") {
+        return 3;
+    }
+    let min: String = fmt::int_to_string(-2147483648);
+    if min != String::from("-2147483648") {
+        return 4;
     }
     return 0;
 }
