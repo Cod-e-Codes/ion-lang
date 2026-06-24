@@ -346,48 +346,11 @@ ion_string_t* fmt_int_to_string(int n) {
         value = (value / 10);
     }
     if (negative) {
-        ion_string_push_str(result, "-", 1);
+        ion_string_push_byte(result, (unsigned char)((uint8_t)45));
     }
     int i = (len - 1);
     while (i >= 0) {
-        uint8_t ch = ({ int __ion_idx_4 = i; (__ion_idx_4 >= 0 && __ion_idx_4 < 12) ? buf[__ion_idx_4] : (ion_panic("Array index out of bounds"), buf[0]); });
-        if (ch == 48) {
-            ion_string_push_str(result, "0", 1);
-        } else {
-            if (ch == 49) {
-                ion_string_push_str(result, "1", 1);
-            } else {
-                if (ch == 50) {
-                    ion_string_push_str(result, "2", 1);
-                } else {
-                    if (ch == 51) {
-                        ion_string_push_str(result, "3", 1);
-                    } else {
-                        if (ch == 52) {
-                            ion_string_push_str(result, "4", 1);
-                        } else {
-                            if (ch == 53) {
-                                ion_string_push_str(result, "5", 1);
-                            } else {
-                                if (ch == 54) {
-                                    ion_string_push_str(result, "6", 1);
-                                } else {
-                                    if (ch == 55) {
-                                        ion_string_push_str(result, "7", 1);
-                                    } else {
-                                        if (ch == 56) {
-                                            ion_string_push_str(result, "8", 1);
-                                        } else {
-                                            ion_string_push_str(result, "9", 1);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        ion_string_push_byte(result, (unsigned char)(({ int __ion_idx_4 = i; (__ion_idx_4 >= 0 && __ion_idx_4 < 12) ? buf[__ion_idx_4] : (ion_panic("Array index out of bounds"), buf[0]); })));
         i = (i - 1);
     }
     ret_val = result;
