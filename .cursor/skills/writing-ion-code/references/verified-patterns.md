@@ -117,7 +117,14 @@ fn main() -> int {
 
 Non-`pub` items are file-private. Qualified names use `alias::item`.
 
-Multi-file compile (manual):
+Multi-file build (`ion-build` with `mode = "multi"` in `ion.toml`):
+
+```powershell
+cd examples\data_lib
+..\..\target\release\ion-build.exe build
+```
+
+Manual codegen only (emits `.c`/`.h` in cwd):
 
 ```bash
 ./target/release/ion-compiler --mode multi --output app path/to/main.ion

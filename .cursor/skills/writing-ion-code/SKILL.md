@@ -56,7 +56,7 @@ fn main() -> int {
 }
 ```
 
-Import paths are string literals relative to the compiling file. Use `pub fn` in library modules; call with `alias::name(...)`.
+Import paths like `import "stdlib/io.ion" as io;` resolve via stdlib search paths (`ion.toml`, `ION_STDLIB`, project `stdlib/`). Same-directory and `../` relative paths still work. Use `pub fn` in library modules; call with `alias::name(...)`.
 
 ## Core syntax (verified)
 
@@ -123,7 +123,7 @@ Fn literals lower to static C functions and must not reference outer bindings (o
 
 ## Documentation comments
 
-Ion uses plain `//` line comments only — no `///` or `//!`. Contiguous `//` lines **immediately above** a declaration (no blank line before the declaration) are attached as documentation for IDE hover; the same rule applies when `pub` precedes the item. A blank line breaks association. File-level overview comments go at the top of the file before imports. Section-divider comment blocks in examples should be separated from declarations by a blank line. See ION_SPEC §12.6.
+Ion uses plain `//` line comments only. No `///` or `//!`. Contiguous `//` lines **immediately above** a declaration (no blank line before the declaration) are attached as documentation for IDE hover; the same rule applies when `pub` precedes the item. A blank line breaks association. File-level overview comments go at the top of the file before imports. Section-divider comment blocks in examples should be separated from declarations by a blank line. See ION_SPEC section 12.6.
 
 **Unsafe and FFI**
 
@@ -144,16 +144,19 @@ Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (define enu
 
 ## Build and verify
 
-With `ion.toml` at the project root (or example directory):
+With `ion.toml` in the project or example directory (or `examples/*.toml` with `--manifest`):
 
 ```powershell
 cargo build --release --bin ion-build
-.\target\release\ion-build.exe build
-.\target\<output>.exe
+cd examples   # or example subdirectory with ion.toml
+..\target\release\ion-build.exe build --manifest spawn_channel.toml
+.\target\spawn_channel.exe
 echo $LASTEXITCODE
 ```
 
-For a single file without a manifest, use `ion-compiler` plus manual `gcc` (see `ion-lang` skill). On Windows add `-lws2_32` for channel/spawn programs. Stop `ion-lsp` if rebuild fails with "Access is denied".
+Multi-file: `cd examples\data_lib` then `..\..\target\release\ion-build.exe build`. See [examples/data_lib/README.md](../../../examples/data_lib/README.md).
+
+For codegen inspection or `tests/` integration harness work, use `ion-compiler` plus manual `gcc` (see `ion-lang` skill). On Windows add `-lws2_32` for channel/spawn when linking manually. Stop `ion-lsp` if rebuild fails with "Access is denied".
 
 For programs under `tests/`, follow the `ion-integration-tests` skill (`test_expectations.tsv` row required).
 

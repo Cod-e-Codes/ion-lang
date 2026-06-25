@@ -15,7 +15,7 @@ paths:
 
 End-to-end tests: Ion → C → gcc → run executable → assert exit code (or assert compile failure).
 
-The harness runs tests under `tests/` only. Files in `examples/` are documented demos - compile and run them manually (see [README.md](../../../README.md)); they are not in the integration manifest.
+The harness runs tests under `tests/` only. Files in `examples/` are documented demos; build and run them with `ion-build` and per-example manifests (see [README.md](../../../README.md#example-programs)). Regenerate committed `examples/*.c` snapshots with `ion-compiler` after codegen changes.
 
 **Example output policy:** Top-level single-file examples commit one merged `.c` next to the `.ion`. `text_summary/` commits one `.c` plus `sample.txt`. Multi-file `data_lib/` keeps `.ion` only (see `examples/data_lib/README.md`).
 
@@ -29,7 +29,7 @@ for f in examples/*.ion; do ./target/release/ion-compiler "$f"; done
 
 Multi-file `examples/data_lib/` has no committed `.c`; see `examples/data_lib/README.md`.
 
-Link and run like integration tests (`gcc` + `runtime/ion_runtime.c` + `-lpthread`; on Windows MinGW add `-lws2_32`).
+To build examples, use `ion-build` (see README). Manual `gcc` + `runtime/ion_runtime.c` is for the test harness and advanced debugging only.
 
 ## Run tests
 
@@ -56,7 +56,7 @@ COMPILER=../target/debug/ion-compiler ION_BUILD=../target/debug/ion-build CC=cla
 RUNTIME_OBJ=/tmp/ion_runtime.o ./test_runner.sh
 ```
 
-**Harness link step:** On startup, `test_runner.sh` precompiles `runtime/ion_runtime.c` once to `RUNTIME_OBJ` (default `.ion_test_runtime.o`) and links that object for each `run` test and `test_multifile`. Same `gcc` flags as before; manual example compiles below still use `ion_runtime.c` directly.
+**Harness link step:** On startup, `test_runner.sh` precompiles `runtime/ion_runtime.c` once to `RUNTIME_OBJ` (default `.ion_test_runtime.o`) and links that object for each `run` test and `test_multifile`. This path uses `ion-compiler` and `gcc` directly, not `ion-build`. Example programs under `examples/` use `ion-build` per README.
 
 **Windows:** Use Git Bash, not WSL. Rebuild release after compiler changes. Stop `ion-lsp` if build fails with "Access is denied".
 

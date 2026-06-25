@@ -114,7 +114,7 @@ Source: [examples/hello_world_safe.ion](examples/hello_world_safe.ion). For a mi
 
 ### Advanced: Manual Transpile and Link
 
-For codegen inspection or debugging, use `ion-compiler` directly:
+For codegen inspection, integration test workflows, or debugging generated C, use `ion-compiler` directly (see [ION_SPEC.md section 10.1](ION_SPEC.md#101-project-build-ion-build)):
 
 ```bash
 ./target/release/ion-compiler examples/hello_world.ion
@@ -123,93 +123,25 @@ gcc examples/hello_world.c runtime/ion_runtime.c -o hello_world \
 ./hello_world
 ```
 
-### Single-File Mode (Default)
+The integration harness (`tests/test_runner.sh`) calls `ion-compiler` and `gcc` this way. Application development should use `ion-build` instead.
 
-**Step 1: Compile Ion to C**
+### Project manifests (`ion.toml`)
 
-```bash
-./target/release/ion-compiler input.ion
+`ion-build` discovers `ion.toml` by walking up from the current directory. Required fields: `name`, `main`, `output`. Common optional fields: `mode` (`single` or `multi`), `out_dir` (default `target`), `cflags`, `ldflags`, `stdlib_paths`.
+
+Root [ion.toml](ion.toml) builds [examples/hello_world_safe.ion](examples/hello_world_safe.ion). Per-example manifests live under [examples/](examples/) (for example `spawn_channel.toml`, `http_server.toml`, `examples/data_lib/ion.toml`). Use `--manifest path` when the file is not named `ion.toml`:
+
+```powershell
+cd examples
+..\target\release\ion-build.exe build --manifest http_server.toml
+.\target\http_server.exe
 ```
 
-This generates `input.c` in the same directory as the source file.
+FFI programs that rename C symbols (for example `recv_sys`) set compile-time `-D` flags in `cflags`, not `ldflags`. See [examples/http_server.toml](examples/http_server.toml).
 
-**Step 2: Compile C to Executable**
+### Multi-file projects
 
-The generated C code requires the Ion runtime library:
-
-```bash
-gcc input.c runtime/ion_runtime.c -o input -I. -I.. -Iruntime -I../runtime -lpthread
-```
-
-**Required flags:**
-- `input.c` - generated C file
-- `runtime/ion_runtime.c` - Ion runtime (when running from project root)
-- `-I. -I.. -Iruntime -I../runtime` - include paths for runtime headers
-- `-lpthread` - pthread library (required for channels and spawn)
-- `-o input` - output executable name
-
-**Step 3: Run**
-
-```bash
-./input
-```
-
-### FFI with POSIX Functions
-
-If your Ion program uses FFI names that conflict with Ion keywords (`recv`, `send`), add `-D` flags when linking:
-
-```bash
-gcc http_server.c runtime/ion_runtime.c -o http_server \
-    -I. -I.. -Iruntime -I../runtime -lpthread \
-    -Drecv_sys=recv -Dsend_sys=send -Dclose=closesocket -lws2_32
-```
-
-On Linux or macOS, omit `-lws2_32` and `-Dclose=closesocket`. `ion_net_init()` is a no-op outside Windows.
-
-### Multi-File Mode
-
-```bash
-./target/release/ion-compiler --mode multi --output myprogram main.ion
-```
-
-This parses imported modules, generates `.c` and `.h` per module, compiles object files, and links with the runtime. The `--output` flag sets the executable name (defaults to the main module name). Multi-file mode handles compilation and linking; you do not need to run `gcc` manually.
-
-## Example Programs
-
-Top-level `examples/*.ion` files each have a checked-in merged `examples/*.c` codegen snapshot. Regenerate after compiler codegen changes:
-
-```bash
-for f in examples/*.ion; do ./target/release/ion-compiler "$f"; done
-./target/release/ion-compiler examples/text_summary/text_summary.ion
-```
-
-Top-level single-file examples (including `channel_worker.ion`) commit a merged `.c` snapshot next to the `.ion`. The `text_summary/` subdirectory also commits one `.c` (it needs `sample.txt`). Multi-file `examples/data_lib/` keeps only `.ion` sources; see [examples/data_lib/README.md](examples/data_lib/README.md) for build output (`.c`/`.h` generated in place, not committed).
-
-Compile and run any single-file example:
-
-```bash
-./target/release/ion-compiler examples/spawn_channel.ion
-gcc examples/spawn_channel.c runtime/ion_runtime.c -o spawn_channel \
-    -I. -Iruntime -lpthread -lws2_32   # omit -lws2_32 on Linux/macOS
-./spawn_channel
-```
-
-For `http_server.ion`, add `-Drecv_sys=recv -Dsend_sys=send` when linking.
-
-| File | What it demonstrates |
-|------|---------------------|
-| [examples/hello_world.ion](examples/hello_world.ion) | Minimal FFI `write()` to stdout |
-| [examples/hello_world_safe.ion](examples/hello_world_safe.ion) | stdlib `io` module |
-| [examples/spawn_channel.ion](examples/spawn_channel.ion) | `spawn` with cross-thread channels |
-| [examples/http_server.ion](examples/http_server.ion) | Sockets, FFI, concurrent clients via `spawn` |
-| [examples/showcase.ion](examples/showcase.ion) | Mixed language features: tuples, `+=`, `push_byte`, spawn/channels, capture-free fn literals |
-| [examples/access_log.ion](examples/access_log.ion) | Log parsing, `loop`/`break`, match guards, spawn, channels, fmt/io |
-| [examples/minimal.ion](examples/minimal.ion) | Smallest valid program |
-| [examples/channel_worker.ion](examples/channel_worker.ion) | Channel worker: `spawn` sums jobs from a channel |
-| [examples/text_summary/text_summary.ion](examples/text_summary/text_summary.ion) | `fs` file read, string iteration, line/word/byte counts |
-| [examples/data_lib/main.ion](examples/data_lib/main.ion) | Multi-module library (`catalog.ion`); see [data_lib/README.md](examples/data_lib/README.md) |
-
-Build `data_lib` (multi-file):
+Multi-file mode (`mode = "multi"` in `ion.toml`) transpiles each module to `.c`/`.h`, compiles objects, and links one executable. Artifacts default to `out_dir` (usually `target/`), not the source tree.
 
 ```powershell
 cd examples\data_lib
@@ -217,13 +149,51 @@ cd examples\data_lib
 .\target\data_lib.exe
 ```
 
-Or with `ion-compiler` directly (emits `.c`/`.h` in the current directory):
+For manual multi-file codegen in the source directory (no `ion-build`), use `ion-compiler --mode multi --output NAME main.ion`. See [examples/data_lib/README.md](examples/data_lib/README.md).
+
+## Example Programs
+
+Top-level `examples/*.ion` files each have a checked-in merged `examples/*.c` codegen snapshot. Regenerate after compiler codegen changes (from repo root, relative paths keep portable banners):
 
 ```bash
-cd examples/data_lib
-../../target/release/ion-compiler --mode multi --output data_lib main.ion
-./data_lib
+for f in examples/*.ion; do ./target/release/ion-compiler "$f"; done
+./target/release/ion-compiler examples/text_summary/text_summary.ion
 ```
+
+Committed `.c` snapshots are for review and `ion-compiler` regression; building and running examples uses `ion-build` and the manifests below.
+
+**Build and run** (from `examples/` unless noted):
+
+```powershell
+# Single-file example with a manifest in examples/
+..\target\release\ion-build.exe build --manifest spawn_channel.toml
+.\target\spawn_channel.exe
+
+# http_server (FFI cflags in http_server.toml)
+..\target\release\ion-build.exe build --manifest http_server.toml
+
+# text_summary (has its own ion.toml; needs sample.txt in that directory)
+cd text_summary
+..\..\target\release\ion-build.exe build
+.\target\text_summary.exe
+```
+
+On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows channel/spawn builds add `-lws2_32` automatically.
+
+| File | Manifest | What it demonstrates |
+|------|----------|---------------------|
+| [examples/hello_world.ion](examples/hello_world.ion) | (use `ion-compiler` only; no stdlib) | Minimal FFI `write()` to stdout |
+| [examples/hello_world_safe.ion](examples/hello_world_safe.ion) | [hello_world_safe.toml](examples/hello_world_safe.toml) or root [ion.toml](ion.toml) | stdlib `io` module |
+| [examples/spawn_channel.ion](examples/spawn_channel.ion) | [spawn_channel.toml](examples/spawn_channel.toml) | `spawn` with cross-thread channels |
+| [examples/http_server.ion](examples/http_server.ion) | [http_server.toml](examples/http_server.toml) | Sockets, FFI, concurrent clients via `spawn` |
+| [examples/showcase.ion](examples/showcase.ion) | [showcase.toml](examples/showcase.toml) | Mixed language features |
+| [examples/access_log.ion](examples/access_log.ion) | [access_log.toml](examples/access_log.toml) | Log parsing, spawn, channels, fmt/io |
+| [examples/minimal.ion](examples/minimal.ion) | (transpile-only with `ion-compiler`) | Smallest valid program |
+| [examples/channel_worker.ion](examples/channel_worker.ion) | [channel_worker.toml](examples/channel_worker.toml) | Channel worker |
+| [examples/text_summary/text_summary.ion](examples/text_summary/text_summary.ion) | [text_summary/ion.toml](examples/text_summary/ion.toml) | `fs` read, string iteration, counts |
+| [examples/data_lib/main.ion](examples/data_lib/main.ion) | [data_lib/ion.toml](examples/data_lib/ion.toml) | Multi-module library; see [data_lib/README.md](examples/data_lib/README.md) |
+
+`examples/data_lib/` keeps only `.ion` sources; `ion-build` writes `.c`, `.h`, and the executable under `examples/data_lib/target/` (not committed).
 
 ## Project Structure
 
@@ -233,8 +203,9 @@ cd examples/data_lib
 │   ├── lexer/      # Tokenizer
 │   ├── parser/     # AST construction
 │   ├── ast/        # AST node definitions
-│   ├── compiler/   # Compilation driver (module resolution, cycle detection)
-│   ├── tc/         # Type Checker (safety checks, visibility, qualified names)
+│   ├── compiler/   # Module resolution, import paths
+│   ├── build/      # ion.toml, ion-build driver, C toolchain
+│   ├── tc/         # Type checker (safety, visibility, qualified names)
 │   ├── ir/         # Intermediate representation
 │   └── cgen/       # C code generator
 ├── runtime/        # C runtime headers
