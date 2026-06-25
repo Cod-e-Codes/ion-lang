@@ -46,7 +46,7 @@
 - `Send` checking for channels and `spawn`
 - Module visibility (`pub`), generics, method resolution
 - Errors via `TypeCheckError` enum
-- CLI: `check_program` returns first error; LSP: `check_program_collecting` gathers multiple independent errors
+- CLI and LSP: `check_program_collecting` gathers multiple independent errors; CLI prints them via `tc::format_type_errors`
 
 ### 6. IR (`src/ir/mod.rs`)
 

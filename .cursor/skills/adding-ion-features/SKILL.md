@@ -70,9 +70,9 @@ Touch this for imports, multi-file mode, or qualified names - not only when edit
 
 ### Type checker (`src/tc/`)
 
-See `mod.rs`, `ownership.rs`, `builtins.rs`, `types.rs`. LSP uses `check_program_collecting` for multiple diagnostics; CLI uses `check_program` (first error only).
+See `mod.rs`, `ownership.rs`, `builtins.rs`, `types.rs`. LSP and CLI use `check_program_collecting` for multiple diagnostics via `tc::format_type_errors`.
 
-Critical checks to preserve. Patterns below match **CLI stderr** (`Type check error: UseAfterMove { ... }` via `{:?}`). The LSP formats the same errors differently (e.g. "Use after move: x") - see `ion-lsp-vscode` skill; do not use CLI grep patterns to validate LSP diagnostics.
+Critical checks to preserve. Patterns below match **CLI stderr** (e.g. `UseAfterMove` appears in `Type check failed with N error(s):` output). The LSP formats the same errors differently (e.g. "Use after move: x") - see `ion-lsp-vscode` skill; do not use CLI grep patterns to validate LSP diagnostics.
 
 | Check | CLI stderr pattern |
 |-------|----------------|

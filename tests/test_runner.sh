@@ -6,14 +6,35 @@
 set +e
 
 COMPILER="${COMPILER:-../target/release/ion-compiler}"
-if [ -f "${COMPILER}.exe" ] && [ ! -x "$COMPILER" ]; then
-    COMPILER="${COMPILER}.exe"
-fi
 ION_BUILD="${ION_BUILD:-../target/release/ion-build}"
-if [ -f "${ION_BUILD}.exe" ] && [ ! -x "$ION_BUILD" ]; then
-    ION_BUILD="${ION_BUILD}.exe"
-fi
+
+normalize_tool_path() {
+    local tool="$1"
+    tool="${tool//\\//}"
+    if [[ "$tool" != *.exe ]] && [ -f "${tool}.exe" ]; then
+        tool="${tool}.exe"
+    fi
+    printf '%s' "$tool"
+}
+
+abs_tool_path() {
+    local tool
+    tool="$(normalize_tool_path "$1")"
+    if [ "${tool:0:1}" != "/" ]; then
+        local dir base
+        dir="$(dirname "$tool")"
+        base="$(basename "$tool")"
+        dir="$(cd "$dir" 2>/dev/null && pwd || printf '%s' "$dir")"
+        tool="$dir/$base"
+    fi
+    printf '%s' "$tool"
+}
+
+COMPILER="$(abs_tool_path "$COMPILER")"
+ION_BUILD="$(abs_tool_path "$ION_BUILD")"
 CC="${CC:-gcc}"
+CFLAGS="${CFLAGS:-}"
+LDFLAGS="${LDFLAGS:-}"
 RUNTIME_OBJ="${RUNTIME_OBJ:-.ion_test_runtime.o}"
 
 EXE_SUFFIX=""
@@ -58,8 +79,13 @@ precompile_runtime() {
     if [ -f "$RUNTIME_OBJ" ] && [ ! "$runtime_src" -nt "$RUNTIME_OBJ" ]; then
         return 0
     fi
-    if ! $CC -c "$runtime_src" $(c_include_flags) -o "$RUNTIME_OBJ" 2>/dev/null; then
+    local runtime_output
+    runtime_output=$($CC $CFLAGS -c "$runtime_src" $(c_include_flags) -o "$RUNTIME_OBJ" 2>&1)
+    if [ $? -ne 0 ]; then
         echo -e "${RED}ERROR${NC} - Failed to precompile runtime ($runtime_src)"
+        if [ -n "$runtime_output" ]; then
+            echo "$runtime_output" | tail -10
+        fi
         exit 1
     fi
 }
@@ -94,9 +120,14 @@ test_file() {
         return 1
     fi
 
-    local compile_cmd="$CC \"$c_file\" \"$RUNTIME_OBJ\" $(c_include_flags) $(c_link_libs) -o \"${test_name}${EXE_SUFFIX}\""
-    if ! eval "$compile_cmd" 2>/dev/null; then
+    local compile_cmd="$CC $CFLAGS \"$c_file\" \"$RUNTIME_OBJ\" $(c_include_flags) $(c_link_libs) $LDFLAGS -o \"${test_name}${EXE_SUFFIX}\""
+    local compile_output
+    compile_output=$(eval "$compile_cmd" 2>&1)
+    if [ $? -ne 0 ]; then
         echo -e "${RED}FAIL${NC} - C compilation failed"
+        if [ -n "$compile_output" ]; then
+            echo "$compile_output" | tail -10
+        fi
         fail_count=$((fail_count + 1))
         rm -f "$c_file"
         return 1
@@ -328,7 +359,7 @@ test_ion_build_bad_main() {
     else
         echo -e "${YELLOW}PARTIAL${NC} - Build failed but pattern not matched"
         echo "  Error output: $build_output"
-        pass_count=$((pass_count + 1))
+        fail_count=$((fail_count + 1))
     fi
     return 0
 }

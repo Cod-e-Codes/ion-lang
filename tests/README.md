@@ -301,10 +301,13 @@ Special cases (not in the manifest):
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
 - `ION_BUILD`: Path to the ion-build binary (default: `../target/release/ion-build`)
 - `CC`: C compiler to use (default: `gcc`)
+- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke and `-Wall -Wextra -Werror` for warning-clean builds.
+- `LDFLAGS`: Extra C linker flags for generated test executables (default: empty). Pair with `CFLAGS` for sanitizer runtime flags when needed.
 - `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 
 Example:
 ```bash
 COMPILER=../target/debug/ion-compiler ION_BUILD=../target/debug/ion-build CC=clang ./test_runner.sh
+CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitize=address,undefined" ./test_runner.sh
 ```
 

@@ -54,6 +54,8 @@ Environment overrides:
 ```bash
 COMPILER=../target/debug/ion-compiler ION_BUILD=../target/debug/ion-build CC=clang ./test_runner.sh
 RUNTIME_OBJ=/tmp/ion_runtime.o ./test_runner.sh
+CFLAGS="-Wall -Wextra -Werror" RUNTIME_OBJ=.ion_test_runtime_werror.o ./test_runner.sh
+CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitize=address,undefined" ./test_runner.sh
 ```
 
 **Harness link step:** On startup, `test_runner.sh` precompiles `runtime/ion_runtime.c` once to `RUNTIME_OBJ` (default `.ion_test_runtime.o`) and links that object for each `run` test and `test_multifile`. This path uses `ion-compiler` and `gcc` directly, not `ion-build`. Example programs under `examples/` use `ion-build` per README.
@@ -132,7 +134,7 @@ The harness greps **compiler CLI stderr** for the pattern (not LSP diagnostic te
 
 ### `test_error` PARTIAL pass trap
 
-If compilation fails but the grep pattern does **not** match, the harness prints **PARTIAL** and still increments `pass_count`. A wrong pattern looks like a pass - always verify the pattern against actual CLI output and confirm the harness prints **PASS**, not PARTIAL.
+If compilation fails but the grep pattern does **not** match, the harness prints **PARTIAL** and increments `fail_count`. A wrong pattern is a harness failure - always verify the pattern against actual CLI output and confirm the harness prints **PASS**, not PARTIAL.
 
 ## Test file conventions
 

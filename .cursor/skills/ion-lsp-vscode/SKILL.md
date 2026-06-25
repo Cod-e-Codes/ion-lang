@@ -77,7 +77,7 @@ Known limitations: built-in methods have signature hover but no go-to-definition
 
 ### CLI vs LSP error text
 
-The CLI prints `Type check error: UseAfterMove { ... }` (`{:?}` on `TypeCheckError`) and stops at the first error. The LSP uses `check_program_collecting` and may show several type-check diagnostics in one publish (e.g. one per function). LSP formats errors as human-readable strings (e.g. "Use after move: x"). Do not use CLI grep patterns from `ion-integration-tests` to validate LSP diagnostics.
+The CLI and `ion-build` print `Type check failed with N error(s):` followed by numbered lines from `tc::format_type_errors`. The LSP uses `check_program_collecting` and may show several type-check diagnostics in one publish (e.g. one per function). LSP formats errors as human-readable strings (e.g. "Use after move: x"). Do not use CLI grep patterns from `ion-integration-tests` to validate LSP diagnostics.
 
 ## Extension files
 

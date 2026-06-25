@@ -20,7 +20,7 @@ cargo install --path . --bin ion-compiler --bin ion-build
 
 `ion-lsp` is built with the release command above; point the editor extension at `target/release/ion-lsp` (see README IDE Support).
 
-CI (`.github/workflows/ci.yml`) builds all three binaries on Linux; the Windows job builds `ion-compiler` and `ion-build` only. Build `ion-lsp` locally for IDE work.
+CI (`.github/workflows/ci.yml`) builds all three binaries on Linux, runs integration tests, ASan/UBSan smoke on generated C, and a `-Wall -Wextra -Werror` harness pass on Linux. The Windows job builds `ion-compiler` and `ion-build` only. Build `ion-lsp` locally for IDE work.
 
 ## Test
 

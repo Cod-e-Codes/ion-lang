@@ -26,7 +26,7 @@ impl std::fmt::Display for BuildError {
         match self {
             BuildError::Manifest(err) => write!(f, "{err}"),
             BuildError::Compile(err) => write!(f, "{err}"),
-            BuildError::TypeCheck(msg) => write!(f, "Type check error: {msg}"),
+            BuildError::TypeCheck(msg) => write!(f, "{msg}"),
             BuildError::Io { path, message } => {
                 write!(f, "IO error ({}): {message}", path.display())
             }
@@ -86,9 +86,10 @@ fn type_check(
     let mut checker = tc::TypeChecker::new();
     checker.set_module_exports(compiler.get_module_exports().clone());
     let merged = compiler.merge_modules(ast, main_path);
-    checker
-        .check_program(&merged)
-        .map_err(|err| BuildError::TypeCheck(format!("{err:?}")))?;
+    let (_result, errors) = checker.check_program_collecting(&merged);
+    if !errors.is_empty() {
+        return Err(BuildError::TypeCheck(tc::format_type_errors(&errors)));
+    }
     Ok(())
 }
 

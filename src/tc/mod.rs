@@ -196,6 +196,14 @@ impl std::fmt::Display for TypeCheckError {
     }
 }
 
+pub fn format_type_errors(errors: &[TypeCheckError]) -> String {
+    let mut message = format!("Type check failed with {} error(s):", errors.len());
+    for (idx, err) in errors.iter().enumerate() {
+        message.push_str(&format!("\n  {}. {}", idx + 1, err));
+    }
+    message
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeCheckResult {
     pub lsp_info: LspInfo,

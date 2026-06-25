@@ -2,6 +2,7 @@
 
 ## 2026-06
 
+- **Readiness hardening**: beta compatibility and runtime ABI documents, a lightweight security policy, CLI/`ion-build` multi-error type diagnostics, sanitizer and generated-C warning-clean CI smoke jobs, and `CFLAGS`/`LDFLAGS` support in the integration harness.
 - **Language**: `for` iteration, `match` guards, `else if`, `break`/`continue`, `loop {}`, `+=`, hex/bin literals, function types `fn(T) -> R`, tuple literals and destructuring. Capture-free fn literals (`fn(T) -> R` lowered to static C function pointers; `ClosureCapture` for outer bindings).
 - **Stdlib & runtime**: `fmt.ion`, `Result<T, E>`, `fs.read_to_string`, `String::push_byte`.
 - **Compiler**: scope-drop codegen, `pthread` spawn, slice bounds checks, array-to-slice coercion, struct/enum field drops, `String` equality, module function name mangling, lasting-borrow rules (ION_SPEC 5.3), field-path borrow exclusivity, move/copy tracking fixes, generic monomorphization, generated C file banner (repo-relative source labels via `portable_source_label`, GNU C note, merged stdlib note, multi-file provenance, comment-safe path escaping).

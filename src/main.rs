@@ -84,8 +84,9 @@ fn main() {
 
     // Type check merged program (main + imported modules)
     let merged_program = compiler.merge_modules(&ast, input_path);
-    if let Err(err) = checker.check_program(&merged_program) {
-        eprintln!("{}", err);
+    let (_result, errors) = checker.check_program_collecting(&merged_program);
+    if !errors.is_empty() {
+        eprintln!("{}", tc::format_type_errors(&errors));
         process::exit(1);
     }
 

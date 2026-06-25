@@ -35,6 +35,48 @@ jobs:
           ION_BUILD: ${{ github.workspace }}/target/release/ion-build
         run: cd tests && bash test_runner.sh
 
+      - name: Generated C sanitizer smoke (Linux)
+        shell: bash
+        env:
+          COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          CC: gcc
+          CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=address,undefined
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          cd tests
+          "$CC" $CFLAGS -c ../runtime/ion_runtime.c -I. -I.. -I../runtime -o .ion_test_runtime_san.o
+          while IFS=' ' read -r test expected; do
+            "$COMPILER" "$test.ion" >/dev/null
+            "$CC" $CFLAGS "$test.c" .ion_test_runtime_san.o -I. -I.. -I../runtime -lpthread $LDFLAGS -o "$test"
+            set +e
+            "./$test" >/dev/null
+            status=$?
+            set -e
+            if [ "$status" -ne "$expected" ]; then
+              echo "$test: expected exit $expected, got $status"
+              exit 1
+            fi
+            rm -f "$test.c" "$test"
+          done <<'EOF'
+          test_basic 42
+          test_vec_push_pop 0
+          test_string_push_byte 79
+          test_spawn_channel 0
+          test_array_to_slice_coercion 10
+          EOF
+
+      - name: Generated C warning-clean smoke (Linux)
+        shell: bash
+        env:
+          COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          ION_BUILD: ${{ github.workspace }}/target/release/ion-build
+          CC: gcc
+          CFLAGS: -Wall -Wextra -Werror
+          RUNTIME_OBJ: .ion_test_runtime_werror.o
+        run: cd tests && bash test_runner.sh
+
   integration:
     permissions:
       contents: read

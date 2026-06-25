@@ -1237,11 +1237,16 @@ The `ion-lsp` binary and VS Code/Cursor extension provide:
 
 Built-in methods (`Vec::push`, `String::len`, etc.) show signature hover but have no source location for go-to-definition.
 
-The CLI `ion-compiler` still reports the first type-check error only. The LSP uses `TypeChecker::check_program_collecting` to gather multiple diagnostics in one `publish_diagnostics` call. Import failures are reported per `import` statement via `Compiler::load_imports`.
+The CLI `ion-compiler`, `ion-build`, and the LSP use `TypeChecker::check_program_collecting` to gather multiple independent type diagnostics. Import failures are reported per `import` statement via `Compiler::load_imports`.
 
 Build with `cargo build --release --bin ion-lsp`. Rebuild after compiler or LSP changes; reload the editor window so `ion.lspPath` picks up the new binary. Set `ion.lspPath` in editor settings to the executable path.
 
 #### 10.3 Known limitations
+
+Beta compatibility and runtime ABI notes live in [docs/BETA.md](docs/BETA.md)
+and [docs/ABI.md](docs/ABI.md). Features listed below are either intentionally
+constrained in the beta subset or unstable until a later release documents a
+stronger contract.
 
 - No trait bounds on generics
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes

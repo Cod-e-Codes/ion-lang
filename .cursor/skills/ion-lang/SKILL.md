@@ -18,9 +18,12 @@ Ion is a move-only, no-GC systems language transpiled to C. This skill orients y
 | Resource | Purpose |
 |----------|---------|
 | [ION_SPEC.md](../../../ION_SPEC.md) | Authoritative language semantics and grammar |
+| [docs/BETA.md](../../../docs/BETA.md) | Beta subset, compatibility policy, platform support |
+| [docs/ABI.md](../../../docs/ABI.md) | Runtime ABI notes for generated C and stdlib types |
 | [README.md](../../../README.md) | Build, run, project structure |
 | [CONTRIBUTING.md](../../../CONTRIBUTING.md) | Build, test, lint, and PR expectations |
 | [CHANGELOG.md](../../../CHANGELOG.md) | Release notes by month |
+| [SECURITY.md](../../../SECURITY.md) | Security reporting scope and policy |
 | [tests/README.md](../../../tests/README.md) | Integration test catalog |
 
 **Compiler pipeline** (see [references/compiler-pipeline.md](references/compiler-pipeline.md)):

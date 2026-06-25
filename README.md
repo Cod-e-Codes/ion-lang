@@ -29,6 +29,8 @@ Known limitations: [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations)
 | Resource | Contents |
 |----------|----------|
 | [ION_SPEC.md](ION_SPEC.md) | Language semantics, grammar, stdlib contracts |
+| [docs/BETA.md](docs/BETA.md) | Beta subset, compatibility policy, and platform support |
+| [docs/ABI.md](docs/ABI.md) | Runtime ABI notes for generated C and stdlib types |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, test, lint, and PR expectations |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes by month |
 | [tests/README.md](tests/README.md) | Integration test catalog |
