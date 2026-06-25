@@ -5,6 +5,7 @@
 | Binary | Source | Role |
 |--------|--------|------|
 | `ion-compiler` | `src/main.rs` | CLI: parse → type-check → codegen |
+| `ion-build` | `src/bin/ion-build.rs` | Project build via `ion.toml` (uses `src/build/`) |
 | `ion-lsp` | `src/bin/ion-lsp.rs` | Language server for editor diagnostics |
 
 ## Stage responsibilities
@@ -64,6 +65,17 @@
 - `Codegen::generate` - single merged `.c`
 - `generate_module_source` / `generate_module_header` - multi-file `.c`/`.h`
 - Runtime support in `runtime/ion_runtime.c` and `runtime/ion_runtime.h`
+
+### 8. Project build (`src/build/`)
+
+| File | Role |
+|------|------|
+| `manifest.rs` | Parse `ion.toml`, `BuildMode`, `Project::discover` |
+| `driver.rs` | `build_project`: transpile, compile generated C, link runtime |
+| `c_toolchain.rs` | Invoke `CC` (default `gcc`), compile and link flags |
+| `paths.rs` | Project root, stdlib paths, `discover_import_config` (shared with LSP) |
+
+`ion-build` calls `build_project` after discovering the manifest. Application workflow; integration tests usually call `ion-compiler` directly.
 
 ## Single vs multi-file (`src/main.rs`)
 

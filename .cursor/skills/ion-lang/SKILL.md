@@ -27,7 +27,7 @@ Ion is a move-only, no-GC systems language transpiled to C. This skill orients y
 .ion → compiler::parse_module (imports/cycles, then lex+parse per file) → type checker → IR → cgen → .c → gcc + runtime → executable
 ```
 
-Rust modules in `src/`: `lexer`, `parser`, `ast`, `compiler` (module resolution), `build` (manifest, C toolchain, `ion build` driver), `tc` (`mod.rs`, `ownership.rs`, `builtins.rs`, `types.rs`), `ir`, `cgen` (`mod.rs`, `types.rs`, `builtins.rs`, `drop.rs`), `lsp`.
+Rust modules in `src/`: `bin` (ion-build, ion-lsp), `lexer`, `parser`, `ast`, `compiler` (module resolution), `build` (manifest, C toolchain, `ion build` driver), `tc` (`mod.rs`, `ownership.rs`, `builtins.rs`, `types.rs`), `ir`, `cgen` (`mod.rs`, `types.rs`, `builtins.rs`, `drop.rs`), `lsp`.
 
 Binaries: `ion-compiler` (transpile/codegen), `ion-build` (full project build via `ion.toml`), `ion-lsp`.
 
