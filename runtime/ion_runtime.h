@@ -219,7 +219,7 @@ void ion_vec_free(ion_vec_t *vec);
  * String type - heap-allocated UTF-8 string
  */
 typedef struct {
-  char *data;
+  uint8_t *data;
   size_t len;
   size_t capacity;
 } ion_string_t;

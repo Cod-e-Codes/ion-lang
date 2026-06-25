@@ -168,7 +168,7 @@ ion_string_t *ion_string_new(void) {
   if (!s)
     return NULL;
 
-  s->data = (char *)malloc(1);
+  s->data = (uint8_t *)malloc(1);
   if (!s->data) {
     free(s);
     return NULL;
@@ -185,7 +185,7 @@ ion_string_t *ion_string_from_literal(const char *lit, size_t len) {
   if (!s)
     return NULL;
 
-  s->data = (char *)malloc(len + 1);
+  s->data = (uint8_t *)malloc(len + 1);
   if (!s->data) {
     free(s);
     return NULL;
@@ -201,7 +201,7 @@ ion_string_t *ion_string_from_literal(const char *lit, size_t len) {
 ion_string_t *ion_string_clone(const ion_string_t *s) {
   if (!s)
     return NULL;
-  return ion_string_from_literal(s->data, s->len);
+  return ion_string_from_literal((const char *)s->data, s->len);
 }
 
 int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
@@ -220,7 +220,7 @@ int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
     while (new_capacity < s->len + append_len + 1) {
       new_capacity *= 2;
     }
-    char *new_data = (char *)realloc(s->data, new_capacity);
+    uint8_t *new_data = (uint8_t *)realloc(s->data, new_capacity);
     if (!new_data)
       return -1;
     s->data = new_data;
@@ -244,7 +244,7 @@ int ion_string_push_byte(ion_string_t *s, unsigned char b) {
     while (new_capacity < s->len + 2) {
       new_capacity *= 2;
     }
-    char *new_data = (char *)realloc(s->data, new_capacity);
+    uint8_t *new_data = (uint8_t *)realloc(s->data, new_capacity);
     if (!new_data)
       return -1;
     s->data = new_data;

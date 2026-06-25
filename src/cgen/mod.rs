@@ -151,6 +151,29 @@ impl Codegen {
         ));
         self.writeln(" * GNU C (GCC/Clang). Merged stdlib/import code may appear below. */");
         self.writeln("");
+        self.writeln("#ifdef __GNUC__");
+        self.writeln("#define ION_MAYBE_UNUSED __attribute__((unused))");
+        self.writeln("#else");
+        self.writeln("#define ION_MAYBE_UNUSED");
+        self.writeln("#endif");
+        self.writeln("");
+    }
+
+    fn should_silence_unused_binding(name: &str, ty: &Type) -> bool {
+        matches!(ty, Type::Ref { .. } | Type::RawPtr { .. }) || name.starts_with('_')
+    }
+
+    fn emit_silence_unused_binding(&mut self, name: &str) {
+        self.write_indent();
+        self.writeln(&format!("(void){name};"));
+    }
+
+    fn param_is_byte_ptr(param_ty: &Type) -> bool {
+        match param_ty {
+            Type::RawPtr { inner } => matches!(**inner, Type::U8),
+            Type::Ref { inner, .. } => matches!(**inner, Type::U8),
+            _ => false,
+        }
     }
 
     pub fn generate(&mut self, program: &IRProgram, source_ion: &str) -> String {
@@ -1245,8 +1268,9 @@ impl Codegen {
     fn emit_frame_cleanup(&mut self, frame: &ScopeFrame) {
         for defer_expr in frame.defers.iter().rev() {
             self.write_indent();
+            self.write("(void)(");
             self.generate_expr(defer_expr);
-            self.writeln(";");
+            self.writeln(");");
         }
         for binding in frame.bindings.iter().rev() {
             if !binding.dropped && self.needs_drop(&binding.ty) {
@@ -1266,7 +1290,11 @@ impl Codegen {
                     format!("{} {}[{}]", self.type_to_c(inner), param.name, size)
                 }
                 Type::Fn { .. } => fn_type_to_c_decl(&param.ty, &param.name),
-                _ => format!("{} {}", self.type_to_c(&param.ty), param.name),
+                _ => format!(
+                    "{} ION_MAYBE_UNUSED {}",
+                    self.type_to_c(&param.ty),
+                    param.name
+                ),
             })
             .collect::<Vec<_>>()
             .join(", ")
@@ -1358,10 +1386,9 @@ impl Codegen {
             .map(|stmt| matches!(stmt, IRStmt::Return(_)))
             .unwrap_or(false);
 
-        // If the function has a return type and control reaches the end
-        // without an explicit return, fall through to epilogue with the
-        // default-initialized ret_val (0 / NULL).
-        if function.return_type.is_some() && !last_stmt_is_return {
+        // If control reaches the end without an explicit return, fall through to
+        // epilogue (default-initialized ret_val for value-returning functions).
+        if !last_stmt_is_return {
             self.write_indent();
             self.writeln("goto epilogue;");
         }
@@ -1959,6 +1986,9 @@ impl Codegen {
 
                 self.writeln(";");
                 self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
+                if Self::should_silence_unused_binding(&let_stmt.name, &let_stmt.ty) {
+                    self.emit_silence_unused_binding(&let_stmt.name);
+                }
                 if let Some(init) = &let_stmt.init {
                     self.mark_moves_in_expr(init);
                 }
@@ -2154,6 +2184,8 @@ impl Codegen {
                 self.generate_block(&ir_while.body);
                 if let Some(ref step) = ir_while.step {
                     if let Some(ref label) = ir_while.continue_label {
+                        self.write_indent();
+                        self.writeln(&format!("goto {};", label));
                         self.write_indent();
                         self.writeln(&format!("{}:", label));
                     }
@@ -2650,6 +2682,13 @@ impl Codegen {
                             }
                             // For &mut int, fall through to generate &var normally
                         }
+                        if matches!(arg, IREexpr::StringLit(_))
+                            && let Some(param_types) = self.extern_functions.get(&func_name)
+                            && i < param_types.len()
+                            && Self::param_is_byte_ptr(&param_types[i])
+                        {
+                            self.write("(uint8_t*)");
+                        }
                         self.generate_expr(arg);
                     }
                     self.write(")");
@@ -2758,9 +2797,9 @@ impl Codegen {
                             self.write(&temp_var);
                             self.write(" >= 0 && ");
                             self.write(&temp_var);
-                            self.write(" < ");
+                            self.write(" < (int)(");
                             self.generate_expr(target);
-                            self.write("->len) ? ");
+                            self.write("->len)) ? ");
                             self.generate_expr(target);
                             self.write("->data[");
                             self.write(&temp_var);
@@ -2994,7 +3033,10 @@ impl Codegen {
         // Generate constructor functions for each variant
         for (variant_idx, variant) in enum_decl.variants.iter().enumerate() {
             let constructor_name = format!("{}_{}_new", enum_name, variant.name);
-            self.write(&format!("static {} {}", enum_name, constructor_name));
+            self.write(&format!(
+                "static ION_MAYBE_UNUSED {} {}",
+                enum_name, constructor_name
+            ));
             self.write("(");
 
             // Handle struct variants with named fields
@@ -4653,7 +4695,7 @@ impl Codegen {
         for (variant_idx, variant) in decl.variants.iter().enumerate() {
             let constructor_name = format!("{}_{}_new", monomorphized_name, variant.name);
             self.write(&format!(
-                "static {} {}",
+                "static ION_MAYBE_UNUSED {} {}",
                 monomorphized_name, constructor_name
             ));
             self.write("(");

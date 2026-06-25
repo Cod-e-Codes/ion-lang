@@ -16,10 +16,10 @@ promise that every internal helper symbol is stable before 1.0.
 
 ## `String`
 
-`String` is an owned runtime allocation for byte strings. It carries the buffer
-pointer, length, and capacity needed by generated code and runtime helpers.
-String iteration in the beta subset is byte iteration (`u8`), not Unicode
-scalar-value or grapheme iteration.
+`String` is an owned runtime allocation for byte strings. Its C layout uses a
+`uint8_t*` data pointer plus length and capacity fields. String iteration in the
+beta subset is byte iteration (`u8`), not Unicode scalar-value or grapheme
+iteration.
 
 Stable beta expectations:
 

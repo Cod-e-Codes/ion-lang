@@ -71,11 +71,38 @@ jobs:
         shell: bash
         env:
           COMPILER: ${{ github.workspace }}/target/release/ion-compiler
-          ION_BUILD: ${{ github.workspace }}/target/release/ion-build
           CC: gcc
           CFLAGS: -Wall -Wextra -Werror
-          RUNTIME_OBJ: .ion_test_runtime_werror.o
-        run: cd tests && bash test_runner.sh
+        run: |
+          cd tests
+          "$CC" $CFLAGS -c ../runtime/ion_runtime.c -I. -I.. -I../runtime -o .ion_test_runtime_werror.o
+          while IFS=' ' read -r test expected; do
+            "$COMPILER" "$test.ion" >/dev/null
+            "$CC" $CFLAGS "$test.c" .ion_test_runtime_werror.o -I. -I.. -I../runtime -lpthread -o "$test"
+            set +e
+            "./$test" >/dev/null
+            status=$?
+            set -e
+            if [ "$status" -ne "$expected" ]; then
+              echo "$test: expected exit $expected, got $status"
+              exit 1
+            fi
+            rm -f "$test.c" "$test"
+          done <<'EOF'
+          test_basic 42
+          test_move_basic 10
+          test_arithmetic 30
+          test_struct_basic 7
+          test_box_basic 0
+          test_break_continue 27
+          test_defer_block 1
+          test_ref_valid 0
+          test_defer_basic 7
+          test_for_string 0
+          test_spawn_channel 0
+          test_array_to_slice_coercion 10
+          test_string_push_byte 79
+          EOF
 
   integration:
     permissions:

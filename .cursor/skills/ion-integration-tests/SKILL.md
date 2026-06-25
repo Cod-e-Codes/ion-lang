@@ -55,6 +55,11 @@ Environment overrides:
 COMPILER=../target/debug/ion-compiler ION_BUILD=../target/debug/ion-build CC=clang ./test_runner.sh
 RUNTIME_OBJ=/tmp/ion_runtime.o ./test_runner.sh
 CFLAGS="-Wall -Wextra -Werror" RUNTIME_OBJ=.ion_test_runtime_werror.o ./test_runner.sh
+```
+
+Local `-Werror` over the full harness is not yet supported; CI runs `-Werror` on a curated smoke subset in `.github/workflows/ci.yml`.
+
+```bash
 CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitize=address,undefined" ./test_runner.sh
 ```
 
