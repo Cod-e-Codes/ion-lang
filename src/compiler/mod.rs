@@ -9,6 +9,8 @@ pub struct Compiler {
     modules: HashMap<PathBuf, Program>,
     visiting: HashSet<PathBuf>,
     module_exports: HashMap<String, ModuleExports>, // Maps import alias to exports
+    stdlib_paths: Vec<PathBuf>,
+    project_root: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -38,30 +40,34 @@ impl Compiler {
             modules: HashMap::new(),
             visiting: HashSet::new(),
             module_exports: HashMap::new(),
+            stdlib_paths: Vec::new(),
+            project_root: None,
         }
     }
 
-    /// Resolve an import path relative to the importing file
+    pub fn with_import_config(stdlib_paths: Vec<PathBuf>, project_root: Option<PathBuf>) -> Self {
+        Self {
+            modules: HashMap::new(),
+            visiting: HashSet::new(),
+            module_exports: HashMap::new(),
+            stdlib_paths,
+            project_root,
+        }
+    }
+
+    pub fn set_import_config(&mut self, stdlib_paths: Vec<PathBuf>, project_root: Option<PathBuf>) {
+        self.stdlib_paths = stdlib_paths;
+        self.project_root = project_root;
+    }
+
+    /// Resolve an import path relative to the importing file and stdlib search paths.
     pub fn resolve_import_path(&self, import_path: &str, from_file: &Path) -> PathBuf {
-        let mut resolved = from_file.parent().unwrap_or(Path::new(".")).to_path_buf();
-
-        // Handle relative paths
-        if let Some(stripped) = import_path.strip_prefix("./") {
-            resolved.push(stripped);
-        } else if let Some(stripped) = import_path.strip_prefix("../") {
-            resolved.push("..");
-            resolved.push(stripped);
-        } else {
-            // Simple filename - same directory
-            resolved.push(import_path);
-        }
-
-        // Ensure .ion extension
-        if !resolved.extension().map(|e| e == "ion").unwrap_or(false) {
-            resolved.set_extension("ion");
-        }
-
-        resolved.canonicalize().unwrap_or(resolved)
+        crate::build::resolve_import_path(
+            import_path,
+            from_file,
+            &self.stdlib_paths,
+            self.project_root.as_deref(),
+        )
     }
 
     /// Parse a module file and recursively parse its imports

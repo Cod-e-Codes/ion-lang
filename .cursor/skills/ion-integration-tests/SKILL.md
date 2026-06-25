@@ -36,14 +36,23 @@ Link and run like integration tests (`gcc` + `runtime/ion_runtime.c` + `-lpthrea
 From project root (Git Bash on Windows):
 
 ```bash
-cargo build --release --bin ion-compiler
+cargo build --release --bin ion-compiler --bin ion-build
 cd tests && ./test_runner.sh
 ```
+
+From PowerShell:
+
+```powershell
+cargo build --release --bin ion-compiler --bin ion-build
+& 'C:\Program Files\Git\bin\bash.exe' -lc 'cd /c/Users/Cody/Projects/GitHub/Personal/Active/ion-lang/tests && ./test_runner.sh'
+```
+
+The harness primarily calls `ion-compiler` for `run`/`error`/`cgen` rows. It also runs `ion-build` smoke tests (`tests/build_hello/`, `tests/build_bad_main/`) via the `ION_BUILD` env var (defaults to `../target/release/ion-build`).
 
 Environment overrides:
 
 ```bash
-COMPILER=../target/debug/ion-compiler CC=clang ./test_runner.sh
+COMPILER=../target/debug/ion-compiler ION_BUILD=../target/debug/ion-build CC=clang ./test_runner.sh
 RUNTIME_OBJ=/tmp/ion_runtime.o ./test_runner.sh
 ```
 

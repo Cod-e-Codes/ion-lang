@@ -1,5 +1,5 @@
 // Example demonstrating safe I/O library usage
-import "../stdlib/io.ion" as io;
+import "stdlib/io.ion" as io;
 
 fn main() -> int {
     io::println(String::from("Hello, World!"));

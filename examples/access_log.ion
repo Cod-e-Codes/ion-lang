@@ -1,8 +1,8 @@
 // Access log analyzer: scan log lines for HTTP status codes, classify them,
 // and count server errors on a background thread while the main thread parses.
 
-import "../stdlib/fmt.ion" as fmt;
-import "../stdlib/io.ion" as io;
+import "stdlib/fmt.ion" as fmt;
+import "stdlib/io.ion" as io;
 
 enum HttpClass {
     Success;

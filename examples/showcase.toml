@@ -1,0 +1,5 @@
+name = "showcase"
+main = "showcase.ion"
+output = "showcase"
+mode = "single"
+out_dir = "target"

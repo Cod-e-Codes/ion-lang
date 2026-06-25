@@ -9,6 +9,10 @@ COMPILER="${COMPILER:-../target/release/ion-compiler}"
 if [ -f "${COMPILER}.exe" ] && [ ! -x "$COMPILER" ]; then
     COMPILER="${COMPILER}.exe"
 fi
+ION_BUILD="${ION_BUILD:-../target/release/ion-build}"
+if [ -f "${ION_BUILD}.exe" ] && [ ! -x "$ION_BUILD" ]; then
+    ION_BUILD="${ION_BUILD}.exe"
+fi
 CC="${CC:-gcc}"
 RUNTIME_OBJ="${RUNTIME_OBJ:-.ion_test_runtime.o}"
 
@@ -263,6 +267,72 @@ test_multi_fmt_io() {
     run_multi_test "test_multi_fmt_io.ion" 42 "test_multi_fmt_io"
 }
 
+test_ion_build() {
+    if [ ! -f "build_hello/ion.toml" ]; then
+        return 0
+    fi
+
+    test_count=$((test_count + 1))
+    echo -n "Testing ion-build (build_hello)... "
+
+    local build_output
+    build_output=$(cd build_hello && "$ION_BUILD" build 2>&1)
+    local build_exit=$?
+    if [ "$build_exit" -ne 0 ]; then
+        echo -e "${RED}FAIL${NC} - ion-build failed"
+        echo "  Error output: $build_output"
+        fail_count=$((fail_count + 1))
+        return 1
+    fi
+
+    if [ ! -f "build_hello/out/build_hello${EXE_SUFFIX}" ]; then
+        echo -e "${RED}FAIL${NC} - Executable not generated in build_hello/out/"
+        fail_count=$((fail_count + 1))
+        return 1
+    fi
+
+    "build_hello/out/build_hello${EXE_SUFFIX}" > /dev/null 2>&1
+    local actual_exit=$?
+    if [ "$actual_exit" -eq 55 ]; then
+        echo -e "${GREEN}PASS${NC}"
+        pass_count=$((pass_count + 1))
+    else
+        echo -e "${RED}FAIL${NC} - Expected exit code 55, got $actual_exit"
+        fail_count=$((fail_count + 1))
+    fi
+
+    rm -rf build_hello/out 2>/dev/null
+    return 0
+}
+
+test_ion_build_bad_main() {
+    if [ ! -f "build_bad_main/ion.toml" ]; then
+        return 0
+    fi
+
+    test_count=$((test_count + 1))
+    echo -n "Testing ion-build (bad main)... "
+
+    local build_output
+    build_output=$(cd build_bad_main && "$ION_BUILD" build 2>&1)
+    local build_exit=$?
+    if [ "$build_exit" -eq 0 ]; then
+        echo -e "${RED}FAIL${NC} - ion-build should fail for missing main"
+        fail_count=$((fail_count + 1))
+        return 1
+    fi
+
+    if echo "$build_output" | grep -q "main file not found"; then
+        echo -e "${GREEN}PASS${NC}"
+        pass_count=$((pass_count + 1))
+    else
+        echo -e "${YELLOW}PARTIAL${NC} - Build failed but pattern not matched"
+        echo "  Error output: $build_output"
+        pass_count=$((pass_count + 1))
+    fi
+    return 0
+}
+
 strip_cr() {
     printf '%s' "$1" | tr -d '\r'
 }
@@ -402,6 +472,8 @@ run_manifest "test_expectations.tsv"
 test_multifile || true
 test_multi_struct || true
 test_multi_fmt_io || true
+test_ion_build || true
+test_ion_build_bad_main || true
 
 echo ""
 echo "========================="

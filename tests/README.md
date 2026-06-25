@@ -227,6 +227,15 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_fmt_println_int.ion` - `fmt::println_int` via stdlib merge; codegen uses `io_print_int` in `fmt_print_int`
 - `test_fs_read.ion` - `fs::read_to_string_result` reads `fixtures/small.txt` (exit 80)
 
+### `ion-build` smoke tests
+
+The harness also runs `ion-build` (not via `test_expectations.tsv`):
+
+- `build_hello/` - minimal `ion.toml` project; expects exit code 55
+- `build_bad_main/` - invalid `main` path; expects `main file not found` on stderr
+
+Set `ION_BUILD` to override the `ion-build` binary path (default `../target/release/ion-build`).
+
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors
 - `test_move_in_loop.ion` - Use-after-move when a non-copy value is moved inside a loop body

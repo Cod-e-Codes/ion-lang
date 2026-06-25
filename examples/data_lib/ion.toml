@@ -1,0 +1,5 @@
+name = "data_lib"
+main = "main.ion"
+output = "data_lib"
+mode = "multi"
+out_dir = "target"

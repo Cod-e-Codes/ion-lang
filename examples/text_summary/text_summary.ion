@@ -1,8 +1,8 @@
 // Read a text file and print line, word, and byte counts (wc-style newlines).
 
-import "../../stdlib/fs.ion" as fs;
-import "../../stdlib/fmt.ion" as fmt;
-import "../../stdlib/io.ion" as io;
+import "stdlib/fs.ion" as fs;
+import "stdlib/fmt.ion" as fmt;
+import "stdlib/io.ion" as io;
 
 struct TextCounts {
     lines: int;

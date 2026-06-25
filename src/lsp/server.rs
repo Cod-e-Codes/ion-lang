@@ -294,7 +294,10 @@ impl IonLanguageServer {
                 let mut checker = tc::TypeChecker::new();
                 let mut dependencies = Vec::new();
                 let program = if let Ok(file_path) = uri.to_file_path() {
-                    let mut compiler = compiler::Compiler::new();
+                    let (stdlib_paths, project_root) =
+                        crate::build::discover_import_config(&file_path);
+                    let mut compiler =
+                        compiler::Compiler::with_import_config(stdlib_paths, project_root);
                     for import in &ast.imports {
                         dependencies.push(compiler.resolve_import_path(&import.path, &file_path));
                     }

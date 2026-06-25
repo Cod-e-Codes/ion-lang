@@ -1,0 +1,5 @@
+name = "channel_worker"
+main = "channel_worker.ion"
+output = "channel_worker"
+mode = "single"
+out_dir = "target"

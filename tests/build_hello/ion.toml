@@ -1,0 +1,5 @@
+name = "build_hello"
+main = "main.ion"
+output = "build_hello"
+mode = "single"
+out_dir = "out"

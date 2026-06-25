@@ -1,0 +1,3 @@
+name = "bad"
+main = "missing.ion"
+output = "bad"

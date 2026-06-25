@@ -34,31 +34,31 @@ static ReadResult ReadResult_Err_new(int arg0) {
     return result;
 }
 
+extern int write(int fd, uint8_t* buf, int count);
+
 extern int open(uint8_t* path, int flags);
 extern int read(int fd, uint8_t* buf, int count);
 extern int close(int fd);
 
-extern int write(int fd, uint8_t* buf, int count);
-
 TextCounts summarize_text(ion_string_t* text);
 int main(void);
-ReadResult fs_read_to_string_result(ion_string_t* path);
+void fmt_print_int(int n);
+void fmt_println_int(int n);
+ion_string_t* fmt_int_to_string(int n);
 void io_print(ion_string_t* s);
 void io_println(ion_string_t* s);
 void io_print_str(uint8_t* s, int len);
 void io_print_int(int n);
-void fmt_print_int(int n);
-void fmt_println_int(int n);
-ion_string_t* fmt_int_to_string(int n);
+ReadResult fs_read_to_string_result(ion_string_t* path);
 TextCounts summarize_text(ion_string_t* text) {
     TextCounts ret_val = {0};
     int lines = 0;
     int words = 0;
     int in_word = 0;
-    ion_string_t* __for_container_389 = text;
-    int __for_i_389 = 0;
-    while (__for_i_389 < ((__for_container_389) ? (int)((__for_container_389)->len) : 0)) {
-        uint8_t ch = ({ int __ion_idx_0 = __for_i_389; (__ion_idx_0 >= 0 && __ion_idx_0 < __for_container_389->len) ? __for_container_389->data[__ion_idx_0] : (ion_panic("String index out of bounds"), (uint8_t)0); });
+    ion_string_t* __for_container_371 = text;
+    int __for_i_371 = 0;
+    while (__for_i_371 < ((__for_container_371) ? (int)((__for_container_371)->len) : 0)) {
+        uint8_t ch = ({ int __ion_idx_0 = __for_i_371; (__ion_idx_0 >= 0 && __ion_idx_0 < __for_container_371->len) ? __for_container_371->data[__ion_idx_0] : (ion_panic("String index out of bounds"), (uint8_t)0); });
         if (ch == 10) {
             lines = (lines + 1);
         }
@@ -71,11 +71,11 @@ TextCounts summarize_text(ion_string_t* text) {
                 in_word = 1;
             }
         }
-        __for_step_389:
-        __for_i_389 = (__for_i_389 + 1);
+        __for_step_371:
+        __for_i_371 = (__for_i_371 + 1);
     }
     ret_val = (TextCounts){.lines = lines, .words = words};
-    if (__for_container_389) { ion_string_free(__for_container_389); }
+    if (__for_container_371) { ion_string_free(__for_container_371); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -115,35 +115,57 @@ epilogue:
         return ret_val;
 }
 
-ReadResult fs_read_to_string_result(ion_string_t* path) {
-    ReadResult ret_val = {0};
+void fmt_print_int(int n) {
+    io_print_int(n);
+epilogue:
+        return;
+}
+
+void fmt_println_int(int n) {
+    io_print_int(n);
     {
-        int fd = open(path->data, 0);
-        if (fd < 0) {
-            ret_val = ReadResult_Err_new((-1));
-            goto epilogue;
-        }
-        ion_string_t* text = ion_string_new();
-        uint8_t buf[256] = {0};
-        int n = read(fd, &buf[0], 256);
-        while (n > 0) {
-            int i = 0;
-            while (i < n) {
-                ion_string_push_byte(text, (unsigned char)(buf[i]));
-                i = (i + 1);
-            }
-            n = read(fd, &buf[0], 256);
-        }
-        if (n < 0) {
-            int _closed = close(fd);
-            ret_val = ReadResult_Err_new((-2));
-            if (text) { ion_string_free(text); }
-            goto epilogue;
-        }
-        int _closed = close(fd);
-        ret_val = ReadResult_Ok_new(text);
+        int _newline = write(1, "\n", 1);
+    }
+epilogue:
+        return;
+}
+
+ion_string_t* fmt_int_to_string(int n) {
+    ion_string_t* ret_val = 0;
+    uint8_t buf[12] = {0};
+    int len = 0;
+    int negative = 0;
+    int value = n;
+    ion_string_t* result = ion_string_new();
+    if (value == 0) {
+        ret_val = ion_string_from_literal("0", 1);
+        if (result) { ion_string_free(result); }
         goto epilogue;
     }
+    if (value < 0) {
+        negative = 1;
+        if (value == (-2147483648)) {
+            ret_val = ion_string_from_literal("-2147483648", 11);
+            if (result) { ion_string_free(result); }
+            goto epilogue;
+        }
+        value = (0 - value);
+    }
+    while (value > 0) {
+        int digit = (value % 10);
+        buf[len] = (uint8_t)(48 + digit);
+        len = (len + 1);
+        value = (value / 10);
+    }
+    if (negative) {
+        ion_string_push_byte(result, (unsigned char)((uint8_t)45));
+    }
+    int i = (len - 1);
+    while (i >= 0) {
+        ion_string_push_byte(result, (unsigned char)(({ int __ion_idx_1 = i; (__ion_idx_1 >= 0 && __ion_idx_1 < 12) ? buf[__ion_idx_1] : (ion_panic("Array index out of bounds"), buf[0]); })));
+        i = (i - 1);
+    }
+    ret_val = result;
     goto epilogue;
 epilogue:
         return ret_val;
@@ -206,8 +228,8 @@ void io_print_int(int n) {
     }
     int i = 0;
     while (i < (len / 2)) {
-        uint8_t tmp = ({ int __ion_idx_1 = i; (__ion_idx_1 >= 0 && __ion_idx_1 < 12) ? buf[__ion_idx_1] : (ion_panic("Array index out of bounds"), buf[0]); });
-        buf[i] = ({ int __ion_idx_2 = ((len - 1) - i); (__ion_idx_2 >= 0 && __ion_idx_2 < 12) ? buf[__ion_idx_2] : (ion_panic("Array index out of bounds"), buf[0]); });
+        uint8_t tmp = ({ int __ion_idx_2 = i; (__ion_idx_2 >= 0 && __ion_idx_2 < 12) ? buf[__ion_idx_2] : (ion_panic("Array index out of bounds"), buf[0]); });
+        buf[i] = ({ int __ion_idx_3 = ((len - 1) - i); (__ion_idx_3 >= 0 && __ion_idx_3 < 12) ? buf[__ion_idx_3] : (ion_panic("Array index out of bounds"), buf[0]); });
         buf[((len - 1) - i)] = tmp;
         i = (i + 1);
     }
@@ -223,57 +245,35 @@ epilogue:
         return;
 }
 
-void fmt_print_int(int n) {
-    io_print_int(n);
-epilogue:
-        return;
-}
-
-void fmt_println_int(int n) {
-    io_print_int(n);
+ReadResult fs_read_to_string_result(ion_string_t* path) {
+    ReadResult ret_val = {0};
     {
-        int _newline = write(1, "\n", 1);
-    }
-epilogue:
-        return;
-}
-
-ion_string_t* fmt_int_to_string(int n) {
-    ion_string_t* ret_val = 0;
-    uint8_t buf[12] = {0};
-    int len = 0;
-    int negative = 0;
-    int value = n;
-    ion_string_t* result = ion_string_new();
-    if (value == 0) {
-        ret_val = ion_string_from_literal("0", 1);
-        if (result) { ion_string_free(result); }
-        goto epilogue;
-    }
-    if (value < 0) {
-        negative = 1;
-        if (value == (-2147483648)) {
-            ret_val = ion_string_from_literal("-2147483648", 11);
-            if (result) { ion_string_free(result); }
+        int fd = open(path->data, 0);
+        if (fd < 0) {
+            ret_val = ReadResult_Err_new((-1));
             goto epilogue;
         }
-        value = (0 - value);
+        ion_string_t* text = ion_string_new();
+        uint8_t buf[256] = {0};
+        int n = read(fd, &buf[0], 256);
+        while (n > 0) {
+            int i = 0;
+            while (i < n) {
+                ion_string_push_byte(text, (unsigned char)(buf[i]));
+                i = (i + 1);
+            }
+            n = read(fd, &buf[0], 256);
+        }
+        if (n < 0) {
+            int _closed = close(fd);
+            ret_val = ReadResult_Err_new((-2));
+            if (text) { ion_string_free(text); }
+            goto epilogue;
+        }
+        int _closed = close(fd);
+        ret_val = ReadResult_Ok_new(text);
+        goto epilogue;
     }
-    while (value > 0) {
-        int digit = (value % 10);
-        buf[len] = (uint8_t)(48 + digit);
-        len = (len + 1);
-        value = (value / 10);
-    }
-    if (negative) {
-        ion_string_push_byte(result, (unsigned char)((uint8_t)45));
-    }
-    int i = (len - 1);
-    while (i >= 0) {
-        ion_string_push_byte(result, (unsigned char)(({ int __ion_idx_3 = i; (__ion_idx_3 >= 0 && __ion_idx_3 < 12) ? buf[__ion_idx_3] : (ion_panic("Array index out of bounds"), buf[0]); })));
-        i = (i - 1);
-    }
-    ret_val = result;
     goto epilogue;
 epilogue:
         return ret_val;

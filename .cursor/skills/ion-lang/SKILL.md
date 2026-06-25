@@ -27,7 +27,9 @@ Ion is a move-only, no-GC systems language transpiled to C. This skill orients y
 .ion → compiler::parse_module (imports/cycles, then lex+parse per file) → type checker → IR → cgen → .c → gcc + runtime → executable
 ```
 
-Rust modules in `src/`: `lexer`, `parser`, `ast`, `compiler` (module resolution), `tc` (`mod.rs`, `ownership.rs`, `builtins.rs`, `types.rs`), `ir`, `cgen` (`mod.rs`, `types.rs`, `builtins.rs`, `drop.rs`), `lsp`.
+Rust modules in `src/`: `lexer`, `parser`, `ast`, `compiler` (module resolution), `build` (manifest, C toolchain, `ion build` driver), `tc` (`mod.rs`, `ownership.rs`, `builtins.rs`, `types.rs`), `ir`, `cgen` (`mod.rs`, `types.rs`, `builtins.rs`, `drop.rs`), `lsp`.
+
+Binaries: `ion-compiler` (transpile/codegen), `ion-build` (full project build via `ion.toml`), `ion-lsp`.
 
 ## Non-negotiable language constraints
 
@@ -41,40 +43,34 @@ Ion identity depends on these - do not weaken them without explicit user directi
 
 ## Build and verify
 
-```bash
-# Rust unit tests (lexer has inline tests)
+```powershell
 cargo test
-
-# Release compiler (integration tests expect this path)
-cargo build --release --bin ion-compiler
-
-# Integration tests (Git Bash on Windows - not WSL)
-cd tests && ./test_runner.sh
-
-# Lint
+cargo build --release --bin ion-compiler --bin ion-lsp --bin ion-build
 cargo clippy -- -D warnings
+& 'C:\Program Files\Git\bin\bash.exe' -lc 'cd /c/Users/Cody/Projects/GitHub/Personal/Active/ion-lang/tests && ./test_runner.sh'
 ```
 
-**Windows:** Stop `ion-lsp` / `ion-compiler` before rebuilding if you get "Access is denied". After compiler library changes (`src/compiler`, `src/tc`, `src/cgen`), rebuild and reload the language server so diagnostics match the CLI:
-
-```bash
-cargo build --release --bin ion-compiler --bin ion-lsp
-```
-
-Then reload the editor window (Cursor: Developer: Reload Window). The LSP uses `merge_modules` for type checking but does not run multi-file codegen; no separate LSP source changes were required for the multi-file fixes.
-
-Use Git Bash for `test_runner.sh`. From PowerShell:
+**Application builds:** `ion-build` reads `ion.toml` (walks up from cwd), transpiles, compiles C, links runtime. Default output under `target/`:
 
 ```powershell
-& 'C:\Program Files\Git\bin\bash.exe' -lc 'cd /c/Users/Cody/Projects/GitHub/Personal/Active/ion-lang && <command>'
+.\target\release\ion-build.exe build
 ```
 
-**Manual compile cycle** (single-file; on Windows use `ion-compiler.exe`, `hello_world.exe`, and Git Bash or adjust paths):
+**Codegen inspection / integration harness:** `ion-compiler` still transpiles only (or `--mode multi` with in-tree link). Integration tests call `ion-compiler` directly; `test_runner.sh` also runs `ion-build` smoke tests in `tests/build_hello/`.
 
-```bash
-./target/release/ion-compiler examples/hello_world.ion
-gcc examples/hello_world.c runtime/ion_runtime.c -o hello_world \
-    -I. -I.. -Iruntime -I../runtime -lpthread
+**Stdlib imports:** `import "stdlib/io.ion" as io;` resolves via `ion.toml` `stdlib_paths`, `ION_STDLIB`, and `{project_root}/stdlib`. CLI and LSP share `build::discover_import_config`.
+
+**Windows:** Stop `ion-lsp` / `ion-compiler` before rebuilding if you get "Access is denied". After compiler or import-resolution changes, rebuild LSP and reload the editor window:
+
+```powershell
+cargo build --release --bin ion-lsp
+```
+
+**Manual transpile cycle** (advanced; integration tests use this path):
+
+```powershell
+.\target\release\ion-compiler.exe examples\hello_world.ion
+gcc examples\hello_world.c runtime\ion_runtime.c -o hello_world.exe -I. -Iruntime -lpthread -lws2_32
 ```
 
 ## Specialized skills
@@ -103,7 +99,8 @@ Read these when the task matches:
 - References cannot escape functions, structs, enums, channels, or `spawn` - reject at type-check time.
 - `extern "C"` calls require `unsafe` blocks.
 - Multi-file mode: `--mode multi --output <name> <main.ion>` generates per-module `.c`/`.h`.
-- Stdlib lives in `stdlib/` (`io.ion`, `fmt.ion`, `fs.ion`, `result.ion`); imported module functions are emitted as `{alias}_{name}` in single-file merge mode (e.g. `io::print_int` -> `io_print_int`).
+- Stdlib: `import "stdlib/io.ion" as io;` (resolved via `ion.toml` / `ION_STDLIB` / project `stdlib/`). Bare `import "io.ion"` also resolves when `io.ion` is on a search path.
+- `ion build` (`ion-build` binary): project manifest at `ion.toml`; see ION_SPEC §10.1.
 - Integration tests: add `tests/test_*.ion` plus one row in `tests/test_expectations.tsv` (see `ion-integration-tests` skill). Run `cd tests && ./test_runner.sh` to verify.
 - Fn literals are capture-free only; references to outer bindings are rejected with `ClosureCapture`.
 - LSP parses the **open buffer** in memory (lexer → parser with source for doc attachment), then `load_imports` which **fully `parse_module`s imported files from disk** (per-import errors are published). Parser/tc/import changes may need LSP updates (`ion-lsp-vscode` skill).

@@ -144,21 +144,22 @@ Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (define enu
 
 ## Build and verify
 
-```bash
-cargo build --release --bin ion-compiler
-./target/release/ion-compiler path/to/program.ion
-gcc path/to/program.c runtime/ion_runtime.c -o program -I. -Iruntime -lpthread
-./program
-echo $?
+With `ion.toml` at the project root (or example directory):
+
+```powershell
+cargo build --release --bin ion-build
+.\target\release\ion-build.exe build
+.\target\<output>.exe
+echo $LASTEXITCODE
 ```
 
-On Windows use `ion-compiler.exe`, Git Bash for paths, and add `-lws2_32` when linking channel/spawn programs. Stop `ion-lsp` if rebuild fails with "Access is denied".
+For a single file without a manifest, use `ion-compiler` plus manual `gcc` (see `ion-lang` skill). On Windows add `-lws2_32` for channel/spawn programs. Stop `ion-lsp` if rebuild fails with "Access is denied".
 
 For programs under `tests/`, follow the `ion-integration-tests` skill (`test_expectations.tsv` row required).
 
 ## Do not assume (common hallucinations)
 
-These are **not** in Ion today. Check ION_SPEC.md section 10.2 before using anything similar:
+These are **not** in Ion today. Check ION_SPEC.md section 10.3 before using anything similar:
 
 - Capturing closures (fn literals that reference outer variables), or `impl` blocks in user code
 - Traits, trait bounds, or `where` clauses on generics

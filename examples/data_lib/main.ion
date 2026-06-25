@@ -1,6 +1,6 @@
 import "catalog.ion" as catalog;
-import "../../stdlib/fmt.ion" as fmt;
-import "../../stdlib/io.ion" as io;
+import "stdlib/fmt.ion" as fmt;
+import "stdlib/io.ion" as io;
 
 fn main() -> int {
     let lines: int = catalog::catalog_line_count();

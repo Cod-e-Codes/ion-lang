@@ -264,7 +264,11 @@ top_decl         = struct_decl
                  | enum_decl
                  | type_alias
                  | fn_decl ;
+```
 
+Import string literals name a module file. Resolution is tooling-defined (see [§10.1](#101-project-build-ion-build)): file-relative paths (`./`, `../`), same-directory modules, stdlib search paths (`stdlib/io.ion`, `io.ion`), then project-root-relative paths. The import statement grammar is unchanged.
+
+```ebnf
 struct_decl      = "struct" , identifier , struct_body ;
 
 struct_body      = "{" , { field_decl } , "}" ;
@@ -1181,7 +1185,43 @@ Each such pattern must produce a clear, actionable compiler error.
 
 ### 10. Tooling and Known Limitations
 
-#### 10.1 Language server (LSP)
+#### 10.1 Project build (`ion-build`)
+
+The `ion-build` binary is the default developer workflow for applications. It reads `ion.toml` at the project root (discovered by walking upward from the current working directory), then runs the full pipeline: transpile Ion to C, compile generated C, link with `runtime/ion_runtime.c`, and write the executable.
+
+```powershell
+cargo build --release --bin ion-build
+.\target\release\ion-build.exe build
+```
+
+`ion-compiler` remains available for codegen inspection, LSP internals, and integration tests that grep `.c` output. It does not require `ion.toml`.
+
+**`ion.toml` fields (tooling, not language semantics):**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | Project name (informational) |
+| `main` | yes | Entry `.ion` file, relative to the manifest directory |
+| `output` | yes | Executable name (`.exe` added on Windows when linking) |
+| `mode` | no | `single` (default) or `multi` for per-module `.c`/`.h` codegen |
+| `out_dir` | no | Build output directory relative to project root (default: `target`) |
+| `stdlib_paths` | no | Extra stdlib search directories (relative to project root) |
+| `cflags` | no | Extra flags when compiling generated `.c` files (e.g. `-Drecv_sys=recv` for FFI name mapping) |
+| `ldflags` | no | Extra flags passed when linking (e.g. `-lm` overrides) |
+| `emit_in_source` | no | When `true`, emit `.c`/`.h`/`.o` next to sources instead of `out_dir` |
+
+**Stdlib import resolution:** Import string literals such as `import "stdlib/io.ion" as io;` resolve through stdlib search paths, not only paths relative to the importing file. Search order:
+
+1. Manifest `stdlib_paths` entries
+2. `ION_STDLIB` environment variable (`;`-separated on Windows, `:` elsewhere)
+3. `{project_root}/stdlib`
+4. Install-relative `stdlib/` next to the compiler executable (walking up)
+
+File-relative imports (`./`, `../`) and same-directory modules are resolved first. The CLI (`ion-compiler`, `ion-build`) and LSP use the same rules when `ion.toml` or `ION_STDLIB` is present.
+
+On Windows with MinGW, linking adds `-lws2_32` automatically (channels, spawn, sockets). Honor `CC` for the C compiler (same as `tests/test_runner.sh`).
+
+#### 10.2 Language server (LSP)
 
 The `ion-lsp` binary and VS Code/Cursor extension provide:
 
@@ -1199,7 +1239,7 @@ The CLI `ion-compiler` still reports the first type-check error only. The LSP us
 
 Build with `cargo build --release --bin ion-lsp`. Rebuild after compiler or LSP changes; reload the editor window so `ion.lspPath` picks up the new binary. Set `ion.lspPath` in editor settings to the executable path.
 
-#### 10.2 Known limitations
+#### 10.3 Known limitations
 
 - No trait bounds on generics
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes

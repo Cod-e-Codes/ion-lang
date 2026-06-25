@@ -22,7 +22,7 @@ Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`
 - **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, and `stdlib/result.ion`
 
-Known limitations: [ION_SPEC.md section 10.2](ION_SPEC.md#102-known-limitations).
+Known limitations: [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
 
 ## Documentation
 
@@ -46,13 +46,13 @@ Known limitations: [ION_SPEC.md section 10.2](ION_SPEC.md#102-known-limitations)
 cargo build --release
 ```
 
-Or install into your Cargo bin directory:
+This builds `ion-compiler`, `ion-build`, and `ion-lsp`. Install into your Cargo bin directory:
 
 ```bash
-cargo install --path . --bin ion-compiler
+cargo install --path . --bin ion-compiler --bin ion-build
 ```
 
-The binary will be at `target/release/ion-compiler` (or `target/release/ion-compiler.exe` on Windows).
+Binaries: `target/release/ion-compiler`, `target/release/ion-build`, `target/release/ion-lsp` (`.exe` on Windows).
 
 ## IDE Support
 
@@ -65,7 +65,7 @@ Ion has a VS Code / Cursor extension that provides:
 - Completion: keywords, builtins, and file symbols
 - Go to definition: variables, function calls, and user-defined methods; imported `mod::func` opens the module file
 
-Limitations: built-in methods (`Vec::push`, etc.) do not go to definition; completion has no prefix filtering. Full list in [ION_SPEC.md section 10.2](ION_SPEC.md#102-known-limitations).
+Limitations: built-in methods (`Vec::push`, etc.) do not go to definition; completion has no prefix filtering. Full list in [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
 
 **Installation:**
 
@@ -100,19 +100,28 @@ cursor --install-extension ion-language-0.1.0.vsix
 
 ### Quick Start
 
-```bash
-# Compile Ion to C
-./target/release/ion-compiler examples/hello_world.ion
+From the repository root (uses root `ion.toml`):
 
-# Compile C to executable (from project root)
-gcc examples/hello_world.c runtime/ion_runtime.c -o hello_world \
-    -I. -I.. -Iruntime -I../runtime -lpthread
-
-# Run
-./hello_world
+```powershell
+cargo build --release --bin ion-build
+.\target\release\ion-build.exe build
+.\target\hello_world.exe
 ```
 
-Source: [examples/hello_world.ion](examples/hello_world.ion). For stdlib-based I/O, see [examples/hello_world_safe.ion](examples/hello_world_safe.ion).
+`ion build` transpiles, compiles generated C, links the runtime, and writes the executable under `target/` by default.
+
+Source: [examples/hello_world_safe.ion](examples/hello_world_safe.ion). For a minimal FFI example without stdlib, see [examples/hello_world.ion](examples/hello_world.ion).
+
+### Advanced: Manual Transpile and Link
+
+For codegen inspection or debugging, use `ion-compiler` directly:
+
+```bash
+./target/release/ion-compiler examples/hello_world.ion
+gcc examples/hello_world.c runtime/ion_runtime.c -o hello_world \
+    -I. -I.. -Iruntime -I../runtime -lpthread
+./hello_world
+```
 
 ### Single-File Mode (Default)
 
@@ -200,12 +209,20 @@ For `http_server.ion`, add `-Drecv_sys=recv -Dsend_sys=send` when linking.
 | [examples/text_summary/text_summary.ion](examples/text_summary/text_summary.ion) | `fs` file read, string iteration, line/word/byte counts |
 | [examples/data_lib/main.ion](examples/data_lib/main.ion) | Multi-module library (`catalog.ion`); see [data_lib/README.md](examples/data_lib/README.md) |
 
-Build `data_lib` (multi-file; codegen is ephemeral, not in git):
+Build `data_lib` (multi-file):
+
+```powershell
+cd examples\data_lib
+..\..\target\release\ion-build.exe build
+.\target\data_lib.exe
+```
+
+Or with `ion-compiler` directly (emits `.c`/`.h` in the current directory):
 
 ```bash
 cd examples/data_lib
 ../../target/release/ion-compiler --mode multi --output data_lib main.ion
-./data_lib    # or data_lib.exe on Windows
+./data_lib
 ```
 
 ## Project Structure

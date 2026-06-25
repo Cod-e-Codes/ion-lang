@@ -24,14 +24,15 @@ jobs:
       - run: cargo test
       - run: cargo clippy -- -D warnings
 
-      - run: cargo build --release --bin ion-compiler
-      - run: cargo build --release --bin ion-lsp
+      - run: cargo build --release --bin ion-compiler --bin ion-lsp --bin ion-build
       - run: ./target/release/ion-compiler --version
+      - run: ./target/release/ion-build --version
 
       - name: Integration tests (Linux)
         shell: bash
         env:
           COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          ION_BUILD: ${{ github.workspace }}/target/release/ion-build
         run: cd tests && bash test_runner.sh
 
   integration:
@@ -47,10 +48,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo build --release --bin ion-compiler
+      - run: cargo build --release --bin ion-compiler --bin ion-build
 
       - name: Integration tests (Windows)
         shell: bash
         env:
           COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          ION_BUILD: ${{ github.workspace }}/target/release/ion-build
         run: cd tests && bash test_runner.sh

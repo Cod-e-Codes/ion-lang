@@ -1,0 +1,5 @@
+name = "hello_world"
+main = "examples/hello_world_safe.ion"
+output = "hello_world"
+mode = "single"
+out_dir = "target"

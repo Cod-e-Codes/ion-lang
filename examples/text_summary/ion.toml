@@ -1,0 +1,5 @@
+name = "text_summary"
+main = "text_summary.ion"
+output = "text_summary"
+mode = "single"
+out_dir = "target"

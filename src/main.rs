@@ -13,8 +13,8 @@ fn main() {
     }
 
     if args.len() < 2 {
-        eprintln!("Usage: ion [--mode <single|multi>] [--output <name>] <input.ion>");
-        eprintln!("       ion --version");
+        eprintln!("Usage: ion-compiler [--mode <single|multi>] [--output <name>] <input.ion>");
+        eprintln!("       ion-compiler --version");
         eprintln!("Compiles an Ion source file to C code.");
         process::exit(1);
     }
@@ -64,8 +64,10 @@ fn main() {
         .unwrap();
     let input_path = Path::new(&input_file);
 
+    let (stdlib_paths, project_root) = build::discover_import_config(input_path);
+
     // Use compiler to parse module and its imports
-    let mut compiler = compiler::Compiler::new();
+    let mut compiler = compiler::Compiler::with_import_config(stdlib_paths, project_root.clone());
     let ast = match compiler.parse_module(input_path) {
         Ok(program) => program,
         Err(err) => {
@@ -141,7 +143,7 @@ fn main() {
 
             // Generate .c file
             let mut codegen = cgen::Codegen::new();
-            let source_ion = module_path.to_string_lossy();
+            let source_ion = build::portable_source_label(module_path);
             let c_code = codegen.generate_module_source(
                 &ir,
                 &symbol_prefix,
@@ -170,15 +172,31 @@ fn main() {
 
         // Now compile all .c files to .o files (all headers are now generated)
         let mut compiled_objects = Vec::new();
+        let runtime_dir = build::c_toolchain::find_runtime_dir()
+            .or_else(|| {
+                build::c_toolchain::find_runtime_dir_from(
+                    project_root.as_deref().unwrap_or(Path::new(".")),
+                )
+            })
+            .unwrap_or_else(|| PathBuf::from("runtime"));
+        let include_dir = env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from("."));
+
         for (c_file, object_file) in object_files {
-            if let Err(err) = compile_to_object(&c_file, &object_file) {
+            if let Err(err) = build::c_toolchain::compile_to_object(
+                Path::new(&c_file),
+                Path::new(&object_file),
+                &include_dir,
+                &runtime_dir,
+                &[],
+            ) {
                 eprintln!("Error compiling '{}': {}", c_file, err);
                 process::exit(1);
             }
-            compiled_objects.push(object_file);
+            compiled_objects.push(PathBuf::from(object_file));
         }
-
-        let object_files = compiled_objects;
 
         // Link all object files into executable
         let executable_name = output_name.unwrap_or_else(|| {
@@ -189,7 +207,12 @@ fn main() {
                 .to_string()
         });
 
-        if let Err(err) = link_executable(&object_files, &executable_name) {
+        if let Err(err) = build::c_toolchain::link_executable(
+            &compiled_objects,
+            Path::new(&executable_name),
+            None,
+            &[],
+        ) {
             eprintln!("Error linking executable: {}", err);
             process::exit(1);
         }
@@ -207,7 +230,7 @@ fn main() {
 
         // Generate C code
         let mut codegen = cgen::Codegen::new();
-        let c_code = codegen.generate(&ir, &input_file);
+        let c_code = codegen.generate(&ir, &build::portable_source_label(input_path));
 
         // Determine output filename
         let output_file = if input_file.ends_with(".ion") {
@@ -224,109 +247,4 @@ fn main() {
 
         println!("Compiled '{}' to '{}'", input_file, output_file);
     }
-}
-
-fn find_runtime_dir() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let header = dir.join("runtime").join("ion_runtime.h");
-        if header.exists() {
-            return Some(dir.join("runtime"));
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
-}
-
-fn runtime_include_args(runtime_dir: &Path) -> Vec<String> {
-    let mut args = vec![
-        "-I.".to_string(),
-        "-I..".to_string(),
-        "-Iruntime".to_string(),
-        "-I../runtime".to_string(),
-    ];
-    if let Some(parent) = runtime_dir.parent() {
-        args.push(format!("-I{}", parent.display()));
-    }
-    args.push(format!("-I{}", runtime_dir.display()));
-    args
-}
-
-fn compile_to_object(c_file: &str, object_file: &str) -> Result<(), String> {
-    use std::process::Command;
-
-    // Detect C compiler (gcc, clang, or user-specified via CC env var)
-    let cc = std::env::var("CC").unwrap_or_else(|_| "gcc".to_string());
-
-    let runtime_dir = find_runtime_dir().unwrap_or_else(|| PathBuf::from("runtime"));
-
-    // Get the current working directory (where all files are generated)
-    let current_dir = std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from("."));
-
-    let mut cmd = Command::new(&cc);
-    cmd.arg("-c")
-        .arg(c_file)
-        .arg("-o")
-        .arg(object_file)
-        .arg("-I.")
-        .arg(format!("-I{}", current_dir.display()));
-    for include in runtime_include_args(&runtime_dir) {
-        cmd.arg(include);
-    }
-
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to execute {}: {}", cc, e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Compilation failed: {}", stderr));
-    }
-
-    Ok(())
-}
-
-fn link_executable(object_files: &[String], executable_name: &str) -> Result<(), String> {
-    use std::process::Command;
-
-    let cc = std::env::var("CC").unwrap_or_else(|_| "gcc".to_string());
-
-    let mut args: Vec<String> = vec!["-o".to_string(), executable_name.to_string()];
-    for obj_file in object_files {
-        args.push(obj_file.clone());
-    }
-
-    if let Some(runtime_dir) = find_runtime_dir() {
-        let runtime_c = runtime_dir.join("ion_runtime.c");
-        if runtime_c.exists() {
-            args.push(runtime_c.to_string_lossy().into_owned());
-        }
-    } else if Path::new("runtime/ion_runtime.c").exists() {
-        args.push("runtime/ion_runtime.c".to_string());
-    } else if Path::new("../runtime/ion_runtime.c").exists() {
-        args.push("../runtime/ion_runtime.c".to_string());
-    }
-
-    args.push("-lm".to_string());
-    args.push("-lpthread".to_string());
-    if cfg!(windows) {
-        args.push("-lws2_32".to_string());
-    }
-
-    let output = Command::new(&cc)
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to execute {}: {}", cc, e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Linking failed: {}", stderr));
-    }
-
-    Ok(())
 }

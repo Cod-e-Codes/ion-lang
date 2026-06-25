@@ -1,0 +1,6 @@
+name = "http_server"
+main = "http_server.ion"
+output = "http_server"
+mode = "single"
+out_dir = "target"
+cflags = ["-Drecv_sys=recv", "-Dsend_sys=send", "-Dclose=closesocket"]

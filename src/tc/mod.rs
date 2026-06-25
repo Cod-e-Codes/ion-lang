@@ -4870,7 +4870,8 @@ fn greet() -> int {
         let src = std::fs::read_to_string(path).expect("access_log.ion");
         let tokens = crate::lexer::Lexer::new(&src).tokenize().unwrap();
         let ast = parser::Parser::new(tokens).parse().unwrap();
-        let mut compiler = Compiler::new();
+        let (stdlib_paths, project_root) = crate::build::discover_import_config(path);
+        let mut compiler = Compiler::with_import_config(stdlib_paths, project_root);
         let _ = compiler.load_imports(path, &ast.imports);
         let program = compiler.merge_modules(&ast, path);
         let mut checker = TypeChecker::new();

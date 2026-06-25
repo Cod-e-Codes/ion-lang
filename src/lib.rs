@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod build;
 pub mod cgen;
 pub mod compiler;
 pub mod ir;

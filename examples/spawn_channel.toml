@@ -1,0 +1,5 @@
+name = "spawn_channel"
+main = "spawn_channel.ion"
+output = "spawn_channel"
+mode = "single"
+out_dir = "target"
