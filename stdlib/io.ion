@@ -4,12 +4,14 @@ extern "C" {
     fn write(fd: int, buf: *u8, count: int) -> int;
 }
 
+// Write an owned string to stdout without a trailing newline.
 pub fn print(s: String) {
     unsafe {
         let _result: int = write(1, s.data, s.len as int);
     }
 }
 
+// Write an owned string to stdout followed by a newline.
 pub fn println(s: String) {
     unsafe {
         let _result: int = write(1, s.data, s.len as int);
@@ -17,6 +19,7 @@ pub fn println(s: String) {
     }
 }
 
+// Write a raw byte buffer to stdout (low-level helper).
 pub fn print_str(s: *u8, len: int) {
     if len < 0 {
         return;
@@ -26,6 +29,7 @@ pub fn print_str(s: *u8, len: int) {
     }
 }
 
+// Print a signed integer in decimal to stdout without a trailing newline.
 pub fn print_int(n: int) {
     let mut buf: [u8; 12] = [0; 12];
     let mut len: int = 0;

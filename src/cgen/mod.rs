@@ -309,11 +309,13 @@ impl Codegen {
         // Only add synthetic template if Option is not already user-declared
         if !self.enum_map.contains_key("Option") {
             let option_template = EnumDecl {
+                doc: None,
                 pub_: false,
                 name: "Option".to_string(),
                 generics: vec!["T".to_string()],
                 variants: vec![
                     EnumVariant {
+                        doc: None,
                         name: "Some".to_string(),
                         payload_types: vec![Type::Generic {
                             name: "T".to_string(),
@@ -328,6 +330,7 @@ impl Codegen {
                         },
                     },
                     EnumVariant {
+                        doc: None,
                         name: "None".to_string(),
                         payload_types: vec![],
                         named_fields: None,
@@ -396,11 +399,13 @@ impl Codegen {
 
                     // Create a synthetic EnumDecl for Option<T>
                     let option_decl = EnumDecl {
+                        doc: None,
                         pub_: false,
                         name: "Option".to_string(),
                         generics: vec!["T".to_string()],
                         variants: vec![
                             EnumVariant {
+                                doc: None,
                                 name: "Some".to_string(),
                                 payload_types: vec![Type::Generic {
                                     name: "T".to_string(),
@@ -415,6 +420,7 @@ impl Codegen {
                                 },
                             },
                             EnumVariant {
+                                doc: None,
                                 name: "None".to_string(),
                                 payload_types: vec![],
                                 named_fields: None,
@@ -647,11 +653,13 @@ impl Codegen {
             {
                 // Create a synthetic EnumDecl for Option<T>
                 let option_decl = EnumDecl {
+                    doc: None,
                     pub_: false,
                     name: "Option".to_string(),
                     generics: vec!["T".to_string()],
                     variants: vec![
                         EnumVariant {
+                            doc: None,
                             name: "Some".to_string(),
                             payload_types: vec![Type::Generic {
                                 name: "T".to_string(),
@@ -666,6 +674,7 @@ impl Codegen {
                             },
                         },
                         EnumVariant {
+                            doc: None,
                             name: "None".to_string(),
                             payload_types: vec![],
                             named_fields: None,
@@ -722,11 +731,13 @@ impl Codegen {
 
                     // Create a synthetic EnumDecl for Option<T>
                     let option_decl = EnumDecl {
+                        doc: None,
                         pub_: false,
                         name: "Option".to_string(),
                         generics: vec!["T".to_string()],
                         variants: vec![
                             EnumVariant {
+                                doc: None,
                                 name: "Some".to_string(),
                                 payload_types: vec![Type::Generic {
                                     name: "T".to_string(),
@@ -741,6 +752,7 @@ impl Codegen {
                                 },
                             },
                             EnumVariant {
+                                doc: None,
                                 name: "None".to_string(),
                                 payload_types: vec![],
                                 named_fields: None,

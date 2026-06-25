@@ -288,7 +288,7 @@ impl IonLanguageServer {
             }
         };
 
-        let mut parser = parser::Parser::new(tokens);
+        let mut parser = parser::Parser::with_source(tokens, &text);
         match parser.parse() {
             Ok(ast) => {
                 let mut checker = tc::TypeChecker::new();

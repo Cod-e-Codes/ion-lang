@@ -6,10 +6,12 @@ extern "C" {
     fn write(fd: int, buf: *u8, count: int) -> int;
 }
 
+// Print a signed integer in decimal to stdout without a trailing newline.
 pub fn print_int(n: int) {
     io::print_int(n);
 }
 
+// Print a signed integer in decimal to stdout followed by a newline.
 pub fn println_int(n: int) {
     io::print_int(n);
     unsafe {

@@ -167,3 +167,4 @@ test_unsafe_slice_indexing.ion	cgen			s->data[0]	Slice index out of bounds
 test_array_bounds_panic.ion	cgen			ion_panic("Array index out of bounds")	
 test_slice_bounds_panic.ion	cgen			ion_panic("Slice index out of bounds")	
 test_fmt_println_int.ion	cgen			io_print_int	^[[:space:]]+print_int\(
+test_doc_comments.ion	run	42			

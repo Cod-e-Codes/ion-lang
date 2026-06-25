@@ -99,7 +99,7 @@ impl Compiler {
         })?;
 
         // Parse
-        let mut parser = Parser::new(tokens);
+        let mut parser = Parser::with_source(tokens, &content);
         let program = parser.parse().map_err(CompileError::ParseError)?;
 
         // Recursively parse imports and build export maps
@@ -195,6 +195,7 @@ impl Compiler {
     /// This collects all functions, structs, enums, and extern blocks from all modules
     pub fn merge_modules(&self, main_program: &Program, main_path: &Path) -> Program {
         let mut merged = Program {
+            doc: main_program.doc.clone(),
             imports: Vec::new(), // Imports are not needed in merged program
             structs: main_program.structs.clone(),
             enums: main_program.enums.clone(),

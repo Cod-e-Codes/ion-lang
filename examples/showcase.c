@@ -215,11 +215,11 @@ int for_loop_example(void) {
     ion_vec_push((ion_vec_t*)(values), &((int){2}), sizeof(int));
     ion_vec_push((ion_vec_t*)(values), &((int){3}), sizeof(int));
     int sum = 0;
-    Vec_int* __for_container_2192 = values;
-    int __for_i_2192 = 0;
-    while (__for_i_2192 < ((__for_container_2192) ? (int)((ion_vec_t*)(__for_container_2192))->len : 0)) {
-        Option_int __for_opt_2192 = *((Option_int*)(ion_vec_get((ion_vec_t*)(__for_container_2192), __for_i_2192, sizeof(int))));
-        Option_int match_val_2 = __for_opt_2192;
+    Vec_int* __for_container_2197 = values;
+    int __for_i_2197 = 0;
+    while (__for_i_2197 < ((__for_container_2197) ? (int)((ion_vec_t*)(__for_container_2197))->len : 0)) {
+        Option_int __for_opt_2197 = *((Option_int*)(ion_vec_get((ion_vec_t*)(__for_container_2197), __for_i_2197, sizeof(int))));
+        Option_int match_val_2 = __for_opt_2197;
         switch (match_val_2.tag) {
             case 0: { // Some
                 int v = match_val_2.data.variant_0.arg0;
@@ -230,16 +230,16 @@ int for_loop_example(void) {
                 break;
             }
         }
-        __for_step_2192:
-        __for_i_2192 = (__for_i_2192 + 1);
+        __for_step_2197:
+        __for_i_2197 = (__for_i_2197 + 1);
     }
     if (sum != 6) {
         ret_val = 1;
-        if (__for_container_2192) { ion_vec_free((ion_vec_t*)(__for_container_2192)); }
+        if (__for_container_2197) { ion_vec_free((ion_vec_t*)(__for_container_2197)); }
         goto epilogue;
     }
     ret_val = 0;
-    if (__for_container_2192) { ion_vec_free((ion_vec_t*)(__for_container_2192)); }
+    if (__for_container_2197) { ion_vec_free((ion_vec_t*)(__for_container_2197)); }
     goto epilogue;
 epilogue:
         return ret_val;

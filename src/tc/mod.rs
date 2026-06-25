@@ -75,6 +75,8 @@ pub struct LspCompletionItem {
     pub label: String,
     pub kind: LspSymbolKind,
     pub detail: Option<String>,
+    /// Prose documentation from adjacent `//` comments on the definition.
+    pub documentation: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +98,7 @@ pub struct LspInfo {
     pub references: HashMap<Span, LspTarget>,
     pub types: HashMap<Span, Type>,
     /// Hover text keyed by definition span (functions, structs, enums, aliases, extern fns, builtins).
+    /// Value is signature/type text, optionally followed by blank line and attached doc prose.
     pub hover_docs: HashMap<Span, String>,
     pub completions: Vec<LspCompletionItem>,
     pub document_symbols: Vec<LspDocumentSymbol>,
@@ -306,7 +309,26 @@ impl TypeChecker {
             label,
             kind,
             detail,
+            documentation: None,
         });
+    }
+
+    fn hover_with_doc(signature: &str, doc: Option<&str>) -> String {
+        match doc.filter(|d| !d.is_empty()) {
+            Some(prose) => format!("{signature}\n\n{prose}"),
+            None => signature.to_string(),
+        }
+    }
+
+    fn lookup_fn_doc(&self, callee: &str) -> Option<String> {
+        if let Some((module, func)) = callee.split_once("::") {
+            return self
+                .module_imports
+                .get(module)
+                .and_then(|m| m.functions.get(func))
+                .and_then(|f| f.doc.clone());
+        }
+        self.functions.get(callee).and_then(|f| f.doc.clone())
     }
 
     fn record_expr_type(&mut self, span: Span, ty: &Type) {
@@ -352,8 +374,24 @@ impl TypeChecker {
     }
 
     fn seed_lsp_symbols(&mut self, source: &Program) {
-        for alias in &source.imports {
-            self.record_completion(&alias.alias, LspSymbolKind::Module, None);
+        if let Some(doc) = &source.doc
+            && let Some(first) = source
+                .imports
+                .first()
+                .map(|i| i.span)
+                .or_else(|| source.structs.first().map(|s| s.span))
+                .or_else(|| source.enums.first().map(|e| e.span))
+                .or_else(|| source.type_aliases.first().map(|a| a.span))
+                .or_else(|| source.functions.first().map(|f| f.span))
+        {
+            self.record_hover_doc(first, doc.clone());
+        }
+
+        for import in &source.imports {
+            self.record_completion(&import.alias, LspSymbolKind::Module, None);
+            if let Some(doc) = &import.doc {
+                self.record_hover_doc(import.span, doc.clone());
+            }
         }
 
         for alias in &source.type_aliases {
@@ -362,13 +400,13 @@ impl TypeChecker {
             } else {
                 format!("<{}>", alias.generics.join(", "))
             };
-            let doc = format!(
+            let sig = format!(
                 "type {}{} = {}",
                 alias.name,
                 generics,
                 type_to_string(&alias.target)
             );
-            self.record_hover_doc(alias.span, doc);
+            self.record_hover_doc(alias.span, Self::hover_with_doc(&sig, alias.doc.as_deref()));
             self.record_completion(
                 &alias.name,
                 LspSymbolKind::TypeAlias,
@@ -389,10 +427,8 @@ impl TypeChecker {
             } else {
                 format!("<{}>", s.generics.join(", "))
             };
-            self.record_hover_doc(
-                s.span,
-                format!("struct {}{} {{ {} }}", s.name, generics, fields.join(", ")),
-            );
+            let sig = format!("struct {}{} {{ {} }}", s.name, generics, fields.join(", "));
+            self.record_hover_doc(s.span, Self::hover_with_doc(&sig, s.doc.as_deref()));
             self.record_completion(&s.name, LspSymbolKind::Struct, None);
             let field_children: Vec<LspDocumentSymbol> = s
                 .fields
@@ -411,8 +447,15 @@ impl TypeChecker {
                     label: f.name.clone(),
                     kind: LspSymbolKind::Field,
                     detail: Some(type_to_string(&f.ty)),
+                    documentation: f.doc.clone(),
                 })
                 .collect();
+            for f in &s.fields {
+                if f.doc.is_some() {
+                    let sig = format!("{}: {}", f.name, type_to_string(&f.ty));
+                    self.record_hover_doc(f.span, Self::hover_with_doc(&sig, f.doc.as_deref()));
+                }
+            }
             self.lsp_info
                 .struct_members
                 .insert(s.name.clone(), member_items);
@@ -431,10 +474,8 @@ impl TypeChecker {
             } else {
                 format!("<{}>", e.generics.join(", "))
             };
-            self.record_hover_doc(
-                e.span,
-                format!("enum {}{} {{ {} }}", e.name, generics, variants.join(", ")),
-            );
+            let sig = format!("enum {}{} {{ {} }}", e.name, generics, variants.join(", "));
+            self.record_hover_doc(e.span, Self::hover_with_doc(&sig, e.doc.as_deref()));
             self.record_completion(&e.name, LspSymbolKind::Enum, None);
             let variant_children: Vec<LspDocumentSymbol> = e
                 .variants
@@ -453,13 +494,15 @@ impl TypeChecker {
                     label: v.name.clone(),
                     kind: LspSymbolKind::Variant,
                     detail: None,
+                    documentation: v.doc.clone(),
                 })
                 .collect();
             self.lsp_info
                 .enum_variants
                 .insert(e.name.clone(), variant_items);
             for v in &e.variants {
-                self.record_hover_doc(v.span, format!("{}::{}", e.name, v.name));
+                let sig = format!("{}::{}", e.name, v.name);
+                self.record_hover_doc(v.span, Self::hover_with_doc(&sig, v.doc.as_deref()));
             }
             self.lsp_info.document_symbols.push(LspDocumentSymbol {
                 name: e.name.clone(),
@@ -470,18 +513,30 @@ impl TypeChecker {
         }
 
         for function in &source.functions {
-            let doc = Self::fn_hover_doc(
+            let sig = Self::fn_hover_doc(
                 &function.name,
                 &function.generics,
                 &function.params,
                 &function.return_type,
             );
-            self.record_hover_doc(function.span, doc);
+            self.record_hover_doc(
+                function.span,
+                Self::hover_with_doc(&sig, function.doc.as_deref()),
+            );
             self.record_completion(
                 &function.name,
                 LspSymbolKind::Function,
                 function.return_type.as_ref().map(type_to_string),
             );
+            if let Some(doc) = &function.doc
+                && let Some(item) = self
+                    .lsp_info
+                    .completions
+                    .iter_mut()
+                    .find(|c| c.label == function.name)
+            {
+                item.documentation = Some(doc.clone());
+            }
             self.lsp_info.document_symbols.push(LspDocumentSymbol {
                 name: function.name.clone(),
                 kind: LspSymbolKind::Function,
@@ -492,7 +547,7 @@ impl TypeChecker {
 
         for block in &source.extern_blocks {
             for extern_fn in &block.functions {
-                let doc = Self::fn_hover_doc(
+                let sig = Self::fn_hover_doc(
                     &extern_fn.name,
                     &[],
                     &extern_fn.params,
@@ -500,7 +555,7 @@ impl TypeChecker {
                 );
                 self.record_hover_doc(
                     extern_fn.span,
-                    format!("extern \"{}\" {}", block.linkage, doc),
+                    format!("extern \"{}\" {}", block.linkage, sig),
                 );
                 self.record_completion(
                     &extern_fn.name,
@@ -531,20 +586,23 @@ impl TypeChecker {
                         &func.params,
                         &func.return_type,
                     )),
+                    documentation: func.doc.clone(),
                 });
             }
-            for name in exports.structs.keys() {
+            for (name, s) in &exports.structs {
                 items.push(LspCompletionItem {
                     label: format!("{alias}::{name}"),
                     kind: LspSymbolKind::Struct,
                     detail: None,
+                    documentation: s.doc.clone(),
                 });
             }
-            for name in exports.enums.keys() {
+            for (name, e) in &exports.enums {
                 items.push(LspCompletionItem {
                     label: format!("{alias}::{name}"),
                     kind: LspSymbolKind::Enum,
                     detail: None,
+                    documentation: e.doc.clone(),
                 });
             }
             self.lsp_info.module_items.insert(alias.clone(), items);
@@ -2618,11 +2676,14 @@ impl TypeChecker {
                         },
                     );
                     let callee_span = enum_lit.enum_name_span.merge(&enum_lit.variant_span);
-                    let hover_doc = Self::fn_hover_doc(
-                        &callee,
-                        &func_decl.generics,
-                        &func_decl.params,
-                        &func_decl.return_type,
+                    let hover_doc = Self::hover_with_doc(
+                        &Self::fn_hover_doc(
+                            &callee,
+                            &func_decl.generics,
+                            &func_decl.params,
+                            &func_decl.return_type,
+                        ),
+                        func_decl.doc.as_deref(),
                     );
                     self.record_hover_doc(callee_span, hover_doc);
                     self.record_signature(
@@ -2773,11 +2834,13 @@ impl TypeChecker {
                             // Option is a built-in generic enum type
                             // Create a synthetic enum declaration for Option<T>
                             let decl = EnumDecl {
+                                doc: None,
                                 pub_: false,
                                 name: "Option".to_string(),
                                 generics: vec!["T".to_string()],
                                 variants: vec![
                                     EnumVariant {
+                                        doc: None,
                                         name: "Some".to_string(),
                                         payload_types: vec![Type::Generic {
                                             name: "T".to_string(),
@@ -2787,6 +2850,7 @@ impl TypeChecker {
                                         span: match_expr.span,
                                     },
                                     EnumVariant {
+                                        doc: None,
                                         name: "None".to_string(),
                                         payload_types: vec![],
                                         named_fields: None,
@@ -3222,11 +3286,14 @@ impl TypeChecker {
                     self.record_reference(call_expr.callee_span, enum_target);
                 }
 
-                let hover_doc = Self::fn_hover_doc(
-                    &call_expr.callee,
-                    &fn_generics,
-                    &func_decl_params,
-                    &return_type_opt,
+                let hover_doc = Self::hover_with_doc(
+                    &Self::fn_hover_doc(
+                        &call_expr.callee,
+                        &fn_generics,
+                        &func_decl_params,
+                        &return_type_opt,
+                    ),
+                    self.lookup_fn_doc(&call_expr.callee).as_deref(),
                 );
                 self.record_hover_doc(call_expr.callee_span, hover_doc);
                 self.record_signature(
@@ -4712,6 +4779,59 @@ fn main() -> int {
     }
 
     #[test]
+    fn hover_includes_attached_doc_prose() {
+        let src = r#"// Prints a greeting.
+fn greet() -> int {
+    return 0;
+}"#;
+        let program = parse_with_source_for_tc(src);
+        let mut checker = TypeChecker::new();
+        let (result, errors) = checker.check_program_collecting_with_source(&program, &program);
+        assert!(errors.is_empty());
+        let doc = result
+            .lsp_info
+            .hover_docs
+            .get(&program.functions[0].span)
+            .expect("fn hover");
+        assert!(doc.contains("fn greet() -> int"));
+        assert!(doc.contains("Prints a greeting."));
+    }
+
+    fn parse_with_source_for_tc(src: &str) -> crate::ast::Program {
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        parser::Parser::with_source(tokens, src).parse().unwrap()
+    }
+
+    #[test]
+    fn module_call_hover_includes_imported_doc() {
+        use crate::compiler::Compiler;
+        use std::path::Path;
+
+        let path = Path::new("stdlib/io.ion");
+        let src = std::fs::read_to_string(path).expect("io.ion");
+        let tokens = crate::lexer::Lexer::new(&src).tokenize().unwrap();
+        let ast = parser::Parser::with_source(tokens, &src).parse().unwrap();
+        let mut compiler = Compiler::new();
+        let _ = compiler.parse_module(path);
+        let mut checker = TypeChecker::new();
+        checker.set_module_exports(compiler.get_module_exports().clone());
+        let (result, errors) = checker.check_program_collecting_with_source(&ast, &ast);
+        assert!(errors.is_empty(), "{errors:?}");
+        let println_fn = ast
+            .functions
+            .iter()
+            .find(|f| f.name == "println")
+            .expect("println");
+        let doc = result
+            .lsp_info
+            .hover_docs
+            .get(&println_fn.span)
+            .expect("println hover");
+        assert!(doc.contains("fn println(s: String) -> void"));
+        assert!(doc.contains("followed by a newline"));
+    }
+
+    #[test]
     fn enum_variant_hover_spans_are_distinct() {
         let src = r#"enum HttpClass {
     Success;
@@ -4884,7 +5004,10 @@ fn main() -> int {
             .values()
             .find(|d| d.contains("io::println"))
             .expect("io::println callee hover doc");
-        assert_eq!(doc, "fn io::println(s: String) -> void");
+        assert_eq!(
+            doc,
+            "fn io::println(s: String) -> void\n\nWrite an owned string to stdout followed by a newline."
+        );
     }
 
     fn spans_overlap(a: Span, b: Span) -> bool {

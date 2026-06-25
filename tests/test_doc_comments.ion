@@ -1,0 +1,10 @@
+// Integration test: doc comments are ignored by codegen and do not affect semantics.
+
+// Returns the answer.
+fn answer() -> int {
+    return 42;
+}
+
+fn main() -> int {
+    return answer();
+}

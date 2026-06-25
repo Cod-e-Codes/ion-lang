@@ -121,6 +121,10 @@ return f(7);
 
 Fn literals lower to static C functions and must not reference outer bindings (owned or by reference). Use named functions with extra parameters for customized behavior. See [tests/test_fn_literal_basic.ion](../../../tests/test_fn_literal_basic.ion) and [tests/test_fn_literal_callback.ion](../../../tests/test_fn_literal_callback.ion).
 
+## Documentation comments
+
+Ion uses plain `//` line comments only — no `///` or `//!`. Contiguous `//` lines **immediately above** a declaration (no blank line before the declaration) are attached as documentation for IDE hover. A blank line breaks association. File-level overview comments go at the top of the file before imports. Section-divider comment blocks in examples should be separated from declarations by a blank line. See ION_SPEC §12.6.
+
 **Unsafe and FFI**
 
 All `extern "C"` calls belong inside `unsafe { ... }`. See [tests/test_ffi_basic.ion](../../../tests/test_ffi_basic.ion).
@@ -166,6 +170,7 @@ These are **not** in Ion today. Check ION_SPEC.md section 10.2 before using anyt
 - Union types `A | B` (reserved; use enums)
 - Nested tuples, tuple `==`, or generic tuple type parameters
 - `mut` on function parameters (use `&mut T` in the signature instead)
+- `///` / `//!` doc comment syntax (use adjacent `//` instead; see ION_SPEC §12.6)
 - File APIs beyond `fs::read_to_string_result` (streaming `File` is deferred in spec)
 
 When unsure, **grep** `tests/` and `examples/` for the construct. If nothing matches, tell the user it is likely unsupported rather than inventing syntax.

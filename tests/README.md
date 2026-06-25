@@ -210,6 +210,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_fn_literal_return.ion` - Return capture-free fn literal from function (exit 6)
 - `test_fn_literal_capture_error.ion` - Fn literal referencing outer binding (negative, `ClosureCapture`)
 - `test_fn_literal_ref_capture_error.ion` - Fn literal referencing outer reference (negative, `ClosureCapture`)
+- `test_doc_comments.ion` - Adjacent `//` doc comments attach to AST without affecting compile or runtime (exit 42)
 - `test_tuple_basic.ion` - Tuple literals, `.0`/`.1` access, and destructuring (exit 81)
 
 - `test_io_print_str.ion` - Safe I/O library: `print_str()` function

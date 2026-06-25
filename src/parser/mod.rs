@@ -5,6 +5,8 @@ use std::collections::HashSet;
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
+    /// Original source text for adjacent `//` documentation attachment.
+    source: Option<String>,
     /// Import aliases from `import "..." as alias` in this file.
     import_aliases: HashSet<String>,
     /// Enum type names declared in this file.
@@ -45,9 +47,71 @@ impl Parser {
         Self {
             tokens,
             current: 0,
+            source: None,
             import_aliases: HashSet::new(),
             enum_names: HashSet::new(),
         }
+    }
+
+    pub fn with_source(tokens: Vec<Token>, source: impl Into<String>) -> Self {
+        Self {
+            tokens,
+            current: 0,
+            source: Some(source.into()),
+            import_aliases: HashSet::new(),
+            enum_names: HashSet::new(),
+        }
+    }
+
+    /// Collect contiguous `//` lines immediately above `char_pos`, stopping at a blank line.
+    /// `char_pos` matches lexer `Span::start` (character index, not UTF-8 byte offset).
+    fn collect_adjacent_doc(source: &str, char_pos: usize) -> Option<String> {
+        let byte_pos = source
+            .char_indices()
+            .nth(char_pos)
+            .map(|(i, _)| i)
+            .unwrap_or(source.len());
+        if byte_pos == 0 {
+            return None;
+        }
+        let decl_line_start = source[..byte_pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let prefix = &source[..decl_line_start];
+        if prefix.is_empty() {
+            return None;
+        }
+
+        let mut source_lines: Vec<&str> = prefix.lines().collect();
+        let mut doc_lines: Vec<String> = Vec::new();
+        while let Some(line) = source_lines.pop() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                break;
+            }
+            if let Some(text) = Self::strip_line_comment(trimmed) {
+                doc_lines.push(text);
+            } else {
+                break;
+            }
+        }
+
+        if doc_lines.is_empty() {
+            None
+        } else {
+            doc_lines.reverse();
+            Some(doc_lines.join("\n"))
+        }
+    }
+
+    fn strip_line_comment(trimmed: &str) -> Option<String> {
+        trimmed
+            .strip_prefix("//")
+            .map(|rest| rest.trim_start().to_string())
+    }
+
+    fn take_doc(&self) -> Option<String> {
+        let source = self.source.as_deref()?;
+        let byte_pos = self.peek().span.start;
+        Self::collect_adjacent_doc(source, byte_pos)
     }
 
     pub fn parse(&mut self) -> Result<Program, ParseError> {
@@ -58,10 +122,19 @@ impl Parser {
         let mut functions = Vec::new();
         let mut extern_blocks = Vec::new();
 
+        let file_doc = self.source.as_ref().and_then(|source| {
+            if self.tokens.is_empty() {
+                return None;
+            }
+            Self::collect_adjacent_doc(source, self.tokens[0].span.start)
+        });
+
         while !self.is_at_end() {
             if matches!(self.peek().kind, TokenKind::EOF) {
                 break;
             }
+
+            let doc = self.take_doc();
 
             // Check for pub modifier
             let is_pub = matches!(self.peek().kind, TokenKind::Pub);
@@ -78,7 +151,8 @@ impl Parser {
                             span: Span::from_token(self.peek()),
                         });
                     }
-                    let import_stmt = self.parse_import()?;
+                    let mut import_stmt = self.parse_import()?;
+                    import_stmt.doc = doc;
                     self.import_aliases.insert(import_stmt.alias.clone());
                     imports.push(import_stmt);
                 }
@@ -95,22 +169,26 @@ impl Parser {
                 TokenKind::Struct => {
                     let mut decl = self.parse_struct_decl()?;
                     decl.pub_ = is_pub;
+                    decl.doc = doc;
                     structs.push(decl);
                 }
                 TokenKind::Enum => {
                     let mut decl = self.parse_enum_decl()?;
                     decl.pub_ = is_pub;
+                    decl.doc = doc;
                     self.enum_names.insert(decl.name.clone());
                     enums.push(decl);
                 }
                 TokenKind::Type => {
                     let mut decl = self.parse_type_alias()?;
                     decl.pub_ = is_pub;
+                    decl.doc = doc;
                     type_aliases.push(decl);
                 }
                 TokenKind::Fn => {
                     let mut decl = self.parse_function()?;
                     decl.pub_ = is_pub;
+                    decl.doc = doc;
                     functions.push(decl);
                 }
                 ref other => {
@@ -124,6 +202,7 @@ impl Parser {
         }
 
         Ok(Program {
+            doc: file_doc,
             imports,
             structs,
             enums,
@@ -177,7 +256,12 @@ impl Parser {
 
         let span = import_span.merge(&Span::from_token(self.previous()));
 
-        Ok(ImportStmt { path, alias, span })
+        Ok(ImportStmt {
+            doc: None,
+            path,
+            alias,
+            span,
+        })
     }
 
     fn parse_extern_block(&mut self) -> Result<ExternBlock, ParseError> {
@@ -356,6 +440,7 @@ impl Parser {
         let span = fn_token_span.merge(&end_span);
 
         Ok(FnDecl {
+            doc: None,
             pub_: false, // Will be set by caller if pub modifier was present
             name,
             generics,
@@ -774,6 +859,7 @@ impl Parser {
 
         let mut fields = Vec::new();
         while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
+            let field_doc = self.take_doc();
             let field_name_idx = self.current;
             let field_name =
                 if let TokenKind::Ident(ref ident_name) = self.tokens[field_name_idx].kind {
@@ -795,6 +881,7 @@ impl Parser {
 
             let field_span = Span::from_token(semi_tok);
             fields.push(StructField {
+                doc: field_doc,
                 name: field_name,
                 ty,
                 span: field_span,
@@ -807,6 +894,7 @@ impl Parser {
         let span = struct_span.merge(&end_span);
 
         Ok(StructDecl {
+            doc: None,
             pub_: false, // Will be set by caller if pub modifier was present
             name,
             generics,
@@ -838,6 +926,7 @@ impl Parser {
 
         let mut variants = Vec::new();
         while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
+            let variant_doc = self.take_doc();
             let variant_name_idx = self.current;
             let variant_name =
                 if let TokenKind::Ident(ref ident_name) = self.tokens[variant_name_idx].kind {
@@ -909,6 +998,7 @@ impl Parser {
 
             let variant_span = Span::from_token(&self.tokens[variant_name_idx]);
             variants.push(EnumVariant {
+                doc: variant_doc,
                 name: variant_name,
                 payload_types,
                 named_fields,
@@ -925,6 +1015,7 @@ impl Parser {
         let span = enum_span.merge(&end_span);
 
         Ok(EnumDecl {
+            doc: None,
             pub_: false, // Will be set by caller if pub modifier was present
             name,
             generics,
@@ -964,6 +1055,7 @@ impl Parser {
         let span = type_span.merge(&Span::from_token(self.previous()));
 
         Ok(TypeAliasDecl {
+            doc: None,
             pub_: false, // Will be set by caller if pub modifier was present
             name,
             generics,
@@ -2985,6 +3077,73 @@ impl Parser {
                 span: Span::from_token(&self.tokens[current_idx]),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+
+    fn parse_with_source(src: &str) -> Program {
+        let tokens = Lexer::new(src).tokenize().unwrap();
+        Parser::with_source(tokens, src).parse().unwrap()
+    }
+
+    #[test]
+    fn doc_attached_to_adjacent_fn() {
+        let program = parse_with_source(
+            r#"// Greets the user.
+// Returns zero on success.
+fn main() -> int {
+    return 0;
+}"#,
+        );
+        assert_eq!(
+            program.functions[0].doc.as_deref(),
+            Some("Greets the user.\nReturns zero on success.")
+        );
+    }
+
+    #[test]
+    fn blank_line_breaks_doc_attachment() {
+        let program = parse_with_source(
+            r#"// Orphaned comment.
+
+fn main() -> int {
+    return 0;
+}"#,
+        );
+        assert!(program.functions[0].doc.is_none());
+    }
+
+    #[test]
+    fn file_level_doc_before_imports() {
+        let program = parse_with_source(
+            r#"// Module overview.
+import "stdlib/io.ion" as io;
+
+fn main() -> int {
+    return 0;
+}"#,
+        );
+        assert_eq!(program.doc.as_deref(), Some("Module overview."));
+    }
+
+    #[test]
+    fn struct_field_doc_attachment() {
+        let program = parse_with_source(
+            r#"struct Point {
+    // x coordinate
+    x: int;
+    y: int;
+}"#,
+        );
+        assert_eq!(
+            program.structs[0].fields[0].doc.as_deref(),
+            Some("x coordinate")
+        );
+        assert!(program.structs[0].fields[1].doc.is_none());
     }
 }
 

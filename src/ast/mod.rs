@@ -2,6 +2,8 @@ use crate::lexer::Token;
 
 #[derive(Debug, Clone)]
 pub struct Program {
+    /// File-level documentation from leading `//` lines before imports and declarations.
+    pub doc: Option<String>,
     pub imports: Vec<ImportStmt>,
     pub structs: Vec<StructDecl>,
     pub enums: Vec<EnumDecl>,
@@ -12,6 +14,7 @@ pub struct Program {
 
 #[derive(Debug, Clone)]
 pub struct ImportStmt {
+    pub doc: Option<String>,
     pub path: String,
     pub alias: String,
     pub span: Span,
@@ -35,6 +38,7 @@ pub struct ExternFnDecl {
 
 #[derive(Debug, Clone)]
 pub struct FnDecl {
+    pub doc: Option<String>,
     pub pub_: bool,
     pub name: String,
     pub generics: Vec<String>,
@@ -46,6 +50,7 @@ pub struct FnDecl {
 
 #[derive(Debug, Clone)]
 pub struct StructDecl {
+    pub doc: Option<String>,
     pub pub_: bool,
     pub name: String,
     pub generics: Vec<String>,
@@ -55,6 +60,7 @@ pub struct StructDecl {
 
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
+    pub doc: Option<String>,
     pub pub_: bool,
     pub name: String,
     pub generics: Vec<String>,
@@ -64,6 +70,7 @@ pub struct EnumDecl {
 
 #[derive(Debug, Clone)]
 pub struct TypeAliasDecl {
+    pub doc: Option<String>,
     pub pub_: bool,
     pub name: String,
     pub generics: Vec<String>,
@@ -73,6 +80,7 @@ pub struct TypeAliasDecl {
 
 #[derive(Debug, Clone)]
 pub struct EnumVariant {
+    pub doc: Option<String>,
     pub name: String,
     pub payload_types: Vec<Type>, // For tuple variants: Enum::Variant(Type1, Type2)
     pub named_fields: Option<Vec<(String, Type)>>, // For struct variants: Enum::Variant { field: Type }
@@ -81,6 +89,7 @@ pub struct EnumVariant {
 
 #[derive(Debug, Clone)]
 pub struct StructField {
+    pub doc: Option<String>,
     pub name: String,
     pub ty: Type,
     pub span: Span,

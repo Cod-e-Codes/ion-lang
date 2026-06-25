@@ -205,6 +205,7 @@ Delimiters:
 
 - Line comment: `//` to end of line.
 - Block comments are not defined (may be added later).
+- Documentation uses the same `//` syntax; contiguous comment lines immediately above a declaration (no blank line between the last comment and the declaration) are attached to that item for IDE hover and future doc tools. See [§12.6](#126-documentation-comments-non-normative).
 
 Whitespace (spaces, tabs, newlines) separates tokens but is otherwise insignificant, except in string literals.
 
@@ -245,7 +246,12 @@ bool_lit      = "true" | "false" ;
 string_lit    = "\"" , { string_char } , "\"" ;
 string_char   = /* any character except " and newline, with backslash escapes */ ;
                 /* Supported escapes: \r, \n, \t, \0, \\, \", \' */
+
+line_comment  = "//" , { comment_char } ;
+comment_char  = /* any character except newline */ ;
 ```
+
+Line comments are discarded during lexing and do not appear in generated C. Adjacent `//` lines above declarations are recovered from source during parsing and attached to AST nodes (see [§12.6](#126-documentation-comments-non-normative)).
 
 #### 3.2 Modules and Declarations
 
@@ -1181,7 +1187,7 @@ The `ion-lsp` binary and VS Code/Cursor extension provide:
 
 - Syntax highlighting (TextMate grammar, no server required)
 - Parse, import-resolution, and type diagnostics (multiple type-check errors per file when independent)
-- Hover: expression types, symbol docs (fn/struct/enum/type alias/extern fn/builtins), and call signatures
+- Hover: expression types, symbol signatures, and attached `//` documentation prose when present (functions, structs, enums, type aliases, fields, variants, imports, file-level overview)
 - Completion: prefix-filtered keywords, builtins, local symbols, `alias::item` module imports, and struct/enum members after `.` or `Type::`
 - Go to definition: variables, functions (`foo`, `mod::func`), user methods, struct fields, enum variants, and type aliases
 - Find references, document outline, signature help, and semantic tokens (functions, structs, enums, types, fields)
@@ -1353,4 +1359,57 @@ fn main() {
 ```
 
 This emphasizes that concurrency in Ion is about **moving ownership** between threads, not sharing it.
+
+#### 12.6 Documentation Comments (Non-Normative)
+
+Ion has no separate `///` or `//!` documentation syntax. Documentation is ordinary `//` line comments attached to declarations by **adjacency** during parsing (Go/Odin convention):
+
+- Contiguous `//` lines immediately above an item, with **no blank line** between the last comment line and the declaration, document that item.
+- A blank line between the comment block and the declaration breaks association; the comments are not attached.
+- File- or module-level overview: leading `//` lines at the top of a file before the first `import` or declaration attach to `Program`.
+- The same rule applies to struct fields and enum variants inside their bodies.
+- Trailing inline `//` on the same line as code is explanatory only and is not item documentation.
+
+Doc comments supplement [ION_SPEC.md](ION_SPEC.md) for IDE hover and a future `ion doc` tool; they are not a second normative specification. `ion-lsp` shows signature or type text first, then a blank line, then attached prose when present. Imported symbols surface docs from the defining module's AST.
+
+**Examples:**
+
+```ion
+// Safe console output helpers.
+import "stdlib/io.ion" as io;
+
+// Returns zero on success.
+fn main() -> int {
+    io::println(String::from("hi"));
+    return 0;
+}
+```
+
+```ion
+// A point in 2D space.
+struct Point {
+    // Horizontal coordinate.
+    x: int;
+    y: int;
+}
+```
+
+```ion
+// Success or failure with an owned message.
+enum Result<T, E> {
+  // Operation succeeded.
+  Ok(T);
+  Err(E);
+}
+```
+
+Section-divider comments in examples should be separated from declarations by a blank line so they are not attached as docs:
+
+```ion
+// ============================================
+// Section title
+// ============================================
+
+struct Widget { value: int; }
+```
 

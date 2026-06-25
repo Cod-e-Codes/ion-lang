@@ -106,4 +106,5 @@ Read these when the task matches:
 - Stdlib lives in `stdlib/` (`io.ion`, `fmt.ion`, `fs.ion`, `result.ion`); imported module functions are emitted as `{alias}_{name}` in single-file merge mode (e.g. `io::print_int` -> `io_print_int`).
 - Integration tests: add `tests/test_*.ion` plus one row in `tests/test_expectations.tsv` (see `ion-integration-tests` skill). Run `cd tests && ./test_runner.sh` to verify.
 - Fn literals are capture-free only; references to outer bindings are rejected with `ClosureCapture`.
-- LSP parses the **open buffer** in memory (lexer → parser), then `load_imports` which **fully `parse_module`s imported files from disk** (per-import errors are published). Parser/tc/import changes may need LSP updates (`ion-lsp-vscode` skill).
+- LSP parses the **open buffer** in memory (lexer → parser with source for doc attachment), then `load_imports` which **fully `parse_module`s imported files from disk** (per-import errors are published). Parser/tc/import changes may need LSP updates (`ion-lsp-vscode` skill).
+- Documentation: contiguous `//` lines immediately above a declaration attach to AST nodes; LSP hover shows signature plus prose. No `///` syntax.

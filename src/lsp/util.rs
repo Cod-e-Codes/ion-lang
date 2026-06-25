@@ -283,6 +283,12 @@ fn completion_item_from_lsp(item: &LspCompletionItem) -> CompletionItem {
         label: item.label.clone(),
         kind: Some(lsp_symbol_kind(item.kind)),
         detail: item.detail.clone(),
+        documentation: item.documentation.as_ref().map(|doc| {
+            Documentation::MarkupContent(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: doc.clone(),
+            })
+        }),
         ..Default::default()
     }
 }
