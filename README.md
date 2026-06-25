@@ -17,7 +17,7 @@ Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 - **Ownership**: move by default; single owner per value; use-after-move is a compile error
 - **Borrowing**: `&T` and `&mut T` are stack-local; references cannot escape the function (no return, no struct fields, no channels, no `spawn`)
 - **Types**: primitives, structs, enums (tuple and struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String`
-- **Control flow**: `if`/`while` (bool conditions), `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, `defer`
+- **Control flow**: `if`/`while` (bool conditions), `loop { }`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, `defer`
 - **Concurrency**: `channel<T>()` returns `(Sender<T>, Receiver<T>)`; `send(&tx, v)` and `recv(&mut rx)`; `spawn { ... }` with structural `Send`
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`
 - **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, and `stdlib/result.ion`
@@ -127,7 +127,7 @@ The integration harness (`tests/test_runner.sh`) calls `ion-compiler` and `gcc` 
 
 ### Project manifests (`ion.toml`)
 
-`ion-build` discovers `ion.toml` by walking up from the current directory. Required fields: `name`, `main`, `output`. Common optional fields: `mode` (`single` or `multi`), `out_dir` (default `target`), `cflags`, `ldflags`, `stdlib_paths`.
+`ion-build` discovers `ion.toml` by walking up from the current directory. Required fields: `name`, `main`, `output`. Common optional fields: `mode` (`single` or `multi`), `out_dir` (default `target`), `cflags`, `ldflags`, `stdlib_paths`, `emit_in_source`.
 
 Root [ion.toml](ion.toml) builds [examples/hello_world_safe.ion](examples/hello_world_safe.ion). Per-example manifests live under [examples/](examples/) (for example `spawn_channel.toml`, `http_server.toml`, `examples/data_lib/ion.toml`). Use `--manifest path` when the file is not named `ion.toml`:
 
@@ -200,6 +200,7 @@ On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows cha
 ```
 .
 ├── src/
+│   ├── bin/        # ion-build, ion-lsp
 │   ├── lexer/      # Tokenizer
 │   ├── parser/     # AST construction
 │   ├── ast/        # AST node definitions
@@ -207,8 +208,11 @@ On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows cha
 │   ├── build/      # ion.toml, ion-build driver, C toolchain
 │   ├── tc/         # Type checker (safety, visibility, qualified names)
 │   ├── ir/         # Intermediate representation
-│   └── cgen/       # C code generator
-├── runtime/        # C runtime headers
+│   ├── cgen/       # C code generator
+│   └── lsp/        # Language server
+├── runtime/        # C runtime sources and headers
+├── stdlib/         # Standard library modules
+├── ion-vscode/     # VS Code / Cursor extension
 ├── examples/       # Example Ion programs
 └── tests/          # Test programs
 ```
