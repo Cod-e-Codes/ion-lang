@@ -432,7 +432,10 @@ primary_expr     = identifier
                  | "(" , expr , ")"
                  | struct_lit
                  | enum_lit
-                 | array_lit ;
+                 | array_lit
+                 | fn_literal ;
+
+fn_literal       = "fn" , "(" , params? , ")" , [ "->" , type_expr ] , block ;
 
 array_lit        = "[" , ( expr_list | ( expr , ";" , int_lit ) ) , "]" ;
 expr_list        = expr , { "," , expr } ;
@@ -612,7 +615,11 @@ The corresponding function type is:
 fn(T1, T2) -> R
 ```
 
-Function types are **first-class**: they may be stored in variables, passed as arguments, and returned. However, **function values may not capture references that would violate the no-escape rule** (see Section 5.4).
+Function types are **first-class**: they may be stored in variables, passed as arguments, and returned.
+
+**Fn literals** (capture-free only): an expression `fn(params) [-> R] { ... }` has type `fn(T1, T2, ...) -> R` matching its signature. The body may reference only parameters and locals declared inside the literal; any use of a binding from an outer scope is a compile-time error (`ClosureCapture`). Fn literals lower to plain C function pointers (each site gets a unique `static` function); there is no environment payload and no heap allocation.
+
+Named functions and capture-free fn literals may not capture references that would violate the no-escape rule (see Section 5.4). **Capturing closures** (literals that move owned state from outer scopes) are not implemented; use named functions with extra parameters, explicit context structs, or `spawn` for move-only thread capture.
 
 #### 4.4 Type Inference
 
@@ -778,10 +785,12 @@ fn main() {
 ```ion
 fn make_printer(x: &int) -> fn() {
     return fn() {
-        println("x = {}", x); // would capture x by reference
+        println("x = {}", *x); // ERROR: ClosureCapture (cannot reference outer x)
     }; // ERROR: closure escapes with reference
 }
 ```
+
+Capturing closures are not implemented; the compiler rejects any outer binding referenced from a fn literal body.
 
 **Example (valid – borrow within function):**
 
@@ -836,7 +845,7 @@ Uninitialized `Box`/`Vec`/`String` bindings are zero-initialized to `NULL` so dr
 
 Ion does **not** perform implicit heap allocation for:
 
-- Captured closures
+- Captured closures (not implemented; fn literals are capture-free and use static functions only)
 - Slices or views
 - Temporaries (beyond what is required for expression evaluation)
 
@@ -1193,7 +1202,7 @@ Build with `cargo build --release --bin ion-lsp`. Rebuild after compiler or LSP 
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (signature hover only)
 - LSP go-to-definition for type names in type annotations (no source spans on `Type` AST nodes)
-- Function types: named functions only; no fn literals/closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
+- Function types: capture-free fn literals implemented; no capturing closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
 - Tuple values: no nested tuples, `==` on tuples, struct fields holding tuples, or generic `(T1, T2)` parameters
 
 ### 11. Future Work (Non-Normative)
@@ -1204,6 +1213,7 @@ The following features are **not planned** for the current compiler:
 - Complex trait or typeclass systems.
 - Macros and compile-time metaprogramming.
 - Advanced iterator pipelines and zero-cost abstractions beyond the basics.
+- Capturing closures (fn literals that move owned environment from outer scopes).
 
 Any such addition must:
 

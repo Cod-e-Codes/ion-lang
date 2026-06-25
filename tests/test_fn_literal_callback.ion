@@ -1,0 +1,7 @@
+fn apply_twice(f: fn(int) -> int, x: int) -> int {
+    return f(f(x));
+}
+
+fn main() -> int {
+    return apply_twice(fn(x: int) -> int { return x + 10; }, 20);
+}

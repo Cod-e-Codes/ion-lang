@@ -119,6 +119,7 @@ The harness greps **compiler CLI stderr** for the pattern (not LSP diagnostic te
 | Non-public import | `Cannot access non-public` |
 | Extern without unsafe | `must be inside an unsafe block` |
 | Non-bool if | `bool.*if condition\|if condition.*bool` |
+| Fn literal capture | `ClosureCapture` |
 
 ### `test_error` PARTIAL pass trap
 

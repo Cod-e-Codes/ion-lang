@@ -112,6 +112,15 @@ let result: int = recv(&mut rx_back_mut);
 
 `spawn` captures owned values by move. `T` in `channel<T>()` must be `Send`.
 
+**Fn literals (capture-free)**
+
+```ion
+let f: fn(int) -> int = fn(x: int) -> int { return x + 5; };
+return f(7);
+```
+
+Fn literals lower to static C functions and must not reference outer bindings (owned or by reference). Use named functions with extra parameters for customized behavior. See [tests/test_fn_literal_basic.ion](../../../tests/test_fn_literal_basic.ion) and [tests/test_fn_literal_callback.ion](../../../tests/test_fn_literal_callback.ion).
+
 **Unsafe and FFI**
 
 All `extern "C"` calls belong inside `unsafe { ... }`. See [tests/test_ffi_basic.ion](../../../tests/test_ffi_basic.ion).
@@ -147,7 +156,7 @@ For programs under `tests/`, follow the `ion-integration-tests` skill (`test_exp
 
 These are **not** in Ion today. Check ION_SPEC.md section 10.2 before using anything similar:
 
-- Closures, fn literals, or `impl` blocks in user code
+- Capturing closures (fn literals that reference outer variables), or `impl` blocks in user code
 - Traits, trait bounds, or `where` clauses on generics
 - Returning `&T` / `&mut T` or `Option<&T>` from functions
 - References in struct fields, enum payloads, or channels

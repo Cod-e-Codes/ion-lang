@@ -3,8 +3,9 @@ mod drop;
 mod types;
 
 use self::types::{
-    fn_type_to_c_decl, mangle_module_callee, mangle_type_name, resolve_type_alias,
-    substitute_type_params, tuple_type_name, type_to_c_impl, type_to_c_return_type,
+    fn_type_to_c_decl, fn_type_to_c_function_header, mangle_module_callee, mangle_type_name,
+    resolve_type_alias, substitute_type_params, tuple_type_name, type_to_c_impl,
+    type_to_c_return_type,
 };
 
 use crate::ast::{
@@ -64,6 +65,9 @@ pub struct Codegen {
     spawn_counter: usize,
     spawn_forward_decls: String,
     spawn_definitions: String,
+    fn_literal_forward_decls: String,
+    fn_literal_definitions: String,
+    generated_fn_literals: std::collections::HashSet<String>,
     scope_stack: Vec<ScopeFrame>,
     epilogue_label: String,
     loop_continue_label: Option<String>,
@@ -100,6 +104,9 @@ impl Codegen {
             spawn_counter: 0,
             spawn_forward_decls: String::new(),
             spawn_definitions: String::new(),
+            fn_literal_forward_decls: String::new(),
+            fn_literal_definitions: String::new(),
+            generated_fn_literals: std::collections::HashSet::new(),
             scope_stack: Vec::new(),
             epilogue_label: "epilogue".to_string(),
             loop_continue_label: None,
@@ -180,6 +187,9 @@ impl Codegen {
         self.spawn_counter = 0;
         self.spawn_forward_decls.clear();
         self.spawn_definitions.clear();
+        self.fn_literal_forward_decls.clear();
+        self.fn_literal_definitions.clear();
+        self.generated_fn_literals.clear();
 
         self.emit_generated_banner(source_ion);
 
@@ -447,36 +457,24 @@ impl Codegen {
         // Generate function prototypes (forward declarations) for ALL functions
         // This is required for single-file mode where functions may be called before definition
         for func in &program.functions {
+            let param_list = self.format_ir_param_list_c(&func.params);
+            if let Some(ret_ty) = func.return_type.as_ref() {
+                let resolved = resolve_type_alias(ret_ty, &self.type_aliases);
+                if matches!(resolved, Type::Fn { .. }) {
+                    self.writeln(&format!(
+                        "{};",
+                        fn_type_to_c_function_header(&func.name, &param_list, &resolved)
+                    ));
+                    continue;
+                }
+            }
             let return_type = func
                 .return_type
                 .as_ref()
-                // *** MODIFICATION: Use the new helper here ***
                 .map(|ty| type_to_c_return_type(&resolve_type_alias(ty, &self.type_aliases)))
-                // **********************************************
                 .unwrap_or_else(|| "void".to_string());
             self.write(&format!("{} {}(", return_type, func.name));
-            if func.params.is_empty() {
-                self.write("void");
-            } else {
-                for (i, param) in func.params.iter().enumerate() {
-                    if i > 0 {
-                        self.write(", ");
-                    }
-                    // Special handling for array types: C syntax is "int arr[3]" not "int[3] arr"
-                    match &param.ty {
-                        Type::Array { inner, size } => {
-                            let base_type = self.type_to_c(inner);
-                            self.write(&format!("{} {}[{}]", base_type, param.name, size));
-                        }
-                        Type::Fn { .. } => {
-                            self.write(&fn_type_to_c_decl(&param.ty, &param.name));
-                        }
-                        _ => {
-                            self.write(&format!("{} {}", self.type_to_c(&param.ty), param.name));
-                        }
-                    }
-                }
-            }
+            self.write(&param_list);
             self.writeln(");");
         }
 
@@ -485,19 +483,21 @@ impl Codegen {
             self.generate_function(function);
         }
 
-        if !self.spawn_forward_decls.is_empty()
+        if (!self.spawn_forward_decls.is_empty() || !self.fn_literal_forward_decls.is_empty())
             && let Some(pos) = self.output.find("#include \"ion_runtime.h\"\n\n")
         {
             let insert_at = pos + "#include \"ion_runtime.h\"\n\n".len();
             let mut forward_decls = self.spawn_forward_decls.clone();
+            forward_decls.push_str(&self.fn_literal_forward_decls);
             forward_decls.push('\n');
             self.output.insert_str(insert_at, &forward_decls);
         }
 
-        if !self.spawn_definitions.is_empty() {
+        if !self.spawn_definitions.is_empty() || !self.fn_literal_definitions.is_empty() {
             self.writeln("");
-            let spawn_defs = self.spawn_definitions.clone();
-            self.write(&spawn_defs);
+            let mut trailing_defs = self.spawn_definitions.clone();
+            trailing_defs.push_str(&self.fn_literal_definitions);
+            self.write(&trailing_defs);
         }
 
         self.output.clone()
@@ -530,6 +530,9 @@ impl Codegen {
         self.spawn_counter = 0;
         self.spawn_forward_decls.clear();
         self.spawn_definitions.clear();
+        self.fn_literal_forward_decls.clear();
+        self.fn_literal_definitions.clear();
+        self.generated_fn_literals.clear();
 
         self.extern_functions.clear();
         self.function_return_types.clear();
@@ -826,19 +829,21 @@ impl Codegen {
             self.generate_function(function);
         }
 
-        if !self.spawn_forward_decls.is_empty()
+        if (!self.spawn_forward_decls.is_empty() || !self.fn_literal_forward_decls.is_empty())
             && let Some(pos) = self.output.find("#include \"ion_runtime.h\"\n\n")
         {
             let insert_at = pos + "#include \"ion_runtime.h\"\n\n".len();
             let mut forward_decls = self.spawn_forward_decls.clone();
+            forward_decls.push_str(&self.fn_literal_forward_decls);
             forward_decls.push('\n');
             self.output.insert_str(insert_at, &forward_decls);
         }
 
-        if !self.spawn_definitions.is_empty() {
+        if !self.spawn_definitions.is_empty() || !self.fn_literal_definitions.is_empty() {
             self.writeln("");
-            let spawn_defs = self.spawn_definitions.clone();
-            self.write(&spawn_defs);
+            let mut trailing_defs = self.spawn_definitions.clone();
+            trailing_defs.push_str(&self.fn_literal_definitions);
+            self.write(&trailing_defs);
         }
 
         self.multi_file_module = None;
@@ -1238,6 +1243,23 @@ impl Codegen {
         }
     }
 
+    fn format_ir_param_list_c(&self, params: &[IRParam]) -> String {
+        if params.is_empty() {
+            return "void".to_string();
+        }
+        params
+            .iter()
+            .map(|param| match &param.ty {
+                Type::Array { inner, size } => {
+                    format!("{} {}[{}]", self.type_to_c(inner), param.name, size)
+                }
+                Type::Fn { .. } => fn_type_to_c_decl(&param.ty, &param.name),
+                _ => format!("{} {}", self.type_to_c(&param.ty), param.name),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     fn generate_function(&mut self, function: &IRFunction) {
         // Store current return type for use in return statements
         self.current_return_type = function.return_type.clone();
@@ -1251,79 +1273,63 @@ impl Codegen {
                 .insert(param.name.clone(), param.ty.clone());
         }
 
-        // Generate return type
-        // Special handling: C doesn't allow returning arrays directly, so convert to pointer
-        let return_type = function
-            .return_type
-            .as_ref()
-            .map(|t| {
-                match t {
-                    Type::Array { inner, .. } => {
-                        // Convert array return type to pointer: [T; N] -> T*
-                        format!("{}*", self.type_to_c(inner))
-                    }
-                    _ => self.type_to_c(t),
-                }
-            })
-            .unwrap_or_else(|| "void".to_string());
-
         let c_name = self.module_c_symbol(&function.name);
-        self.write(&format!("{} {}(", return_type, c_name));
+        let param_list = self.format_ir_param_list_c(&function.params);
 
-        // Generate parameters
-        if function.params.is_empty() {
-            self.write("void");
-        } else {
-            for (i, param) in function.params.iter().enumerate() {
-                if i > 0 {
-                    self.write(", ");
-                }
-                // Special handling for array types: C syntax is "int arr[3]" not "int[3] arr"
-                match &param.ty {
-                    Type::Array { inner, size } => {
-                        let base_type = self.type_to_c(inner);
-                        self.write(&format!("{} {}[{}]", base_type, param.name, size));
-                    }
-                    Type::Fn { .. } => {
-                        self.write(&fn_type_to_c_decl(&param.ty, &param.name));
-                    }
-                    _ => {
-                        self.write(&format!("{} {}", self.type_to_c(&param.ty), param.name));
-                    }
-                }
+        if let Some(ret_ty) = function.return_type.as_ref() {
+            let resolved = resolve_type_alias(ret_ty, &self.type_aliases);
+            if matches!(resolved, Type::Fn { .. }) {
+                self.write(&fn_type_to_c_function_header(
+                    &c_name,
+                    &param_list,
+                    &resolved,
+                ));
+                self.writeln(" {");
+            } else {
+                let return_type = match ret_ty {
+                    Type::Array { inner, .. } => format!("{}*", self.type_to_c(inner)),
+                    _ => self.type_to_c(ret_ty),
+                };
+                self.write(&format!("{} {}(", return_type, c_name));
+                self.write(&param_list);
+                self.writeln(") {");
             }
+        } else {
+            self.write(&format!("void {}(", c_name));
+            self.write(&param_list);
+            self.writeln(") {");
         }
 
-        self.writeln(") {");
         self.indent_level += 1;
 
         // Synthetic return variable for functions with a return type.
         if let Some(ref ty) = function.return_type {
             self.write_indent();
-            let (ret_var_type, init_value) = match ty {
-                // Array types: use pointer type for return variable, initialize to NULL
+            let resolved_ret = resolve_type_alias(ty, &self.type_aliases);
+            let (ret_var_type, init_value) = match &resolved_ret {
                 Type::Array { inner, .. } => {
                     (format!("{}*", self.type_to_c(inner)), "0".to_string())
                 }
-                // Pointer types (Box, Vec, String, channels, refs) use 0/NULL
+                Type::Fn { .. } => (fn_type_to_c_decl(&resolved_ret, "ret_val"), "0".to_string()),
                 Type::Box { .. }
                 | Type::Vec { .. }
                 | Type::String
                 | Type::Channel { .. }
-                | Type::Ref { .. } => (self.type_to_c(ty), "0".to_string()),
-                // Struct and enum types use {0} for zero-initialization
-                Type::Struct(_) | Type::Enum(_) => (self.type_to_c(ty), "{0}".to_string()),
-                // Generic types: check if they resolve to struct/enum or pointer
-                Type::Generic { name, .. } => {
-                    match name.as_str() {
-                        "Box" | "Vec" => (self.type_to_c(ty), "0".to_string()), // Pointers
-                        _ => (self.type_to_c(ty), "{0}".to_string()), // Assume struct/enum for user-defined generics
-                    }
+                | Type::Ref { .. } => (self.type_to_c(&resolved_ret), "0".to_string()),
+                Type::Struct(_) | Type::Enum(_) => {
+                    (self.type_to_c(&resolved_ret), "{0}".to_string())
                 }
-                // Primitive types use 0
-                _ => (self.type_to_c(ty), "0".to_string()),
+                Type::Generic { name, .. } => match name.as_str() {
+                    "Box" | "Vec" => (self.type_to_c(&resolved_ret), "0".to_string()),
+                    _ => (self.type_to_c(&resolved_ret), "{0}".to_string()),
+                },
+                _ => (self.type_to_c(&resolved_ret), "0".to_string()),
             };
-            self.writeln(&format!("{} ret_val = {};", ret_var_type, init_value));
+            if matches!(&resolved_ret, Type::Fn { .. }) {
+                self.writeln(&format!("{} = {};", ret_var_type, init_value));
+            } else {
+                self.writeln(&format!("{} ret_val = {};", ret_var_type, init_value));
+            }
         }
 
         // Generate function body (blocks)
@@ -1365,6 +1371,151 @@ impl Codegen {
         self.indent_level -= 1;
         self.writeln("}");
         self.writeln("");
+    }
+
+    fn generate_fn_literal(&mut self, lit: &crate::ir::IRFnLiteral) {
+        if self.generated_fn_literals.contains(&lit.symbol) {
+            return;
+        }
+        self.generated_fn_literals.insert(lit.symbol.clone());
+
+        let return_type_c = lit
+            .return_type
+            .as_ref()
+            .map(|t| match t {
+                Type::Array { inner, .. } => format!("{}*", self.type_to_c(inner)),
+                _ => self.type_to_c(t),
+            })
+            .unwrap_or_else(|| "void".to_string());
+
+        self.fn_literal_forward_decls
+            .push_str(&format!("static {} {}(", return_type_c, lit.symbol));
+        if lit.params.is_empty() {
+            self.fn_literal_forward_decls.push_str("void");
+        } else {
+            for (i, param) in lit.params.iter().enumerate() {
+                if i > 0 {
+                    self.fn_literal_forward_decls.push_str(", ");
+                }
+                match &param.ty {
+                    Type::Array { inner, size } => {
+                        let base_type = self.type_to_c(inner);
+                        self.fn_literal_forward_decls
+                            .push_str(&format!("{} {}[{}]", base_type, param.name, size));
+                    }
+                    Type::Fn { .. } => {
+                        self.fn_literal_forward_decls
+                            .push_str(&fn_type_to_c_decl(&param.ty, &param.name));
+                    }
+                    _ => {
+                        self.fn_literal_forward_decls.push_str(&format!(
+                            "{} {}",
+                            self.type_to_c(&param.ty),
+                            param.name
+                        ));
+                    }
+                }
+            }
+        }
+        self.fn_literal_forward_decls.push_str(");\n");
+
+        let epilogue = format!("{}_epilogue", lit.symbol);
+        let mut def = String::new();
+        def.push_str(&format!("static {} {}(", return_type_c, lit.symbol));
+        if lit.params.is_empty() {
+            def.push_str("void");
+        } else {
+            for (i, param) in lit.params.iter().enumerate() {
+                if i > 0 {
+                    def.push_str(", ");
+                }
+                match &param.ty {
+                    Type::Array { inner, size } => {
+                        let base_type = self.type_to_c(inner);
+                        def.push_str(&format!("{} {}[{}]", base_type, param.name, size));
+                    }
+                    Type::Fn { .. } => {
+                        def.push_str(&fn_type_to_c_decl(&param.ty, &param.name));
+                    }
+                    _ => {
+                        def.push_str(&format!("{} {}", self.type_to_c(&param.ty), param.name));
+                    }
+                }
+            }
+        }
+        def.push_str(") {\n");
+
+        if let Some(ty) = &lit.return_type {
+            let (ret_var_type, init_value) = match ty {
+                Type::Array { inner, .. } => {
+                    (format!("{}*", self.type_to_c(inner)), "0".to_string())
+                }
+                Type::Box { .. }
+                | Type::Vec { .. }
+                | Type::String
+                | Type::Channel { .. }
+                | Type::Ref { .. } => (self.type_to_c(ty), "0".to_string()),
+                Type::Struct(_) | Type::Enum(_) => (self.type_to_c(ty), "{0}".to_string()),
+                Type::Generic { name, .. } => match name.as_str() {
+                    "Box" | "Vec" => (self.type_to_c(ty), "0".to_string()),
+                    _ => (self.type_to_c(ty), "{0}".to_string()),
+                },
+                _ => (self.type_to_c(ty), "0".to_string()),
+            };
+            def.push_str(&format!("    {} ret_val = {};\n", ret_var_type, init_value));
+        }
+
+        let saved_output = std::mem::take(&mut self.output);
+        let saved_indent = self.indent_level;
+        let saved_scope = std::mem::take(&mut self.scope_stack);
+        let saved_epilogue = self.epilogue_label.clone();
+        let saved_params = self.current_function_params.clone();
+        let saved_return = self.current_return_type.clone();
+
+        self.indent_level = 1;
+        self.scope_stack.clear();
+        self.epilogue_label = epilogue.clone();
+        self.current_return_type = lit.return_type.clone();
+        self.current_function_params.clear();
+        for param in &lit.params {
+            self.current_function_params
+                .insert(param.name.clone(), param.ty.clone());
+        }
+
+        self.scope_begin(&[]);
+        for param in &lit.params {
+            self.scope_register_binding(&param.name, &param.ty);
+        }
+        self.generate_block(&lit.body);
+        self.scope_emit_exit();
+
+        let last_stmt_is_return = lit
+            .body
+            .statements
+            .last()
+            .map(|stmt| matches!(stmt, IRStmt::Return(_)))
+            .unwrap_or(false);
+        if lit.return_type.is_some() && !last_stmt_is_return {
+            self.write_indent();
+            self.writeln(&format!("goto {};", epilogue));
+        }
+
+        let body_code = std::mem::take(&mut self.output);
+        def.push_str(&body_code);
+        def.push_str(&format!("{}:\n", epilogue));
+        if lit.return_type.is_some() {
+            def.push_str("    return ret_val;\n");
+        }
+        def.push_str("}\n\n");
+
+        self.output = saved_output;
+        self.indent_level = saved_indent;
+        self.scope_stack = saved_scope;
+        self.epilogue_label = saved_epilogue;
+        self.current_function_params = saved_params;
+        self.current_return_type = saved_return;
+
+        self.fn_literal_definitions.push_str(&def);
     }
 
     fn generate_spawn(&mut self, spawn: &IRSpawn) {
@@ -2653,6 +2804,10 @@ impl Codegen {
                 self.write("] = ");
                 self.generate_expr(value);
             }
+            IREexpr::FnLiteral(lit) => {
+                self.generate_fn_literal(lit);
+                self.write(&lit.symbol);
+            }
         }
     }
 
@@ -3873,6 +4028,17 @@ fn collect_slice_types_from_expr(
             collect_slice_types_from_expr(value, slice_types);
         }
         IREexpr::TupleLit { .. } => {}
+        IREexpr::FnLiteral(lit) => {
+            for param in &lit.params {
+                collect_slice_types_from_type(&param.ty, slice_types);
+            }
+            if let Some(ret) = &lit.return_type {
+                collect_slice_types_from_type(ret, slice_types);
+            }
+            for stmt in &lit.body.statements {
+                collect_slice_types_from_stmt(stmt, slice_types);
+            }
+        }
     }
 }
 
@@ -4085,6 +4251,17 @@ fn collect_tuple_types_from_expr(
         | IREexpr::FloatLiteral(_)
         | IREexpr::Var(_)
         | IREexpr::StringLit(_) => {}
+        IREexpr::FnLiteral(lit) => {
+            for param in &lit.params {
+                collect_tuple_types_from_type(&param.ty, tuple_types);
+            }
+            if let Some(ret) = &lit.return_type {
+                collect_tuple_types_from_type(ret, tuple_types);
+            }
+            for stmt in &lit.body.statements {
+                collect_tuple_types_from_stmt(stmt, tuple_types);
+            }
+        }
     }
 }
 
@@ -4286,6 +4463,17 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
             collect_vec_types_from_expr(target, vec_types);
             collect_vec_types_from_expr(index, vec_types);
             collect_vec_types_from_expr(value, vec_types);
+        }
+        IREexpr::FnLiteral(lit) => {
+            for param in &lit.params {
+                collect_vec_types_from_type(&param.ty, vec_types);
+            }
+            if let Some(ret) = &lit.return_type {
+                collect_vec_types_from_type(ret, vec_types);
+            }
+            for stmt in &lit.body.statements {
+                collect_vec_types_from_stmt(stmt, vec_types);
+            }
         }
     }
 }
@@ -4842,12 +5030,46 @@ fn collect_generic_from_expr(
             collect_generic_from_expr(index, instantiations);
             collect_generic_from_expr(value, instantiations);
         }
+        IREexpr::FnLiteral(lit) => {
+            for param in &lit.params {
+                collect_generic_from_type(&param.ty, instantiations);
+            }
+            if let Some(ret) = &lit.return_type {
+                collect_generic_from_type(ret, instantiations);
+            }
+            for stmt in &lit.body.statements {
+                collect_generic_from_stmt(stmt, instantiations);
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fn_return_type_ret_val_decl() {
+        let src = r#"fn make_inc() -> fn(int) -> int {
+    return fn(x: int) -> int { return x + 1; };
+}
+fn main() -> int { return 0; }"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let make_inc = ir.functions.iter().find(|f| f.name == "make_inc").unwrap();
+        assert!(
+            matches!(make_inc.return_type, Some(Type::Fn { .. })),
+            "expected fn return type, got {:?}",
+            make_inc.return_type
+        );
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("int (*ret_val)(int) = 0"),
+            "expected fn pointer ret_val decl in:\n{c}"
+        );
+    }
 
     #[test]
     fn multi_file_resolves_module_local_symbols() {

@@ -121,6 +121,11 @@ test_loop_basic.ion	run	17
 test_match_result_type.ion	run	88			
 test_if_else_move_ok.ion	run	60			
 test_fn_type_basic.ion	run	77			
+test_fn_literal_basic.ion	run	12			
+test_fn_literal_callback.ion	run	40			
+test_fn_literal_return.ion	run	6			
+test_fn_literal_capture_error.ion	error		ClosureCapture
+test_fn_literal_ref_capture_error.ion	error		ClosureCapture
 test_tuple_basic.ion	run	81			
 test_match_expr_rvalue.ion	run	91			
 test_struct_field_drop_vec.ion	run	46			

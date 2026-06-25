@@ -12,6 +12,7 @@ typedef struct {
     ion_receiver_t rx;
     ion_sender_t tx_back;
 } ion_spawn_ctx_0;
+static int ion_fn_lit_0(int x);
 
 typedef struct Vec_int {
     void* data;
@@ -118,6 +119,7 @@ int reference_example(void);
 int generic_example(void);
 int tuple_example(void);
 int spawn_channel_example(void);
+int fn_literal_example(void);
 int complex_example(void);
 int main(void);
 int get_first_int(Pair_int pair);
@@ -494,6 +496,19 @@ epilogue:
         return ret_val;
 }
 
+int fn_literal_example(void) {
+    int ret_val = 0;
+    int (*twice)(int) = ion_fn_lit_0;
+    if (twice(21) != 42) {
+        ret_val = 1;
+        goto epilogue;
+    }
+    ret_val = 0;
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
 int complex_example(void) {
     int ret_val = 0;
     Vec_int* numbers = ((Vec_int*)(ion_vec_new(sizeof(int))));
@@ -595,8 +610,12 @@ int main(void) {
         ret_val = 9;
         goto epilogue;
     }
-    if (complex_example() != 0) {
+    if (fn_literal_example() != 0) {
         ret_val = 10;
+        goto epilogue;
+    }
+    if (complex_example() != 0) {
+        ret_val = 11;
         goto epilogue;
     }
     ret_val = 0;
@@ -628,5 +647,13 @@ static void* ion_spawn_entry_0(void* arg) {
     goto spawn_0_epilogue;
 spawn_0_epilogue:
     return NULL;
+}
+
+static int ion_fn_lit_0(int x) {
+    int ret_val = 0;
+    ret_val = (x * 2);
+    goto ion_fn_lit_0_epilogue;
+ion_fn_lit_0_epilogue:
+    return ret_val;
 }
 

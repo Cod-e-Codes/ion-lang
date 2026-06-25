@@ -390,6 +390,13 @@ fn diagnostic_from_tc_error(err: &TypeCheckError) -> (crate::ast::Span, String) 
         TypeCheckError::ReferenceEscape { span, description } => {
             (*span, format!("Reference escape: {description}"))
         }
+        TypeCheckError::ClosureCapture { span, names } => (
+            *span,
+            format!(
+                "Fn literal cannot capture variables from outer scope: {}",
+                names.join(", ")
+            ),
+        ),
         TypeCheckError::Message(msg) => (crate::ast::Span::default(), msg.clone()),
     }
 }

@@ -276,6 +276,15 @@ pub enum Expr {
     Index(IndexExpr),
     Cast(CastExpr),
     Assign(AssignExpr),
+    FnLiteral(FnLiteralExpr),
+}
+
+#[derive(Debug, Clone)]
+pub struct FnLiteralExpr {
+    pub params: Vec<Param>,
+    pub return_type: Option<Type>,
+    pub body: Block,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

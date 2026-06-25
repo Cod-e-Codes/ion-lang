@@ -81,6 +81,7 @@ Critical checks to preserve. Patterns below match **CLI stderr** (`Type check er
 | `if`/`while` non-bool | bool condition errors |
 | Module visibility | `Cannot access non-public` |
 | `unsafe` for extern | `must be inside an unsafe block` |
+| Fn literal capture | `ClosureCapture` |
 
 Add new `TypeCheckError` variants only when existing ones can't express the failure clearly.
 

@@ -1,0 +1,10 @@
+fn make_inc() -> fn(int) -> int {
+    return fn(x: int) -> int {
+        return x + 1;
+    };
+}
+
+fn main() -> int {
+    let f = make_inc();
+    return f(5);
+}

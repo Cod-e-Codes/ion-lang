@@ -366,6 +366,50 @@ impl Parser {
         })
     }
 
+    fn parse_fn_literal_expr(&mut self, fn_span: Span) -> Result<FnLiteralExpr, ParseError> {
+        self.expect(TokenKind::Fn)?;
+        self.expect(TokenKind::LParen)?;
+        let params = self.parse_params()?;
+        self.expect(TokenKind::RParen)?;
+
+        let return_type =
+            if !self.is_at_end() && matches!(self.tokens[self.current].kind, TokenKind::Arrow) {
+                self.advance();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+
+        let body = self.parse_block()?;
+
+        let end_span = body
+            .statements
+            .last()
+            .map(|s| match s {
+                Stmt::Let(s) => s.span,
+                Stmt::Return(s) => s.span,
+                Stmt::Break(s) => s.span,
+                Stmt::Continue(s) => s.span,
+                Stmt::Expr(s) => s.expr.span(),
+                Stmt::Defer(s) => s.span,
+                Stmt::Spawn(s) => s.span,
+                Stmt::If(s) => s.span,
+                Stmt::While(s) => s.span,
+                Stmt::Loop(s) => s.span,
+                Stmt::For(s) => s.span,
+                Stmt::UnsafeBlock(s) => s.span,
+            })
+            .unwrap_or_else(|| Span::from_token(self.previous()));
+        let span = fn_span.merge(&end_span);
+
+        Ok(FnLiteralExpr {
+            params,
+            return_type,
+            body,
+            span,
+        })
+    }
+
     fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
         let mut params = Vec::new();
 
@@ -2343,6 +2387,22 @@ impl Parser {
                 self.advance();
                 Ok(Expr::StringLit(StringLitExpr { value, span }))
             }
+            TokenKind::Fn => {
+                let next_is_lparen = if self.current + 1 < self.tokens.len() {
+                    matches!(self.tokens[self.current + 1].kind, TokenKind::LParen)
+                } else {
+                    false
+                };
+                if !next_is_lparen {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "function literal parameters '('".to_string(),
+                        got: self.peek().kind.clone(),
+                        span: Span::from_token(self.peek()),
+                    });
+                }
+                let fn_lit = self.parse_fn_literal_expr(span)?;
+                Ok(Expr::FnLiteral(fn_lit))
+            }
             TokenKind::Match => {
                 let match_expr = self.parse_match_expr()?;
                 Ok(Expr::Match(match_expr))
@@ -2957,6 +3017,7 @@ impl HasSpan for Expr {
             Expr::Index(e) => e.span,
             Expr::Cast(e) => e.span,
             Expr::Assign(e) => e.span,
+            Expr::FnLiteral(e) => e.span,
         }
     }
 }

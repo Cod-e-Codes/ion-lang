@@ -274,6 +274,7 @@ impl TypeChecker {
                 self.check_expr_for_moves(&assign_expr.value)?; // Move the value
                 Ok(())
             }
+            Expr::FnLiteral(_) => Ok(()),
         }
     }
 

@@ -205,6 +205,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 ### Function types
 - `test_fn_type_basic.ion` - Store named function in `fn(int) -> int` variable; call through pointer (exit 77)
 - `test_fn_type_mismatch.ion` - Function signature mismatch when coercing to fn type (negative)
+- `test_fn_literal_basic.ion` - Capture-free fn literal stored in `fn(int) -> int` and called (exit 12)
+- `test_fn_literal_callback.ion` - Pass capture-free fn literal to `fn(int) -> int` parameter (exit 40)
+- `test_fn_literal_return.ion` - Return capture-free fn literal from function (exit 6)
+- `test_fn_literal_capture_error.ion` - Fn literal referencing outer binding (negative, `ClosureCapture`)
+- `test_fn_literal_ref_capture_error.ion` - Fn literal referencing outer reference (negative, `ClosureCapture`)
 - `test_tuple_basic.ion` - Tuple literals, `.0`/`.1` access, and destructuring (exit 81)
 
 - `test_io_print_str.ion` - Safe I/O library: `print_str()` function

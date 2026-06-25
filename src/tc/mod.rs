@@ -37,6 +37,7 @@ impl HasSpan for Expr {
             Expr::Index(e) => e.span,
             Expr::Cast(e) => e.span,
             Expr::Assign(e) => e.span,
+            Expr::FnLiteral(e) => e.span,
         }
     }
 }
@@ -138,6 +139,10 @@ pub enum TypeCheckError {
         description: String,
         span: Span,
     },
+    ClosureCapture {
+        names: Vec<String>,
+        span: Span,
+    },
     Message(String),
 }
 
@@ -177,6 +182,12 @@ impl std::fmt::Display for TypeCheckError {
             TypeCheckError::ReferenceEscape { description, span } => {
                 write!(f, "line {}: ReferenceEscape: {}", span.line, description)
             }
+            TypeCheckError::ClosureCapture { names, span } => write!(
+                f,
+                "line {}: ClosureCapture: fn literal cannot capture variables from outer scope: {}",
+                span.line,
+                names.join(", ")
+            ),
             TypeCheckError::Message(msg) => write!(f, "{}", msg),
         }
     }
@@ -3629,6 +3640,68 @@ impl TypeChecker {
                     }),
                 }
             }
+            Expr::FnLiteral(lit) => {
+                let mut exclude = std::collections::HashSet::new();
+                for param in &lit.params {
+                    exclude.insert(param.name.clone());
+                }
+                let captures = collect_captured_vars_excluding(&lit.body, &exclude);
+                if !captures.is_empty() {
+                    return Err(TypeCheckError::ClosureCapture {
+                        names: captures,
+                        span: lit.span,
+                    });
+                }
+
+                let resolved_params: Result<Vec<Type>, TypeCheckError> = lit
+                    .params
+                    .iter()
+                    .map(|p| self.resolve_type_name(&p.ty))
+                    .collect();
+                let resolved_params = resolved_params?;
+
+                let resolved_return = if let Some(ref ret_ty) = lit.return_type {
+                    self.resolve_type_name(ret_ty)?
+                } else {
+                    Type::Void
+                };
+
+                if self.is_reference_containing(&resolved_return) {
+                    return Err(TypeCheckError::ReferenceEscape {
+                        description:
+                            "fn literal cannot return a reference type (violates no-escape rule)"
+                                .to_string(),
+                        span: lit.span,
+                    });
+                }
+
+                let prev_vars = self.variables.clone();
+                let prev_return = self.current_return_type.clone();
+                self.current_return_type = Some(resolved_return.clone());
+
+                for (param, param_ty) in lit.params.iter().zip(resolved_params.iter()) {
+                    self.variables.insert(
+                        param.name.clone(),
+                        Self::new_variable_info(param_ty.clone(), lit.span),
+                    );
+                }
+
+                self.push_borrow_scope();
+                for stmt in &lit.body.statements {
+                    self.check_stmt(stmt)?;
+                }
+                self.pop_borrow_scope();
+
+                self.variables = prev_vars;
+                self.current_return_type = prev_return;
+
+                let fn_ty = Type::Fn {
+                    params: resolved_params,
+                    return_type: Box::new(resolved_return),
+                };
+                self.record_expr_type(lit.span, &fn_ty);
+                Ok(fn_ty)
+            }
         }
     }
 
@@ -4406,11 +4479,17 @@ fn substitute_generic_types_impl(
 
 /// Collect names of variables from the enclosing scope referenced inside a block.
 /// Locals declared inside the block (including nested scopes) are excluded.
+/// Names in `exclude` are treated as in-scope bindings (e.g. fn literal parameters).
 pub(crate) fn collect_captured_vars(block: &Block) -> Vec<String> {
-    use std::collections::HashSet;
+    collect_captured_vars_excluding(block, &std::collections::HashSet::new())
+}
 
+pub(crate) fn collect_captured_vars_excluding(
+    block: &Block,
+    exclude: &std::collections::HashSet<String>,
+) -> Vec<String> {
     let mut refs = Vec::new();
-    let mut locals = HashSet::new();
+    let mut locals = exclude.clone();
     collect_block_var_refs(block, &mut refs, &mut locals);
     refs.sort();
     refs.dedup();
@@ -4572,6 +4651,13 @@ fn collect_expr_var_refs(
         Expr::Assign(assign_expr) => {
             collect_expr_var_refs(&assign_expr.target, refs, locals);
             collect_expr_var_refs(&assign_expr.value, refs, locals);
+        }
+        Expr::FnLiteral(lit) => {
+            let mut lit_locals = locals.clone();
+            for param in &lit.params {
+                lit_locals.insert(param.name.clone());
+            }
+            collect_block_var_refs(&lit.body, refs, &mut lit_locals);
         }
     }
 }

@@ -1,0 +1,6 @@
+fn main() -> int {
+    let f: fn(int) -> int = fn(x: int) -> int {
+        return x + 5;
+    };
+    return f(7);
+}

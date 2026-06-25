@@ -332,7 +332,20 @@ fn spawn_channel_example() -> int {
 }
 
 // ============================================
-// 13. COMPLEX EXAMPLE - Combining features
+// 13. FN LITERALS - Capture-free function pointers
+// ============================================
+fn fn_literal_example() -> int {
+    let twice: fn(int) -> int = fn(x: int) -> int {
+        return x * 2;
+    };
+    if twice(21) != 42 {
+        return 1;
+    }
+    return 0;
+}
+
+// ============================================
+// 14. COMPLEX EXAMPLE - Combining features
 // ============================================
 fn complex_example() -> int {
     let mut numbers: Vec<int> = Vec::new();
@@ -426,8 +439,12 @@ fn main() -> int {
         return 9;
     }
 
-    if complex_example() != 0 {
+    if fn_literal_example() != 0 {
         return 10;
+    }
+
+    if complex_example() != 0 {
+        return 11;
     }
 
     return 0;

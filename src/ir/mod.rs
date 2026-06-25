@@ -1,6 +1,8 @@
 use crate::ast::*;
 use crate::tc::collect_captured_vars;
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct IRProgram {
@@ -169,6 +171,15 @@ pub enum IREexpr {
         expr: Box<IREexpr>,
         target_type: Type,
     },
+    FnLiteral(IRFnLiteral),
+}
+
+#[derive(Debug, Clone)]
+pub struct IRFnLiteral {
+    pub symbol: String,
+    pub params: Vec<IRParam>,
+    pub return_type: Option<Type>,
+    pub body: IRBlock,
 }
 
 #[derive(Debug, Clone)]
@@ -181,10 +192,16 @@ pub struct IRMatchArm {
 struct LoweringContext {
     var_types: HashMap<String, Type>,
     tuple_temp_counter: usize,
+    fn_literal_counter: Rc<Cell<usize>>,
+    function_returns: HashMap<String, Option<Type>>,
 }
 
 impl LoweringContext {
-    fn from_params(params: &[IRParam]) -> Self {
+    fn from_params(
+        params: &[IRParam],
+        fn_literal_counter: Rc<Cell<usize>>,
+        function_returns: HashMap<String, Option<Type>>,
+    ) -> Self {
         let mut var_types = HashMap::new();
         for p in params {
             var_types.insert(p.name.clone(), p.ty.clone());
@@ -192,6 +209,8 @@ impl LoweringContext {
         Self {
             var_types,
             tuple_temp_counter: 0,
+            fn_literal_counter,
+            function_returns,
         }
     }
 
@@ -260,10 +279,15 @@ pub struct IRBuilder;
 impl IRBuilder {
     pub fn build(ast: &Program) -> IRProgram {
         let builder = IRBuilder;
+        let function_returns: HashMap<String, Option<Type>> = ast
+            .functions
+            .iter()
+            .map(|f| (f.name.clone(), f.return_type.clone()))
+            .collect();
         let functions = ast
             .functions
             .iter()
-            .map(|f| builder.build_function(f))
+            .map(|f| builder.build_function(f, &function_returns))
             .collect();
         let mut program = IRProgram {
             structs: ast.structs.clone(),
@@ -276,7 +300,11 @@ impl IRBuilder {
         program
     }
 
-    fn build_function(&self, function: &FnDecl) -> IRFunction {
+    fn build_function(
+        &self,
+        function: &FnDecl,
+        function_returns: &HashMap<String, Option<Type>>,
+    ) -> IRFunction {
         let params: Vec<IRParam> = function
             .params
             .iter()
@@ -287,7 +315,9 @@ impl IRBuilder {
             .collect();
 
         // For minimal subset, we use a single basic block
-        let mut ctx = LoweringContext::from_params(&params);
+        let fn_literal_counter = Rc::new(Cell::new(0));
+        let mut ctx =
+            LoweringContext::from_params(&params, fn_literal_counter, function_returns.clone());
         let entry = Self::lower_ast_block("entry", &function.body, &mut ctx);
         let blocks = vec![entry];
 
@@ -431,20 +461,14 @@ impl IRBuilder {
                 let ty = if let Some(ref type_ann) = let_stmt.type_ann {
                     type_ann.clone()
                 } else if let Some(ref init_expr) = let_stmt.init {
-                    // For variables, we can't infer the type, but the type checker has
-                    // already verified it. For now, we'll use a fallback that works for
-                    // common cases. The real fix would be to pass type information from
-                    // the type checker, but for now we'll handle Receiver/Sender specially.
                     match init_expr {
-                        Expr::Var(_var_expr) => {
-                            // For variables, we can't infer from the name alone.
-                            // But if this is a Receiver or Sender, we should preserve that.
-                            // Since we don't have type info, we'll default to Int and let
-                            // explicit type annotations handle it, OR we could check if
-                            // the variable name suggests it's a receiver/sender.
-                            // For now, use Int as fallback - type annotations should be used.
-                            Type::Int
-                        }
+                        Expr::Call(call_expr) => ctx
+                            .function_returns
+                            .get(&call_expr.callee)
+                            .and_then(|o| o.clone())
+                            .unwrap_or_else(|| infer_type_from_expr(init_expr)),
+                        Expr::FnLiteral(lit) => fn_type_from_expr_literal(lit),
+                        Expr::Var(_var_expr) => Type::Int,
                         _ => infer_type_from_expr(init_expr),
                     }
                 } else {
@@ -845,6 +869,8 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     let mut arm_ctx = LoweringContext {
                         var_types: ctx.var_types.clone(),
                         tuple_temp_counter: ctx.tuple_temp_counter,
+                        fn_literal_counter: ctx.fn_literal_counter.clone(),
+                        function_returns: ctx.function_returns.clone(),
                     };
                     for stmt in &arm.body.statements {
                         IRBuilder::lower_stmt(stmt, &mut body_stmts, &mut arm_defers, &mut arm_ctx);
@@ -955,6 +981,31 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             },
             _ => panic!("Invalid assignment target in IR lowering"),
         },
+        Expr::FnLiteral(lit) => {
+            let lit_params: Vec<IRParam> = lit
+                .params
+                .iter()
+                .map(|p| IRParam {
+                    name: p.name.clone(),
+                    ty: p.ty.clone(),
+                })
+                .collect();
+            let id = ctx.fn_literal_counter.get();
+            ctx.fn_literal_counter.set(id + 1);
+            let symbol = format!("ion_fn_lit_{}", id);
+            let mut lit_ctx = LoweringContext::from_params(
+                &lit_params,
+                ctx.fn_literal_counter.clone(),
+                ctx.function_returns.clone(),
+            );
+            let body = IRBuilder::lower_ast_block("fn_lit_body", &lit.body, &mut lit_ctx);
+            IREexpr::FnLiteral(IRFnLiteral {
+                symbol,
+                params: lit_params,
+                return_type: lit.return_type.clone(),
+                body,
+            })
+        }
     }
 }
 
@@ -976,7 +1027,15 @@ fn infer_type_from_expr(expr: &Expr) -> Type {
             inner: Box::new(infer_type_from_expr(&ref_expr.inner)),
             mutable: ref_expr.mutable,
         },
+        Expr::FnLiteral(lit) => fn_type_from_expr_literal(lit),
         _ => Type::Int, // Default fallback
+    }
+}
+
+fn fn_type_from_expr_literal(lit: &FnLiteralExpr) -> Type {
+    Type::Fn {
+        params: lit.params.iter().map(|p| p.ty.clone()).collect(),
+        return_type: Box::new(lit.return_type.clone().unwrap_or(Type::Void)),
     }
 }
 
@@ -1275,6 +1334,15 @@ fn rewrite_generic_calls_in_expr(
         }
         IREexpr::Cast { expr: inner, .. } => {
             rewrite_generic_calls_in_expr(inner, generic_defs, var_types, instantiations);
+        }
+        IREexpr::FnLiteral(lit) => {
+            let mut lit_vars = var_types.clone();
+            rewrite_generic_calls_in_block(
+                &mut lit.body,
+                generic_defs,
+                &mut lit_vars,
+                instantiations,
+            );
         }
         IREexpr::Lit(_)
         | IREexpr::BoolLiteral(_)
@@ -1662,6 +1730,22 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
         IREexpr::FloatLiteral(v) => IREexpr::FloatLiteral(*v),
         IREexpr::Var(v) => IREexpr::Var(v.clone()),
         IREexpr::StringLit(v) => IREexpr::StringLit(v.clone()),
+        IREexpr::FnLiteral(lit) => IREexpr::FnLiteral(IRFnLiteral {
+            symbol: lit.symbol.clone(),
+            params: lit
+                .params
+                .iter()
+                .map(|p| IRParam {
+                    name: p.name.clone(),
+                    ty: substitute_type(&p.ty, substitutions),
+                })
+                .collect(),
+            return_type: lit
+                .return_type
+                .as_ref()
+                .map(|ty| substitute_type(ty, substitutions)),
+            body: substitute_types_in_block(&lit.body, substitutions),
+        }),
     }
 }
 

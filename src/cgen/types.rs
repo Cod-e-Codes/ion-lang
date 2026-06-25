@@ -247,6 +247,12 @@ pub(crate) fn fn_type_to_c_decl(ty: &Type, name: &str) -> String {
     format!("{} (*{})({})", ret, name, param_strs.join(", "))
 }
 
+/// C prototype/definition header for a function whose return type is `fn(...) -> ...`.
+pub(crate) fn fn_type_to_c_function_header(name: &str, param_list: &str, ret_ty: &Type) -> String {
+    let ptr = fn_type_to_c_ptr(ret_ty);
+    ptr.replacen("(*)", &format!("(*{name}({param_list}))"), 1)
+}
+
 pub(crate) fn type_to_c_impl(ty: &Type) -> String {
     match ty {
         Type::Void => "void".to_string(),
