@@ -47,7 +47,7 @@ cargo test test_name -- --nocapture
 **Integration harness (Git Bash on Windows):**
 
 ```bash
-cargo build --release --bin ion-compiler
+cargo build --release --bin ion-compiler --bin ion-build
 cd tests && ./test_runner.sh
 # One test
 cd tests && ./test_runner.sh test_foo.ion
