@@ -17,7 +17,7 @@ Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 - **Ownership**: move by default; single owner per value; use-after-move is a compile error
 - **Borrowing**: `&T` and `&mut T` are stack-local; references cannot escape the function (no return, no struct fields, no channels, no `spawn`)
 - **Types**: primitives, structs, enums (tuple and struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String`
-- **Control flow**: `if`/`while` (bool conditions), `loop { }`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, `defer`
+- **Control flow**: `if`/`while` (bool conditions), `loop { }`, `break`/`continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, `defer`
 - **Concurrency**: `channel<T>()` returns `(Sender<T>, Receiver<T>)`; `send(&tx, v)` and `recv(&mut rx)`; `spawn { ... }` with structural `Send`
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`
 - **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, and `stdlib/result.ion`
@@ -30,6 +30,7 @@ Known limitations: [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations)
 |----------|----------|
 | [ION_SPEC.md](ION_SPEC.md) | Language semantics, grammar, stdlib contracts |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, test, lint, and PR expectations |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes by month |
 | [tests/README.md](tests/README.md) | Integration test catalog |
 | [examples/](examples/) | Runnable example programs |
 
@@ -61,10 +62,14 @@ Binaries: `target/release/ion-compiler`, `target/release/ion-build`, `target/rel
 
 Ion has a VS Code / Cursor extension that provides:
 - Syntax highlighting
-- Real-time diagnostics (syntax and type errors)
+- Real-time diagnostics (syntax, import, and type errors; multiple independent type errors per file)
 - Hover: variable types at use sites and `let` binding identifiers; symbol signatures and attached `//` doc prose at definitions and qualified imports
 - Completion: prefix-filtered keywords, builtins, and file symbols
 - Go to definition: variables, function calls, and user-defined methods; imported `mod::func` opens the module file
+- Find references, document outline, signature help, semantic tokens
+- Workspace refresh when watched `.ion` dependencies change on disk
+
+Full LSP feature list: [ION_SPEC.md section 10.2](ION_SPEC.md#102-language-server-lsp).
 
 Limitations: built-in methods (`Vec::push`, etc.) and type names in annotations do not go to definition. Full list in [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
 
@@ -200,6 +205,8 @@ On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows cha
 
 ```
 .
+├── .cursor/skills/ # Cursor agent skills
+├── .github/        # CI workflows
 ├── src/
 │   ├── bin/        # ion-build, ion-lsp
 │   ├── lexer/      # Tokenizer

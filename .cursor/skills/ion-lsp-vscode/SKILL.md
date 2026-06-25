@@ -64,7 +64,7 @@ Adjust path for OS (no `.exe` on Linux/macOS).
 `src/lsp/server.rs` implements `tower_lsp::LanguageServer`. In `check_file`:
 
 1. On `did_open` / `did_change` - **lexer → parser** on the in-memory buffer (unsaved edits included; does not re-read the file from disk)
-2. **`Compiler::load_imports`** - per-import `parse_module` on disk with `build::discover_import_config` (same stdlib paths as `ion-build` when `ion.toml` or `ION_STDLIB` is set); failed imports publish diagnostics at the `import` span while successful imports still register exports
+2. **`Compiler::load_imports`** - per-import `parse_module` on disk with `build::discover_import_config` (same stdlib search order as `ion-build`, including walk-up `stdlib/` and install-relative paths); failed imports publish diagnostics at the `import` span while successful imports still register exports
 3. **Type-check** - `tc::TypeChecker::check_program_collecting_with_source` on merged program, symbols seeded from buffer AST (`check_program_collecting` for unit tests)
 4. Publish diagnostics from lexer, parser, import resolution, or type-check errors
 5. **Hover** - expression types, symbol docs, builtin signatures

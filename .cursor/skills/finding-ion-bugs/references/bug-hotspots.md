@@ -21,7 +21,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 
 - `register_imports` (LSP) vs full `parse_module` (CLI) import resolution
 - Import cycles and duplicate symbol registration
-- Keyword additions: lexer + parser + LSP keyword list + TextMate grammar
+- Keyword additions: lexer + parser + `src/lsp/util.rs` `KEYWORDS` + TextMate grammar
 
 ## Integration harness
 

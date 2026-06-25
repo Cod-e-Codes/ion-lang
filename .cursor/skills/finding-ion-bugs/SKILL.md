@@ -84,7 +84,7 @@ git bisect start
 git bisect bad HEAD
 git bisect good <known-good-commit>
 # rebuild + repro each step
-cargo build --release --bin ion-compiler && cd tests && ./test_runner.sh test_foo.ion
+cargo build --release --bin ion-compiler --bin ion-build && cd tests && ./test_runner.sh test_foo.ion
 ```
 
 ## Change review for bugs

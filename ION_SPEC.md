@@ -1219,7 +1219,7 @@ Manifest discovery walks upward from the current directory for a file named `ion
 3. `{project_root}/stdlib`
 4. Install-relative `stdlib/` next to the compiler executable (walking up)
 
-File-relative imports (`./`, `../`) and same-directory modules are resolved first. The CLI (`ion-compiler`, `ion-build`) and LSP use the same rules when `ion.toml` or `ION_STDLIB` is present.
+File-relative imports (`./`, `../`) and same-directory modules are resolved first. The CLI (`ion-compiler`, `ion-build`) and LSP share `build::discover_import_config` and the stdlib search order above (from `ion.toml` when present, otherwise by walking up for `stdlib/` and install-relative paths next to the executable).
 
 On Windows with MinGW, linking adds `-lws2_32` automatically (channels, spawn, sockets). Honor `CC` for the C compiler (same as `tests/test_runner.sh`).
 
