@@ -1,6 +1,6 @@
 # Ion Compiler
 
-A source-to-source transpiler from Ion to C. Ion is transpiled to human-readable C, then compiled with a C compiler.
+A compiler toolchain for Ion with a C code generation backend. `ion-compiler` emits human-readable C; `ion-build` transpiles, compiles with GCC or Clang, and links the runtime into an executable.
 
 ## What is Ion?
 
