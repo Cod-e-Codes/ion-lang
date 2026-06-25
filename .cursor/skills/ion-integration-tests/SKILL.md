@@ -40,11 +40,11 @@ cargo build --release --bin ion-compiler --bin ion-build
 cd tests && ./test_runner.sh
 ```
 
-From PowerShell:
+From PowerShell (repo root; requires Git Bash):
 
 ```powershell
 cargo build --release --bin ion-compiler --bin ion-build
-& 'C:\Program Files\Git\bin\bash.exe' -lc 'cd /c/Users/Cody/Projects/GitHub/Personal/Active/ion-lang/tests && ./test_runner.sh'
+& "${env:ProgramFiles}\Git\bin\bash.exe" -lc 'cd tests && ./test_runner.sh'
 ```
 
 The harness primarily calls `ion-compiler` for `run`/`error`/`cgen` rows. It also runs `ion-build` smoke tests (`tests/build_hello/`, `tests/build_bad_main/`) via the `ION_BUILD` env var (defaults to `../target/release/ion-build`).

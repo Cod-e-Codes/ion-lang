@@ -9,14 +9,16 @@
 ## Build
 
 ```bash
-cargo build --release --bin ion-compiler
+cargo build --release --bin ion-compiler --bin ion-build --bin ion-lsp
 ```
 
-Install the compiler into your Cargo bin directory:
+Install CLI tools into your Cargo bin directory:
 
 ```bash
-cargo install --path . --bin ion-compiler
+cargo install --path . --bin ion-compiler --bin ion-build
 ```
+
+`ion-lsp` is built with the release command above; point the editor extension at `target/release/ion-lsp` (see README IDE Support).
 
 ## Test
 

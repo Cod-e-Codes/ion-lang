@@ -47,7 +47,7 @@ Ion identity depends on these - do not weaken them without explicit user directi
 cargo test
 cargo build --release --bin ion-compiler --bin ion-lsp --bin ion-build
 cargo clippy -- -D warnings
-& 'C:\Program Files\Git\bin\bash.exe' -lc 'cd /c/Users/Cody/Projects/GitHub/Personal/Active/ion-lang/tests && ./test_runner.sh'
+& "${env:ProgramFiles}\Git\bin\bash.exe" -lc 'cd tests && ./test_runner.sh'
 ```
 
 **Application builds:** `ion-build` reads `ion.toml` (walks up from cwd), transpiles, compiles C, links runtime. Default output under `target/`:
@@ -58,7 +58,7 @@ cargo clippy -- -D warnings
 
 **Codegen inspection / integration harness:** `ion-compiler` still transpiles only (or `--mode multi` with in-tree link). Integration tests call `ion-compiler` directly; `test_runner.sh` also runs `ion-build` smoke tests in `tests/build_hello/`.
 
-**Stdlib imports:** `import "stdlib/io.ion" as io;` resolves via `ion.toml` `stdlib_paths`, `ION_STDLIB`, and `{project_root}/stdlib`. CLI and LSP share `build::discover_import_config`.
+**Stdlib imports:** `import "stdlib/io.ion" as io;` resolves via manifest `stdlib_paths`, `ION_STDLIB`, `{project_root}/stdlib`, then install-relative `stdlib/` next to the compiler. CLI and LSP share `build::discover_import_config`.
 
 **Windows:** Stop `ion-lsp` / `ion-compiler` before rebuilding if you get "Access is denied". After compiler or import-resolution changes, rebuild LSP and reload the editor window:
 
@@ -70,8 +70,10 @@ cargo build --release --bin ion-lsp
 
 ```powershell
 .\target\release\ion-compiler.exe examples\hello_world.ion
-gcc examples\hello_world.c runtime\ion_runtime.c -o hello_world.exe -I. -Iruntime -lpthread -lws2_32
+gcc examples\hello_world.c runtime\ion_runtime.c -o hello_world.exe -I. -Iruntime -lpthread
 ```
+
+Add `-lws2_32` on Windows when linking programs that use channels, `spawn`, or sockets.
 
 ## Specialized skills
 

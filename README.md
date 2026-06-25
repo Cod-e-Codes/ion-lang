@@ -62,10 +62,10 @@ Ion has a VS Code / Cursor extension that provides:
 - Syntax highlighting
 - Real-time diagnostics (syntax and type errors)
 - Hover: variable types at use sites and `let` binding identifiers; symbol signatures and attached `//` doc prose at definitions and qualified imports
-- Completion: keywords, builtins, and file symbols
+- Completion: prefix-filtered keywords, builtins, and file symbols
 - Go to definition: variables, function calls, and user-defined methods; imported `mod::func` opens the module file
 
-Limitations: built-in methods (`Vec::push`, etc.) do not go to definition; completion has no prefix filtering. Full list in [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
+Limitations: built-in methods (`Vec::push`, etc.) do not go to definition. Full list in [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
 
 **Installation:**
 
@@ -239,6 +239,12 @@ The runner loads `tests/test_expectations.tsv` (exit codes, error patterns, code
 
 ```bash
 cargo clippy -- -D warnings
+```
+
+### Format check
+
+```bash
+cargo fmt --check
 ```
 
 ## License

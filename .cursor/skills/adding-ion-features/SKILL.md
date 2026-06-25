@@ -30,6 +30,7 @@ Copy and track progress:
 - [ ] 5. Type checker - typing, ownership, Send in `src/tc/` (`mod.rs` plus `ownership.rs`, `builtins.rs`, `types.rs` as needed)
 - [ ] 6. IR - lowering in src/ir/mod.rs
 - [ ] 7. Codegen - C output in `src/cgen/` (`mod.rs`, `types.rs`, `builtins.rs`, `drop.rs`) (+ runtime/ if new runtime support)
+- [ ] 7b. Project build - if touching `src/build/` or ION_SPEC section 10.1: `manifest.rs`, `driver.rs`, `c_toolchain.rs`, `paths.rs`; verify `tests/build_hello/` and `tests/build_bad_main/`
 - [ ] 8. Tests - integration test in tests/ (see ion-integration-tests skill)
 - [ ] 9. LSP - update src/lsp/ if diagnostics/hover/completion affected
 - [ ] 10. cargo test && cargo build --release && tests/test_runner.sh (harness precompiles `runtime/ion_runtime.c` once per run)
@@ -90,6 +91,19 @@ Add new `TypeCheckError` variants only when existing ones can't express the fail
 - `IRBuilder::build` - keep lowering deterministic
 - `cgen` - generated C must compile with `gcc` + `runtime/ion_runtime.c` (or precompiled `.o` via `test_runner.sh`) + `-lpthread`
 - Multi-file: test with `--mode multi` if imports or visibility involved
+
+### Project build (`src/build/`)
+
+Touch when changing `ion.toml` parsing, `ion-build` driver behavior, C toolchain flags, or import/stdlib discovery shared with LSP:
+
+| File | Role |
+|------|------|
+| `manifest.rs` | Parse `ion.toml`, `Project::discover` |
+| `driver.rs` | `build_project`: transpile, compile C, link runtime |
+| `c_toolchain.rs` | Invoke `CC`, compile and link flags |
+| `paths.rs` | Project root, stdlib paths, `discover_import_config` |
+
+Verify with `tests/build_hello/` and `tests/build_bad_main/` smoke tests. See `ion-lang/references/compiler-pipeline.md`.
 
 ### Runtime (`runtime/`)
 
