@@ -57,7 +57,7 @@ RUNTIME_OBJ=/tmp/ion_runtime.o ./test_runner.sh
 CFLAGS="-Wall -Wextra -Werror" RUNTIME_OBJ=.ion_test_runtime_werror.o ./test_runner.sh
 ```
 
-Local `-Werror` over the full harness is not yet supported; CI runs `-Werror` on a curated smoke subset in `.github/workflows/ci.yml`.
+Local full-harness `-Werror` matches the Linux CI warning-clean job.
 
 ```bash
 CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitize=address,undefined" ./test_runner.sh

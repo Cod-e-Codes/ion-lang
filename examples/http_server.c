@@ -73,6 +73,12 @@ int handle_client(int ION_MAYBE_UNUSED client_fd) {
         int _sent6 = send_sys(client_fd, (uint8_t*)"<html><head><title>Ion HTTP Server</title></head><body><h1>Hello from Ion!</h1><p>This is a simple HTTP server written in Ion.</p></body></html>", 89, 0);
         (void)_sent6;
         close(client_fd);
+        (void)_sent6;
+        (void)_sent5;
+        (void)_sent4;
+        (void)_sent3;
+        (void)_sent2;
+        (void)_sent1;
     }
     ret_val = 0;
     goto epilogue;
@@ -141,6 +147,7 @@ static void* ion_spawn_entry_0(void* arg) {
     int client_fd = ctx->client_fd;
     free(ctx);
     int _result = handle_client(client_fd);
+    (void)_result;
     (void)_result;
     goto spawn_0_epilogue;
 spawn_0_epilogue:

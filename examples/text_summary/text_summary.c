@@ -40,22 +40,22 @@ static ION_MAYBE_UNUSED ReadResult ReadResult_Err_new(int arg0) {
     return result;
 }
 
-extern int write(int fd, uint8_t* buf, int count);
-
 extern int open(uint8_t* path, int flags);
 extern int read(int fd, uint8_t* buf, int count);
 extern int close(int fd);
 
+extern int write(int fd, uint8_t* buf, int count);
+
 TextCounts summarize_text(ion_string_t* ION_MAYBE_UNUSED text);
 int main(void);
-void io_print(ion_string_t* ION_MAYBE_UNUSED s);
-void io_println(ion_string_t* ION_MAYBE_UNUSED s);
-void io_print_str(uint8_t* ION_MAYBE_UNUSED s, int ION_MAYBE_UNUSED len);
-void io_print_int(int ION_MAYBE_UNUSED n);
 ReadResult fs_read_to_string_result(ion_string_t* ION_MAYBE_UNUSED path);
 void fmt_print_int(int ION_MAYBE_UNUSED n);
 void fmt_println_int(int ION_MAYBE_UNUSED n);
 ion_string_t* fmt_int_to_string(int ION_MAYBE_UNUSED n);
+void io_print(ion_string_t* ION_MAYBE_UNUSED s);
+void io_println(ion_string_t* ION_MAYBE_UNUSED s);
+void io_print_str(uint8_t* ION_MAYBE_UNUSED s, int ION_MAYBE_UNUSED len);
+void io_print_int(int ION_MAYBE_UNUSED n);
 TextCounts summarize_text(ion_string_t* ION_MAYBE_UNUSED text) {
     TextCounts ret_val = {0};
     int lines = 0;
@@ -114,7 +114,6 @@ int main(void) {
             io_print(ion_string_from_literal("read failed: ", 13));
             io_println(fmt_int_to_string(code));
             ret_val = 1;
-            if (path) { ion_string_free(path); }
             goto epilogue;
             break;
         }
@@ -124,98 +123,13 @@ epilogue:
         return ret_val;
 }
 
-void io_print(ion_string_t* ION_MAYBE_UNUSED s) {
-    {
-        int _result = write(1, s->data, (int)s->len);
-        (void)_result;
-    }
-    goto epilogue;
-epilogue:
-        return;
-}
-
-void io_println(ion_string_t* ION_MAYBE_UNUSED s) {
-    {
-        int _result = write(1, s->data, (int)s->len);
-        (void)_result;
-        int _newline = write(1, (uint8_t*)"\n", 1);
-        (void)_newline;
-    }
-    goto epilogue;
-epilogue:
-        return;
-}
-
-void io_print_str(uint8_t* ION_MAYBE_UNUSED s, int ION_MAYBE_UNUSED len) {
-    if (len < 0) {
-                goto epilogue;
-    }
-    {
-        int _result = write(1, s, len);
-        (void)_result;
-    }
-    goto epilogue;
-epilogue:
-        return;
-}
-
-void io_print_int(int ION_MAYBE_UNUSED n) {
-    uint8_t buf[12] = {0};
-    int len = 0;
-    int negative = 0;
-    int value = n;
-    if (value == 0) {
-        {
-            int _result = write(1, (uint8_t*)"0", 1);
-            (void)_result;
-        }
-                goto epilogue;
-    }
-    if (value < 0) {
-        negative = 1;
-        if (value == (-2147483648)) {
-            {
-                int _result = write(1, (uint8_t*)"-2147483648", 11);
-                (void)_result;
-            }
-                        goto epilogue;
-        }
-        value = (0 - value);
-    }
-    while (value > 0) {
-        int digit = (value % 10);
-        buf[len] = (uint8_t)(48 + digit);
-        len = (len + 1);
-        value = (value / 10);
-    }
-    int i = 0;
-    while (i < (len / 2)) {
-        uint8_t tmp = ({ int __ion_idx_1 = i; (__ion_idx_1 >= 0 && __ion_idx_1 < 12) ? buf[__ion_idx_1] : (ion_panic("Array index out of bounds"), buf[0]); });
-        buf[i] = ({ int __ion_idx_2 = ((len - 1) - i); (__ion_idx_2 >= 0 && __ion_idx_2 < 12) ? buf[__ion_idx_2] : (ion_panic("Array index out of bounds"), buf[0]); });
-        buf[((len - 1) - i)] = tmp;
-        i = (i + 1);
-    }
-    if (negative) {
-        {
-            int _minus = write(1, (uint8_t*)"-", 1);
-            (void)_minus;
-        }
-    }
-    {
-        int _result = write(1, &buf[0], len);
-        (void)_result;
-    }
-    goto epilogue;
-epilogue:
-        return;
-}
-
 ReadResult fs_read_to_string_result(ion_string_t* ION_MAYBE_UNUSED path) {
     ReadResult ret_val = {0};
     {
         int fd = open(path->data, 0);
         if (fd < 0) {
             ret_val = ReadResult_Err_new((-1));
+            if (path) { ion_string_free(path); }
             goto epilogue;
         }
         ion_string_t* text = ion_string_new();
@@ -233,12 +147,14 @@ ReadResult fs_read_to_string_result(ion_string_t* ION_MAYBE_UNUSED path) {
             int _closed = close(fd);
             (void)_closed;
             ret_val = ReadResult_Err_new((-2));
+            (void)_closed;
             if (text) { ion_string_free(text); }
             goto epilogue;
         }
         int _closed = close(fd);
         (void)_closed;
         ret_val = ReadResult_Ok_new(text);
+        (void)_closed;
         goto epilogue;
     }
     goto epilogue;
@@ -258,6 +174,7 @@ void fmt_println_int(int ION_MAYBE_UNUSED n) {
     {
         int _newline = write(1, (uint8_t*)"\n", 1);
         (void)_newline;
+        (void)_newline;
     }
     goto epilogue;
 epilogue:
@@ -273,6 +190,10 @@ ion_string_t* fmt_int_to_string(int ION_MAYBE_UNUSED n) {
     ion_string_t* result = ion_string_new();
     if (value == 0) {
         ret_val = ion_string_from_literal("0", 1);
+        (void)result;
+        (void)negative;
+        (void)len;
+        (void)buf;
         if (result) { ion_string_free(result); }
         goto epilogue;
     }
@@ -280,7 +201,6 @@ ion_string_t* fmt_int_to_string(int ION_MAYBE_UNUSED n) {
         negative = 1;
         if (value == (-2147483648)) {
             ret_val = ion_string_from_literal("-2147483648", 11);
-            if (result) { ion_string_free(result); }
             goto epilogue;
         }
         value = (0 - value);
@@ -296,12 +216,112 @@ ion_string_t* fmt_int_to_string(int ION_MAYBE_UNUSED n) {
     }
     int i = (len - 1);
     while (i >= 0) {
-        ion_string_push_byte(result, (unsigned char)(({ int __ion_idx_3 = i; (__ion_idx_3 >= 0 && __ion_idx_3 < 12) ? buf[__ion_idx_3] : (ion_panic("Array index out of bounds"), buf[0]); })));
+        ion_string_push_byte(result, (unsigned char)(({ int __ion_idx_1 = i; (__ion_idx_1 >= 0 && __ion_idx_1 < 12) ? buf[__ion_idx_1] : (ion_panic("Array index out of bounds"), buf[0]); })));
         i = (i - 1);
     }
     ret_val = result;
     goto epilogue;
 epilogue:
         return ret_val;
+}
+
+void io_print(ion_string_t* ION_MAYBE_UNUSED s) {
+    {
+        int _result = write(1, s->data, (int)s->len);
+        (void)_result;
+        (void)_result;
+    }
+    goto epilogue;
+epilogue:
+        if (s) { ion_string_free(s); }
+        return;
+}
+
+void io_println(ion_string_t* ION_MAYBE_UNUSED s) {
+    {
+        int _result = write(1, s->data, (int)s->len);
+        (void)_result;
+        int _newline = write(1, (uint8_t*)"\n", 1);
+        (void)_newline;
+        (void)_newline;
+        (void)_result;
+    }
+    goto epilogue;
+epilogue:
+        if (s) { ion_string_free(s); }
+        return;
+}
+
+void io_print_str(uint8_t* ION_MAYBE_UNUSED s, int ION_MAYBE_UNUSED len) {
+    if (len < 0) {
+                (void)s;
+        goto epilogue;
+    }
+    {
+        int _result = write(1, s, len);
+        (void)_result;
+        (void)_result;
+    }
+    goto epilogue;
+epilogue:
+        return;
+}
+
+void io_print_int(int ION_MAYBE_UNUSED n) {
+    uint8_t buf[12] = {0};
+    int len = 0;
+    int negative = 0;
+    int value = n;
+    if (value == 0) {
+        {
+            int _result = write(1, (uint8_t*)"0", 1);
+            (void)_result;
+            (void)_result;
+        }
+                (void)negative;
+        (void)len;
+        (void)buf;
+        goto epilogue;
+    }
+    if (value < 0) {
+        negative = 1;
+        if (value == (-2147483648)) {
+            {
+                int _result = write(1, (uint8_t*)"-2147483648", 11);
+                (void)_result;
+                (void)_result;
+            }
+                        goto epilogue;
+        }
+        value = (0 - value);
+    }
+    while (value > 0) {
+        int digit = (value % 10);
+        buf[len] = (uint8_t)(48 + digit);
+        len = (len + 1);
+        value = (value / 10);
+    }
+    int i = 0;
+    while (i < (len / 2)) {
+        uint8_t tmp = ({ int __ion_idx_2 = i; (__ion_idx_2 >= 0 && __ion_idx_2 < 12) ? buf[__ion_idx_2] : (ion_panic("Array index out of bounds"), buf[0]); });
+        buf[i] = ({ int __ion_idx_3 = ((len - 1) - i); (__ion_idx_3 >= 0 && __ion_idx_3 < 12) ? buf[__ion_idx_3] : (ion_panic("Array index out of bounds"), buf[0]); });
+        buf[((len - 1) - i)] = tmp;
+        i = (i + 1);
+    }
+    if (negative) {
+        {
+            int _minus = write(1, (uint8_t*)"-", 1);
+            (void)_minus;
+            (void)_minus;
+        }
+    }
+    {
+        int _result = write(1, &buf[0], len);
+        (void)_result;
+        (void)_result;
+    }
+    goto epilogue;
+epilogue:
+        return;
 }
 

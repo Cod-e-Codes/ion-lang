@@ -27,15 +27,15 @@ typedef struct Vec_int {
     size_t elem_size;
 } Vec_int;
 
-typedef struct tuple_ion_sender_t_ion_receiver_t {
-    ion_sender_t f0;
-    ion_receiver_t f1;
-} tuple_ion_sender_t_ion_receiver_t;
-
 typedef struct tuple_int_int {
     int f0;
     int f1;
 } tuple_int_int;
+
+typedef struct tuple_ion_sender_t_ion_receiver_t {
+    ion_sender_t f0;
+    ion_receiver_t f1;
+} tuple_ion_sender_t_ion_receiver_t;
 
 typedef struct Point {
     int x;
@@ -249,7 +249,6 @@ int for_loop_example(void) {
         goto epilogue;
     }
     ret_val = 0;
-    if (__for_container_2197) { ion_vec_free((ion_vec_t*)(__for_container_2197)); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -383,7 +382,9 @@ int pattern_matching_example(void) {
         }
         case 1: { // Err
             int _c = match_val_5.data.variant_1.code;
+            (void)_c;
             ret_val = 6;
+            (void)_c;
             goto epilogue;
             break;
         }
@@ -403,6 +404,8 @@ int reference_example(void) {
         (void)_ref_y;
         int* _ref_x = &x;
         (void)_ref_x;
+        (void)_ref_x;
+        (void)_ref_y;
     }
     Vec_int* values = ((Vec_int*)(ion_vec_new(sizeof(int))));
     ion_vec_push((ion_vec_t*)(values), &((int){x}), sizeof(int));
@@ -502,8 +505,6 @@ int spawn_channel_example(void) {
         goto epilogue;
     }
     ret_val = 0;
-    if (rx_back_mut.channel) { ion_channel_handle_drop(rx_back_mut.channel); }
-    if (tx.channel) { ion_channel_handle_drop(tx.channel); }
     goto epilogue;
 epilogue:
         return ret_val;
@@ -514,6 +515,7 @@ int fn_literal_example(void) {
     int (*twice)(int) = ion_fn_lit_0;
     if (twice(21) != 42) {
         ret_val = 1;
+        (void)twice;
         goto epilogue;
     }
     ret_val = 0;

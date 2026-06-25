@@ -38,6 +38,7 @@ struct ScopeBinding {
     name: String,
     ty: Type,
     dropped: bool,
+    read: bool,
 }
 
 #[derive(Clone)]
@@ -1043,7 +1044,17 @@ impl Codegen {
                 name: name.to_string(),
                 ty: ty.clone(),
                 dropped: false,
+                read: false,
             });
+        }
+    }
+
+    fn scope_mark_binding_read(&mut self, name: &str) {
+        for frame in self.scope_stack.iter_mut().rev() {
+            if let Some(binding) = frame.bindings.iter_mut().find(|b| b.name == name) {
+                binding.read = true;
+                return;
+            }
         }
     }
 
@@ -1263,6 +1274,11 @@ impl Codegen {
         for frame in frames {
             self.emit_frame_cleanup(&frame);
         }
+        for frame in self.scope_stack.iter_mut() {
+            for binding in frame.bindings.iter_mut() {
+                binding.dropped = true;
+            }
+        }
     }
 
     fn emit_frame_cleanup(&mut self, frame: &ScopeFrame) {
@@ -1271,6 +1287,11 @@ impl Codegen {
             self.write("(void)(");
             self.generate_expr(defer_expr);
             self.writeln(");");
+        }
+        for binding in frame.bindings.iter().rev() {
+            if !binding.dropped && !binding.read {
+                self.emit_silence_unused_binding(&binding.name);
+            }
         }
         for binding in frame.bindings.iter().rev() {
             if !binding.dropped && self.needs_drop(&binding.ty) {
@@ -1372,6 +1393,11 @@ impl Codegen {
             }
         }
 
+        self.scope_begin(&[]);
+        for param in &function.params {
+            self.scope_register_binding(&param.name, &param.ty);
+        }
+
         // Generate function body (blocks)
         for block in &function.blocks {
             self.generate_block(block);
@@ -1393,9 +1419,11 @@ impl Codegen {
             self.writeln("goto epilogue;");
         }
 
-        // Epilogue: return (scope cleanup runs before goto via scope_unwind_all).
+        // Epilogue: return (scope cleanup runs before goto via scope_emit_return_unwind).
         self.writeln("epilogue:");
         self.indent_level += 1;
+
+        self.scope_emit_return_unwind();
 
         if function.return_type.is_some() {
             self.write_indent();
@@ -2266,6 +2294,7 @@ impl Codegen {
                 self.write(&value.to_string());
             }
             IREexpr::Var(name) => {
+                self.scope_mark_binding_read(name);
                 self.write(name);
             }
             IREexpr::AddressOf { inner, mutable: _ } => {
@@ -2450,7 +2479,8 @@ impl Codegen {
                 } else if let IREexpr::StringLit(ref s) = **base {
                     match field.as_str() {
                         "data" => {
-                            // "string".data -> just the string literal
+                            // "string".data -> uint8_t pointer for byte APIs
+                            self.write("(uint8_t*)");
                             self.generate_expr(base);
                         }
                         "len" => {
@@ -2682,8 +2712,12 @@ impl Codegen {
                             }
                             // For &mut int, fall through to generate &var normally
                         }
+                        let call_param_types = self
+                            .function_param_types
+                            .get(&func_name)
+                            .or_else(|| self.extern_functions.get(&func_name));
                         if matches!(arg, IREexpr::StringLit(_))
-                            && let Some(param_types) = self.extern_functions.get(&func_name)
+                            && let Some(param_types) = call_param_types
                             && i < param_types.len()
                             && Self::param_is_byte_ptr(&param_types[i])
                         {
@@ -3510,6 +3544,7 @@ impl Codegen {
                 self.write_indent();
                 self.writeln(&format!("case {}: {{ // {}", variant_idx, variant_name));
                 self.indent_level += 1;
+                self.scope_begin(&[]);
                 if let Some(first_arm) = group_arms.first() {
                     self.generate_match_arm_payload_bindings(
                         first_arm,
@@ -3522,6 +3557,7 @@ impl Codegen {
                 for arm in group_arms {
                     self.generate_match_arm_body(arm, match_result);
                 }
+                self.scope_emit_exit();
                 self.indent_level -= 1;
                 self.write_indent();
                 self.writeln("}");
@@ -3592,6 +3628,11 @@ impl Codegen {
                                         field_name
                                     ));
                                     self.writeln("");
+                                    self.scope_register_binding(name, &concrete_field_ty);
+                                    if Self::should_silence_unused_binding(name, &concrete_field_ty)
+                                    {
+                                        self.emit_silence_unused_binding(name);
+                                    }
                                 }
                                 IRPattern::Wildcard => {
                                     // Wildcard - don't extract, field is ignored
@@ -3641,6 +3682,10 @@ impl Codegen {
                                     i
                                 ));
                                 self.writeln("");
+                                self.scope_register_binding(name, &concrete_payload_ty);
+                                if Self::should_silence_unused_binding(name, &concrete_payload_ty) {
+                                    self.emit_silence_unused_binding(name);
+                                }
                             }
                             IRPattern::Wildcard => {
                                 // Wildcard - don't extract, payload is ignored
@@ -5122,6 +5167,40 @@ fn main() -> int { return 0; }"#;
         assert!(
             c.contains("int (*ret_val)(int) = 0"),
             "expected fn pointer ret_val decl in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn unused_channel_binding_silenced_on_return() {
+        let src = r#"fn main() -> int {
+    let ch: channel<int>;
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("(void)ch;"),
+            "expected unused channel silence in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn unused_binding_silenced_on_return() {
+        let src = r#"fn main() -> int {
+    let x: int = 1;
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("(void)x;"),
+            "expected unused binding silence in:\n{c}"
         );
     }
 
