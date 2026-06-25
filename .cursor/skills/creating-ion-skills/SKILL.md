@@ -93,9 +93,13 @@ disable-model-invocation: true   # Only for manual /slash-command skills
 
 | Skill | Pattern |
 |-------|---------|
-| `ion-lang` | Repo orientation, skill index |
 | `adding-ion-features` | `paths` + stage checklist + anti-patterns |
-| `ion-integration-tests` | `paths: tests/**` + manifest format |
 | `creating-ion-skills` | Meta-skill for authoring |
+| `finding-ion-bugs` | Repo-wide triage workflow + `references/bug-hotspots.md` |
+| `ion-integration-tests` | `paths: tests/**` + manifest format |
+| `ion-lang` | Repo orientation, skill index |
+| `ion-lsp-vscode` | `paths` for LSP + extension; rebuild and vsix steps |
+| `researching-pl-literature` | Paper search workflow + `references/paper-seeds.md` |
+| `writing-ion-code` | Verified `.ion` patterns + `references/verified-patterns.md` |
 
 For generic Cursor skill mechanics (description examples, script layout), read the user-level `create-skill` skill if available.
