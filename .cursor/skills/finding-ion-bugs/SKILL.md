@@ -70,6 +70,7 @@ cargo clippy -- -D warnings
 | Wrong or missing C | `src/cgen/`, `src/ir/mod.rs` | Compare `.c` output; `cgen` rows in `test_expectations.tsv` |
 | Link / runtime crash | `runtime/ion_runtime.c`, generated calls | `gcc` link line from README |
 | Import / multi-file | `src/compiler/mod.rs` | `--mode multi` |
+| `ion-build` / manifest failure | `src/build/` (`manifest.rs`, `driver.rs`, `paths.rs`) | `tests/build_hello/`, `tests/build_bad_main/` |
 | Test harness false pass/fail | `tests/test_runner.sh`, TSV row | Empty `must_match` on `cgen` rows fails harness self-check |
 | LSP wrong, CLI correct | `src/lsp/` | LSP parses buffer + disk imports; formats errors differently than CLI |
 

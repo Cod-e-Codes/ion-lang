@@ -56,7 +56,7 @@ fn main() -> int {
 }
 ```
 
-Import paths like `import "stdlib/io.ion" as io;` resolve via stdlib search paths (`ion.toml`, `ION_STDLIB`, project `stdlib/`). Same-directory and `../` relative paths still work. Use `pub fn` in library modules; call with `alias::name(...)`.
+Import paths like `import "stdlib/io.ion" as io;` resolve via stdlib search paths (`ion.toml` `stdlib_paths`, `ION_STDLIB`, project `stdlib/`, then install-relative `stdlib/` next to the compiler). Same-directory and `../` relative paths still work. Use `pub fn` in library modules; call with `alias::name(...)`.
 
 ## Core syntax (verified)
 

@@ -73,7 +73,7 @@ Adjust path for OS (no `.exe` on Linux/macOS).
 8. **References**, **document symbols**, **signature help**, **semantic tokens**
 9. **`did_change_watched_files`** - re-check open files whose import dependencies changed
 
-Known limitations (ION_SPEC §10.2): built-in methods have signature hover but no go-to-definition target; type names in annotations have no goto (no spans on `Type` nodes).
+Known limitations: built-in methods have signature hover but no go-to-definition target (ION_SPEC §10.2); type names in annotations have no goto (§10.3; no spans on `Type` nodes).
 
 ### CLI vs LSP error text
 

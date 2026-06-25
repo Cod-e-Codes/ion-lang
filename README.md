@@ -29,6 +29,7 @@ Known limitations: [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations)
 | Resource | Contents |
 |----------|----------|
 | [ION_SPEC.md](ION_SPEC.md) | Language semantics, grammar, stdlib contracts |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Build, test, lint, and PR expectations |
 | [tests/README.md](tests/README.md) | Integration test catalog |
 | [examples/](examples/) | Runnable example programs |
 
@@ -65,7 +66,7 @@ Ion has a VS Code / Cursor extension that provides:
 - Completion: prefix-filtered keywords, builtins, and file symbols
 - Go to definition: variables, function calls, and user-defined methods; imported `mod::func` opens the module file
 
-Limitations: built-in methods (`Vec::push`, etc.) do not go to definition. Full list in [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
+Limitations: built-in methods (`Vec::push`, etc.) and type names in annotations do not go to definition. Full list in [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
 
 **Installation:**
 

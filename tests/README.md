@@ -299,11 +299,12 @@ Special cases (not in the manifest):
 ## Environment Variables
 
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
+- `ION_BUILD`: Path to the ion-build binary (default: `../target/release/ion-build`)
 - `CC`: C compiler to use (default: `gcc`)
 - `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 
 Example:
 ```bash
-COMPILER=../target/debug/ion-compiler CC=clang ./test_runner.sh
+COMPILER=../target/debug/ion-compiler ION_BUILD=../target/debug/ion-build CC=clang ./test_runner.sh
 ```
 

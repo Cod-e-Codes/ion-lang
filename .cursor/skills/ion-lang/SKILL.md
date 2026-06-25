@@ -101,7 +101,7 @@ Read these when the task matches:
 - References cannot escape functions, structs, enums, channels, or `spawn` - reject at type-check time.
 - `extern "C"` calls require `unsafe` blocks.
 - Multi-file mode: `--mode multi --output <name> <main.ion>` generates per-module `.c`/`.h`.
-- Stdlib: `import "stdlib/io.ion" as io;` (resolved via `ion.toml` / `ION_STDLIB` / project `stdlib/`). Bare `import "io.ion"` also resolves when `io.ion` is on a search path.
+- Stdlib: `import "stdlib/io.ion" as io;` resolves via manifest `stdlib_paths`, `ION_STDLIB`, `{project_root}/stdlib`, then install-relative `stdlib/` next to the compiler. Bare `import "io.ion"` also resolves when `io.ion` is on a search path.
 - `ion build` (`ion-build` binary): project manifest at `ion.toml`; see ION_SPEC §10.1.
 - Integration tests: add `tests/test_*.ion` plus one row in `tests/test_expectations.tsv` (see `ion-integration-tests` skill). Run `cd tests && ./test_runner.sh` to verify.
 - Fn literals are capture-free only; references to outer bindings are rejected with `ClosureCapture`.

@@ -50,8 +50,15 @@
 - [ ] Includes and forward decls for multi-file headers
 - [ ] Drop/defer/spawn/channel paths emit correct runtime calls
 
+## Project build (`src/build/`)
+
+- [ ] `manifest.rs` updated for new or changed `ion.toml` fields (ION_SPEC §10.1)
+- [ ] `driver.rs` / `c_toolchain.rs` if compile or link steps change
+- [ ] `paths.rs` if stdlib or import discovery changes (shared with LSP via `discover_import_config`)
+- [ ] Smoke tests: `tests/build_hello/`, `tests/build_bad_main/`
+
 ## LSP (`src/lsp/`)
 
 - [ ] Parser errors surface in diagnostics
-- [ ] New keywords in completion list if maintained manually
+- [ ] New keywords in `src/lsp/util.rs` `KEYWORDS` and TextMate grammar
 - [ ] Rebuild: `cargo build --release --bin ion-lsp`
