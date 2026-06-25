@@ -123,7 +123,7 @@ Fn literals lower to static C functions and must not reference outer bindings (o
 
 ## Documentation comments
 
-Ion uses plain `//` line comments only — no `///` or `//!`. Contiguous `//` lines **immediately above** a declaration (no blank line before the declaration) are attached as documentation for IDE hover. A blank line breaks association. File-level overview comments go at the top of the file before imports. Section-divider comment blocks in examples should be separated from declarations by a blank line. See ION_SPEC §12.6.
+Ion uses plain `//` line comments only — no `///` or `//!`. Contiguous `//` lines **immediately above** a declaration (no blank line before the declaration) are attached as documentation for IDE hover; the same rule applies when `pub` precedes the item. A blank line breaks association. File-level overview comments go at the top of the file before imports. Section-divider comment blocks in examples should be separated from declarations by a blank line. See ION_SPEC §12.6.
 
 **Unsafe and FFI**
 

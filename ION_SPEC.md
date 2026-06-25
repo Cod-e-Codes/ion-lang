@@ -1365,6 +1365,7 @@ This emphasizes that concurrency in Ion is about **moving ownership** between th
 Ion has no separate `///` or `//!` documentation syntax. Documentation is ordinary `//` line comments attached to declarations by **adjacency** during parsing (Go/Odin convention):
 
 - Contiguous `//` lines immediately above an item, with **no blank line** between the last comment line and the declaration, document that item.
+- Comments immediately above `pub` attach to the following declaration (`pub` is not part of the doc block).
 - A blank line between the comment block and the declaration breaks association; the comments are not attached.
 - File- or module-level overview: leading `//` lines at the top of a file before the first `import` or declaration attach to `Program`.
 - The same rule applies to struct fields and enum variants inside their bodies.
@@ -1400,6 +1401,13 @@ enum Result<T, E> {
   // Operation succeeded.
   Ok(T);
   Err(E);
+}
+```
+
+```ion
+// Write an owned string to stdout followed by a newline.
+pub fn println(s: String) {
+    // ...
 }
 ```
 

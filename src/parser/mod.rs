@@ -3106,6 +3106,31 @@ fn main() -> int {
     }
 
     #[test]
+    fn doc_attached_to_pub_fn_and_struct() {
+        let program = parse_with_source(
+            r#"// Exported greeting helper.
+pub fn greet() -> int {
+    return 0;
+}
+
+// A public widget type.
+pub struct Widget {
+    value: int;
+}"#,
+        );
+        assert!(program.functions[0].pub_);
+        assert_eq!(
+            program.functions[0].doc.as_deref(),
+            Some("Exported greeting helper.")
+        );
+        assert!(program.structs[0].pub_);
+        assert_eq!(
+            program.structs[0].doc.as_deref(),
+            Some("A public widget type.")
+        );
+    }
+
+    #[test]
     fn blank_line_breaks_doc_attachment() {
         let program = parse_with_source(
             r#"// Orphaned comment.
