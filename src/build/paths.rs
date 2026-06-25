@@ -163,10 +163,10 @@ pub fn portable_source_label(path: &Path) -> String {
         }
     }
 
-    if let Some(repo) = find_repo_root(&absolute) {
-        if let Ok(rel) = absolute.strip_prefix(&repo) {
-            return normalize_path_display(rel);
-        }
+    if let Some(repo) = find_repo_root(&absolute)
+        && let Ok(rel) = absolute.strip_prefix(&repo)
+    {
+        return normalize_path_display(rel);
     }
 
     absolute
