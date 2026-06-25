@@ -21,7 +21,6 @@ int main(void) {
     {
         int _result = write(1, (uint8_t*)"Hello, World!\n", 14);
         (void)_result;
-        (void)_result;
     }
     ret_val = 0;
     goto epilogue;

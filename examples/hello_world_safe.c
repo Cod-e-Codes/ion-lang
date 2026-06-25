@@ -33,11 +33,10 @@ void io_print(ion_string_t* ION_MAYBE_UNUSED s) {
     {
         int _result = write(1, s->data, (int)s->len);
         (void)_result;
-        (void)_result;
     }
+    if (s) { ion_string_free(s); }
     goto epilogue;
 epilogue:
-        if (s) { ion_string_free(s); }
         return;
 }
 
@@ -47,23 +46,19 @@ void io_println(ion_string_t* ION_MAYBE_UNUSED s) {
         (void)_result;
         int _newline = write(1, (uint8_t*)"\n", 1);
         (void)_newline;
-        (void)_newline;
-        (void)_result;
     }
+    if (s) { ion_string_free(s); }
     goto epilogue;
 epilogue:
-        if (s) { ion_string_free(s); }
         return;
 }
 
 void io_print_str(uint8_t* ION_MAYBE_UNUSED s, int ION_MAYBE_UNUSED len) {
     if (len < 0) {
-                (void)s;
-        goto epilogue;
+                goto epilogue;
     }
     {
         int _result = write(1, s, len);
-        (void)_result;
         (void)_result;
     }
     goto epilogue;
@@ -80,7 +75,6 @@ void io_print_int(int ION_MAYBE_UNUSED n) {
         {
             int _result = write(1, (uint8_t*)"0", 1);
             (void)_result;
-            (void)_result;
         }
                 (void)negative;
         (void)len;
@@ -93,9 +87,11 @@ void io_print_int(int ION_MAYBE_UNUSED n) {
             {
                 int _result = write(1, (uint8_t*)"-2147483648", 11);
                 (void)_result;
-                (void)_result;
             }
-                        goto epilogue;
+                        (void)negative;
+            (void)len;
+            (void)buf;
+            goto epilogue;
         }
         value = (0 - value);
     }
@@ -116,12 +112,10 @@ void io_print_int(int ION_MAYBE_UNUSED n) {
         {
             int _minus = write(1, (uint8_t*)"-", 1);
             (void)_minus;
-            (void)_minus;
         }
     }
     {
         int _result = write(1, &buf[0], len);
-        (void)_result;
         (void)_result;
     }
     goto epilogue;

@@ -1274,11 +1274,6 @@ impl Codegen {
         for frame in frames {
             self.emit_frame_cleanup(&frame);
         }
-        for frame in self.scope_stack.iter_mut() {
-            for binding in frame.bindings.iter_mut() {
-                binding.dropped = true;
-            }
-        }
     }
 
     fn emit_frame_cleanup(&mut self, frame: &ScopeFrame) {
@@ -1289,7 +1284,10 @@ impl Codegen {
             self.writeln(");");
         }
         for binding in frame.bindings.iter().rev() {
-            if !binding.dropped && !binding.read {
+            if !binding.dropped
+                && !binding.read
+                && !Self::should_silence_unused_binding(&binding.name, &binding.ty)
+            {
                 self.emit_silence_unused_binding(&binding.name);
             }
         }
@@ -1415,15 +1413,14 @@ impl Codegen {
         // If control reaches the end without an explicit return, fall through to
         // epilogue (default-initialized ret_val for value-returning functions).
         if !last_stmt_is_return {
+            self.scope_emit_return_unwind();
             self.write_indent();
             self.writeln("goto epilogue;");
         }
 
-        // Epilogue: return (scope cleanup runs before goto via scope_emit_return_unwind).
+        // Epilogue: return (scope cleanup already ran on `return` or fallthrough above).
         self.writeln("epilogue:");
         self.indent_level += 1;
-
-        self.scope_emit_return_unwind();
 
         if function.return_type.is_some() {
             self.write_indent();
@@ -2669,6 +2666,9 @@ impl Codegen {
                     self.generate_builtin_call(resolved_callee.as_str(), args, builtin_return_type)
                 {
                     self.write(&code);
+                    for arg in args {
+                        self.mark_moves_in_expr(arg);
+                    }
                 } else {
                     // Regular function call.
                     let func_name = self.resolve_c_function_name(&resolved_callee);
@@ -2726,6 +2726,9 @@ impl Codegen {
                         self.generate_expr(arg);
                     }
                     self.write(")");
+                    for arg in args {
+                        self.mark_moves_in_expr(arg);
+                    }
                 }
             }
             IREexpr::StringLit(value) => {
@@ -3479,6 +3482,7 @@ impl Codegen {
             ));
             self.generate_expr(expr);
             self.writeln("));");
+            self.mark_moves_in_expr(expr);
         } else {
             self.write(&format!(
                 "{} {} = ",
@@ -3486,6 +3490,7 @@ impl Codegen {
             ));
             self.generate_expr(expr);
             self.writeln(";");
+            self.mark_moves_in_expr(expr);
         }
         self.write_indent();
         self.write(&format!("switch ({}.tag) {{", match_var_name));
@@ -5201,6 +5206,59 @@ fn main() -> int { return 0; }"#;
         assert!(
             c.contains("(void)x;"),
             "expected unused binding silence in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn outer_return_drops_after_inner_if_return() {
+        let src = r#"fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let mut rx_mut: Receiver<int> = rx;
+    let result: int = recv(&mut rx_mut);
+    if result == 42 {
+        return 0;
+    }
+    return 1;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let outer = c
+            .split("ret_val = 1;")
+            .nth(1)
+            .and_then(|tail| tail.split("goto epilogue;").next())
+            .unwrap_or("");
+        assert!(
+            outer.contains("ion_channel_handle_drop(tx.channel)"),
+            "expected outer return to drop sender in:\n{c}"
+        );
+        assert!(
+            outer.contains("ion_channel_handle_drop(rx_mut.channel)"),
+            "expected outer return to drop receiver in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn underscore_binding_silenced_once() {
+        let src = r#"extern "C" {
+    fn write(fd: int, buf: *u8, count: int) -> int;
+}
+fn log_line() {
+    unsafe {
+        let _result: int = write(1, "x", 1);
+    }
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert_eq!(
+            c.matches("(void)_result;").count(),
+            1,
+            "expected single silence for _result in:\n{c}"
         );
     }
 

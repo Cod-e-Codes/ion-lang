@@ -65,6 +65,8 @@ int main(void) {
         goto epilogue;
     }
     ret_val = 0;
+    if (done_rx_mut.channel) { ion_channel_handle_drop(done_rx_mut.channel); }
+    if (job_tx.channel) { ion_channel_handle_drop(job_tx.channel); }
     goto epilogue;
 epilogue:
         return ret_val;
