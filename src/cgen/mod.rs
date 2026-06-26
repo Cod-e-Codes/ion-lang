@@ -3790,6 +3790,13 @@ impl Codegen {
         self.emit_match_arm_result_from_stmts(&body.statements, 0, result_var, result_type);
     }
 
+    /// Lower rvalue-match arm statements into assignments / control flow inside a `switch`.
+    ///
+    /// Statement-level `return` goes through `generate_stmt` and `scope_emit_return_unwind`
+    /// before `goto epilogue`. This path emits a bare C `return` for diverging arms and does
+    /// not run owned-value unwind. Type-check coverage only: `test_match_arm_divergent_rvalue.ion`.
+    /// Open question: if a diverging arm can leave live owned bindings (channel, String, etc.)
+    /// in scope, this may leak; not confirmed and not the statement-return unwind bug.
     fn emit_match_arm_result_from_stmts(
         &mut self,
         stmts: &[IRStmt],
@@ -5237,6 +5244,49 @@ fn main() -> int { return 0; }"#;
         assert!(
             outer.contains("ion_channel_handle_drop(rx_mut.channel)"),
             "expected outer return to drop receiver in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn outer_return_drops_after_inner_match_arm_return() {
+        let src = r#"enum Opt {
+    Some(int);
+    None;
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let mut rx_mut: Receiver<int> = rx;
+    let x: Opt = Opt::Some(1);
+    match x {
+        Opt::Some(v) => {
+            if v == 99 {
+                return 0;
+            }
+        },
+        Opt::None => {
+            let _pad: int = 0;
+        },
+    };
+    return 1;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let outer = c
+            .split("ret_val = 1;")
+            .nth(1)
+            .and_then(|tail| tail.split("goto epilogue;").next())
+            .unwrap_or("");
+        assert!(
+            outer.contains("ion_channel_handle_drop(tx.channel)"),
+            "expected outer return after match arm to drop sender in:\n{c}"
+        );
+        assert!(
+            outer.contains("ion_channel_handle_drop(rx_mut.channel)"),
+            "expected outer return after match arm to drop receiver in:\n{c}"
         );
     }
 
