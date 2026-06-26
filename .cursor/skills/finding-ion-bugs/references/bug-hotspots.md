@@ -13,6 +13,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 ## Codegen (`src/cgen/`)
 
 - Drop order and `ion_drop_*` for moved fields
+- **Match scrutinee move-out**: pattern payload bindings null `match_val_N.data.variant_*` fields when ownership transfers (`statement_match_payload_move_neutralizes_scrutinee`); whole-enum binding arms clear active variant payloads via `emit_match_scrutinee_whole_enum_moved_out`
 - **Return unwind**: all function exits use `emit_function_return` (`ret_val`, `scope_emit_return_unwind`, `goto epilogue`), including diverging `return` inside rvalue `match` arms (`rvalue_match_divergent_return_unwinds_owned`). Value-producing rvalue arms still assign and `break` from the `switch`.
 - `Box`, `Vec`, `String` layout vs `runtime/ion_runtime.h`
 - Single-file merge (`merge_modules`) vs `--mode multi` divergences

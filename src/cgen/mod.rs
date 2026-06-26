@@ -2979,6 +2979,101 @@ impl Codegen {
         }
     }
 
+    /// C initializer that clears a moved-out enum variant payload field so a later scrutinee drop
+    /// cannot double-free the same owned value.
+    fn zero_value_for_scrutinee_payload(&self, ty: &Type) -> String {
+        let resolved = resolve_type_alias(ty, &self.type_aliases);
+        match resolved {
+            Type::String | Type::Box { .. } | Type::Vec { .. } => "NULL".to_string(),
+            Type::Struct(_) | Type::Enum(_) | Type::Sender { .. } | Type::Receiver { .. } => {
+                format!("({}){{0}}", self.type_to_c(&resolved))
+            }
+            _ => "0".to_string(),
+        }
+    }
+
+    fn emit_match_scrutinee_payload_moved_out(
+        &mut self,
+        match_var_name: &str,
+        variant_idx: usize,
+        field_name: &str,
+        ty: &Type,
+    ) {
+        if !self.needs_drop(ty) {
+            return;
+        }
+        self.write_indent();
+        self.writeln(&format!(
+            "{}.data.variant_{}.{} = {};",
+            match_var_name,
+            variant_idx,
+            field_name,
+            self.zero_value_for_scrutinee_payload(ty)
+        ));
+    }
+
+    fn emit_match_scrutinee_whole_enum_moved_out(
+        &mut self,
+        match_var_name: &str,
+        enum_decl: &EnumDecl,
+        type_params: &[Type],
+    ) {
+        let substitutions: std::collections::HashMap<String, &Type> = enum_decl
+            .generics
+            .iter()
+            .zip(type_params.iter())
+            .map(|(name, ty)| (name.clone(), ty))
+            .collect();
+
+        self.write_indent();
+        self.writeln(&format!("switch ({}.tag) {{", match_var_name));
+        self.indent_level += 1;
+        for (variant_idx, variant) in enum_decl.variants.iter().enumerate() {
+            let has_payloads = !variant.payload_types.is_empty() || variant.named_fields.is_some();
+            if !has_payloads {
+                continue;
+            }
+            self.write_indent();
+            self.writeln(&format!("case {variant_idx}:"));
+            self.indent_level += 1;
+            if let Some(named_fields) = &variant.named_fields {
+                for (field_name, field_ty) in named_fields {
+                    let concrete_ty = if !substitutions.is_empty() {
+                        substitute_type_params(field_ty, &substitutions)
+                    } else {
+                        field_ty.clone()
+                    };
+                    self.emit_match_scrutinee_payload_moved_out(
+                        match_var_name,
+                        variant_idx,
+                        field_name,
+                        &concrete_ty,
+                    );
+                }
+            } else {
+                for (arg_idx, payload_ty) in variant.payload_types.iter().enumerate() {
+                    let concrete_ty = if !substitutions.is_empty() {
+                        substitute_type_params(payload_ty, &substitutions)
+                    } else {
+                        payload_ty.clone()
+                    };
+                    self.emit_match_scrutinee_payload_moved_out(
+                        match_var_name,
+                        variant_idx,
+                        &format!("arg{arg_idx}"),
+                        &concrete_ty,
+                    );
+                }
+            }
+            self.write_indent();
+            self.writeln("break;");
+            self.indent_level -= 1;
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.writeln("}");
+    }
+
     fn op_to_c(&self, op: BinOp) -> String {
         match op {
             BinOp::Add => "+".to_string(),
@@ -3632,6 +3727,12 @@ impl Codegen {
                                         field_name
                                     ));
                                     self.writeln("");
+                                    self.emit_match_scrutinee_payload_moved_out(
+                                        match_var_name,
+                                        variant_idx,
+                                        field_name,
+                                        &concrete_field_ty,
+                                    );
                                     self.scope_register_binding(name, &concrete_field_ty);
                                     if Self::should_silence_unused_binding(name, &concrete_field_ty)
                                     {
@@ -3654,6 +3755,12 @@ impl Codegen {
                                         field_name
                                     ));
                                     self.writeln("");
+                                    self.emit_match_scrutinee_payload_moved_out(
+                                        match_var_name,
+                                        variant_idx,
+                                        field_name,
+                                        &concrete_field_ty,
+                                    );
                                 }
                             }
                         }
@@ -3676,16 +3783,23 @@ impl Codegen {
                         match sub_pattern {
                             IRPattern::Binding { name } => {
                                 // Extract payload into binding variable
+                                let payload_field = format!("arg{i}");
                                 self.write_indent();
                                 self.write(&format!(
-                                    "{} {} = {}.data.variant_{}.arg{};",
+                                    "{} {} = {}.data.variant_{}.{};",
                                     self.type_to_c(&concrete_payload_ty),
                                     name,
                                     match_var_name,
                                     variant_idx,
-                                    i
+                                    payload_field
                                 ));
                                 self.writeln("");
+                                self.emit_match_scrutinee_payload_moved_out(
+                                    match_var_name,
+                                    variant_idx,
+                                    &payload_field,
+                                    &concrete_payload_ty,
+                                );
                                 self.scope_register_binding(name, &concrete_payload_ty);
                                 if Self::should_silence_unused_binding(name, &concrete_payload_ty) {
                                     self.emit_silence_unused_binding(name);
@@ -3697,17 +3811,24 @@ impl Codegen {
                             IRPattern::Variant { .. } => {
                                 // Nested variant pattern - for now, extract to temp and match recursively
                                 // This is a simplified version - full implementation would recurse
+                                let payload_field = format!("arg{i}");
                                 let temp_name = format!("_payload_{}", i);
                                 self.write_indent();
                                 self.write(&format!(
-                                    "{} {} = {}.data.variant_{}.arg{};",
+                                    "{} {} = {}.data.variant_{}.{};",
                                     self.type_to_c(&concrete_payload_ty),
                                     temp_name,
                                     match_var_name,
                                     variant_idx,
-                                    i
+                                    payload_field
                                 ));
                                 self.writeln("");
+                                self.emit_match_scrutinee_payload_moved_out(
+                                    match_var_name,
+                                    variant_idx,
+                                    &payload_field,
+                                    &concrete_payload_ty,
+                                );
                             }
                         }
                     } else {
@@ -3725,7 +3846,7 @@ impl Codegen {
         enum_type: &str,
         _enum_decl: Option<&EnumDecl>,
         match_var_name: &str,
-        _type_params: &[Type],
+        type_params: &[Type],
         _grouped: bool,
         match_result: Option<(&str, &Type)>,
     ) {
@@ -3743,6 +3864,13 @@ impl Codegen {
                 self.indent_level += 1;
                 self.write_indent();
                 self.writeln(&format!("{} {} = {};", enum_type, name, match_var_name));
+                if let Some(enum_decl) = _enum_decl {
+                    self.emit_match_scrutinee_whole_enum_moved_out(
+                        match_var_name,
+                        enum_decl,
+                        type_params,
+                    );
+                }
                 self.generate_match_arm_body(arm, match_result);
                 self.indent_level -= 1;
             }
@@ -5275,6 +5403,55 @@ fn main() -> int {
         assert!(
             outer.contains("ion_channel_handle_drop(rx_mut.channel)"),
             "expected outer return after match arm to drop receiver in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn statement_match_payload_move_neutralizes_scrutinee() {
+        let src = r#"enum ReadResult {
+    Ok(String);
+    Err(int);
+}
+
+fn read() -> ReadResult {
+    return ReadResult::Ok("hello ion\n");
+}
+
+fn main() -> int {
+    match read() {
+        ReadResult::Ok(raw) => {
+            let content: String = raw;
+            if content != "hello ion\n" {
+                return 1;
+            }
+            return 80;
+        },
+        ReadResult::Err(_) => {
+            return 2;
+        },
+    };
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let ok_arm = c
+            .split("case 0:")
+            .nth(1)
+            .and_then(|tail| tail.split("case 1:").next())
+            .unwrap_or("");
+        assert!(
+            ok_arm.contains("match_val_0.data.variant_0.arg0 = NULL"),
+            "expected moved-out scrutinee payload to be nulled in:\n{c}"
+        );
+        assert!(
+            ok_arm.contains("if (content) { ion_string_free(content); }"),
+            "expected binding drop to free content in:\n{c}"
+        );
+        assert!(
+            !ok_arm.contains("ion_string_free(match_val_0"),
+            "expected no enum drop on scrutinee string payload in:\n{c}"
         );
     }
 
