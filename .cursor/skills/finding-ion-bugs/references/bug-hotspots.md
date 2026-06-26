@@ -13,7 +13,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 ## Codegen (`src/cgen/`)
 
 - Drop order and `ion_drop_*` for moved fields
-- **Return unwind**: statement `return` uses `scope_emit_return_unwind` in `generate_stmt` (`if`/`while`/`loop`/statement `match`/`unsafe`). Rvalue `match` diverging arms use `emit_match_arm_result_from_stmts`, which emits bare C `return` without unwind; tc only (`test_match_arm_divergent_rvalue.ion`). Open: owned bindings live at a diverging rvalue arm may leak; unconfirmed.
+- **Return unwind**: statement `return` uses `scope_emit_return_unwind` in `generate_stmt` (`if`/`while`/`loop`/statement `match`/`unsafe`). Rvalue `match` diverging arms use `emit_match_arm_result_from_stmts`, which emits bare C `return` without unwind; confirmed by `rvalue_match_divergent_return_omits_owned_unwind` (tc rejects the shape in `test_match_arm_divergent_rvalue.ion`).
 - `Box`, `Vec`, `String` layout vs `runtime/ion_runtime.h`
 - Single-file merge (`merge_modules`) vs `--mode multi` divergences
 - `extern "C"` calls only inside `unsafe` blocks in source; cgen must not strip guards

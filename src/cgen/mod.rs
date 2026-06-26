@@ -3795,8 +3795,10 @@ impl Codegen {
     /// Statement-level `return` goes through `generate_stmt` and `scope_emit_return_unwind`
     /// before `goto epilogue`. This path emits a bare C `return` for diverging arms and does
     /// not run owned-value unwind. Type-check coverage only: `test_match_arm_divergent_rvalue.ion`.
-    /// Open question: if a diverging arm can leave live owned bindings (channel, String, etc.)
-    /// in scope, this may leak; not confirmed and not the statement-return unwind bug.
+    /// Open question resolved for this lowering path: diverging arms emit bare C `return`
+    /// without owned-value unwind (`rvalue_match_divergent_return_omits_owned_unwind`).
+    /// Ion tc rejects mixed diverging/value rvalue arms for user programs
+    /// (`test_match_arm_divergent_rvalue.ion`).
     fn emit_match_arm_result_from_stmts(
         &mut self,
         stmts: &[IRStmt],
@@ -5287,6 +5289,68 @@ fn main() -> int {
         assert!(
             outer.contains("ion_channel_handle_drop(rx_mut.channel)"),
             "expected outer return after match arm to drop receiver in:\n{c}"
+        );
+    }
+
+    /// Documents a known cgen gap: `emit_match_arm_result_from_stmts` emits bare `return`
+    /// without `scope_emit_return_unwind`. Ion tc rejects this shape for user programs
+    /// (`test_match_arm_divergent_rvalue.ion`); this test lowers the IR anyway.
+    #[test]
+    fn rvalue_match_divergent_return_omits_owned_unwind() {
+        let src = r#"enum E {
+    A(int);
+    B(int);
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let mut rx_mut: Receiver<int> = rx;
+    let s: String = "hi";
+    let e: E = E::A(0);
+    let n: int = match e {
+        E::A(_) => {
+            return 1;
+        },
+        E::B(v) => {
+            v;
+        },
+    };
+    return n;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let divergent_arm = c
+            .split("case 0:")
+            .nth(1)
+            .and_then(|tail| tail.split("break;").next())
+            .unwrap_or("");
+        assert!(
+            divergent_arm.contains("return 1;"),
+            "expected bare C return in divergent rvalue arm in:\n{c}"
+        );
+        assert!(
+            !divergent_arm.contains("ion_channel_handle_drop"),
+            "rvalue divergent arm omits channel unwind (known gap) in:\n{c}"
+        );
+        assert!(
+            !divergent_arm.contains("ion_string_free"),
+            "rvalue divergent arm omits String drop (known gap) in:\n{c}"
+        );
+        let after_match_return = c
+            .split("ret_val = n;")
+            .nth(1)
+            .and_then(|tail| tail.split("goto epilogue;").next())
+            .unwrap_or("");
+        assert!(
+            after_match_return.contains("ion_channel_handle_drop(tx.channel)"),
+            "statement return after rvalue match should still unwind in:\n{c}"
+        );
+        assert!(
+            after_match_return.contains("ion_string_free(s)"),
+            "statement return after rvalue match should still drop String in:\n{c}"
         );
     }
 
