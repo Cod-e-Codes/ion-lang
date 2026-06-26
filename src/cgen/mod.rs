@@ -1298,6 +1298,90 @@ impl Codegen {
         }
     }
 
+    /// Assign `ret_val` (when needed), run scope unwind, and jump to the function epilogue.
+    fn emit_function_return(&mut self, ret: &crate::ir::IRReturn) {
+        self.write_indent();
+        if let Some(ref value) = ret.value {
+            let is_array_return = if let Some(ref ret_ty) = self.current_return_type {
+                matches!(ret_ty, Type::Array { .. })
+            } else {
+                false
+            };
+
+            if is_array_return {
+                if let Some(Type::Array { inner, size }) = self.current_return_type.as_ref() {
+                    let base_type = self.type_to_c(inner);
+                    self.writeln(&format!("static {} _ret_array[{}] = ", base_type, size));
+                    self.write_indent();
+                    self.write("    ");
+                    self.generate_expr(value);
+                    self.writeln(";");
+                    self.write_indent();
+                    self.writeln("ret_val = _ret_array;");
+                }
+            } else {
+                let return_ty = self.current_return_type.clone();
+                if let IREexpr::Match {
+                    expr: match_expr,
+                    enum_type,
+                    arms,
+                } = value
+                {
+                    if let Some(ref ty) = return_ty {
+                        self.generate_match_block(
+                            match_expr,
+                            enum_type,
+                            arms,
+                            Some(("ret_val", ty)),
+                        );
+                    } else {
+                        self.generate_match_block(match_expr, enum_type, arms, None);
+                    }
+                } else {
+                    self.write("ret_val = ");
+
+                    let mut needs_memcpy = false;
+                    let mut array_field_name = String::new();
+                    let mut array_var_name = String::new();
+
+                    if let IREexpr::StructLit { type_name, fields } = value
+                        && let Some(struct_decl) = self.struct_map.get(type_name)
+                    {
+                        for field in fields.iter() {
+                            if let IREexpr::Var(ref var_name) = field.value
+                                && let Some(field_decl) =
+                                    struct_decl.fields.iter().find(|f| f.name == field.name)
+                                && let Type::Array { .. } = field_decl.ty
+                            {
+                                needs_memcpy = true;
+                                array_field_name = field.name.clone();
+                                array_var_name = var_name.clone();
+                                break;
+                            }
+                        }
+                    }
+
+                    self.generate_expr_with_type(value, return_ty.as_ref());
+                    self.writeln(";");
+
+                    if needs_memcpy {
+                        self.write_indent();
+                        self.writeln(&format!(
+                            "memcpy(&ret_val.{}, &{}, sizeof(ret_val.{}));",
+                            array_field_name, array_var_name, array_field_name
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(value) = &ret.value {
+            self.mark_moves_in_expr(value);
+        }
+        self.scope_emit_return_unwind();
+        self.write_indent();
+        self.writeln(&format!("goto {};", self.epilogue_label));
+    }
+
     fn format_ir_param_list_c(&self, params: &[IRParam]) -> String {
         if params.is_empty() {
             return "void".to_string();
@@ -2019,92 +2103,7 @@ impl Codegen {
                 }
             }
             IRStmt::Return(ret) => {
-                self.write_indent();
-                if let Some(ref value) = ret.value {
-                    // Special handling for array returns: C doesn't allow returning arrays directly
-                    // If return type is an array (converted to pointer), we need to use static storage
-                    let is_array_return = if let Some(ref ret_ty) = self.current_return_type {
-                        matches!(ret_ty, Type::Array { .. })
-                    } else {
-                        false
-                    };
-
-                    if is_array_return {
-                        // For array returns, create a static array and return its address
-                        if let Some(Type::Array { inner, size }) = self.current_return_type.as_ref()
-                        {
-                            let base_type = self.type_to_c(inner);
-                            self.writeln(&format!("static {} _ret_array[{}] = ", base_type, size));
-                            self.write_indent();
-                            self.write("    ");
-                            self.generate_expr(value);
-                            self.writeln(";");
-                            self.write_indent();
-                            self.writeln("ret_val = _ret_array;");
-                        }
-                    } else {
-                        let return_ty = self.current_return_type.clone();
-                        if let IREexpr::Match {
-                            expr: match_expr,
-                            enum_type,
-                            arms,
-                        } = value
-                        {
-                            if let Some(ref ty) = return_ty {
-                                self.generate_match_block(
-                                    match_expr,
-                                    enum_type,
-                                    arms,
-                                    Some(("ret_val", ty)),
-                                );
-                            } else {
-                                self.generate_match_block(match_expr, enum_type, arms, None);
-                            }
-                        } else {
-                            // Assign to synthetic return variable and jump to epilogue.
-                            self.write("ret_val = ");
-
-                            // Check if this is a struct literal with array field that needs memcpy
-                            let mut needs_memcpy = false;
-                            let mut array_field_name = String::new();
-                            let mut array_var_name = String::new();
-
-                            if let IREexpr::StructLit { type_name, fields } = value
-                                && let Some(struct_decl) = self.struct_map.get(type_name)
-                            {
-                                for field in fields.iter() {
-                                    if let IREexpr::Var(ref var_name) = field.value
-                                        && let Some(field_decl) =
-                                            struct_decl.fields.iter().find(|f| f.name == field.name)
-                                        && let Type::Array { .. } = field_decl.ty
-                                    {
-                                        needs_memcpy = true;
-                                        array_field_name = field.name.clone();
-                                        array_var_name = var_name.clone();
-                                        break;
-                                    }
-                                }
-                            }
-
-                            self.generate_expr_with_type(value, return_ty.as_ref());
-                            self.writeln(";");
-
-                            if needs_memcpy {
-                                self.write_indent();
-                                self.writeln(&format!(
-                                    "memcpy(&ret_val.{}, &{}, sizeof(ret_val.{}));",
-                                    array_field_name, array_var_name, array_field_name
-                                ));
-                            }
-                        }
-                    }
-                }
-                if let Some(value) = &ret.value {
-                    self.mark_moves_in_expr(value);
-                }
-                self.scope_emit_return_unwind();
-                self.write_indent();
-                self.writeln(&format!("goto {};", self.epilogue_label));
+                self.emit_function_return(ret);
             }
             IRStmt::Break => {
                 self.write_indent();
@@ -3791,14 +3790,7 @@ impl Codegen {
     }
 
     /// Lower rvalue-match arm statements into assignments / control flow inside a `switch`.
-    ///
-    /// Statement-level `return` goes through `generate_stmt` and `scope_emit_return_unwind`
-    /// before `goto epilogue`. This path emits a bare C `return` for diverging arms and does
-    /// not run owned-value unwind. Type-check coverage only: `test_match_arm_divergent_rvalue.ion`.
-    /// Open question resolved for this lowering path: diverging arms emit bare C `return`
-    /// without owned-value unwind (`rvalue_match_divergent_return_omits_owned_unwind`).
-    /// Ion tc rejects mixed diverging/value rvalue arms for user programs
-    /// (`test_match_arm_divergent_rvalue.ion`).
+    /// Function exits (`return`) use `emit_function_return` like every other return site.
     fn emit_match_arm_result_from_stmts(
         &mut self,
         stmts: &[IRStmt],
@@ -3813,13 +3805,7 @@ impl Codegen {
         let is_last = idx + 1 == stmts.len();
         match &stmts[idx] {
             IRStmt::Return(ret) => {
-                self.write_indent();
-                self.write("return");
-                if let Some(ref value) = ret.value {
-                    self.write(" ");
-                    self.generate_expr_with_type(value, Some(result_type));
-                }
-                self.writeln(";");
+                self.emit_function_return(ret);
             }
             IRStmt::Break => {
                 self.write_indent();
@@ -5292,11 +5278,8 @@ fn main() -> int {
         );
     }
 
-    /// Documents a known cgen gap: `emit_match_arm_result_from_stmts` emits bare `return`
-    /// without `scope_emit_return_unwind`. Ion tc rejects this shape for user programs
-    /// (`test_match_arm_divergent_rvalue.ion`); this test lowers the IR anyway.
     #[test]
-    fn rvalue_match_divergent_return_omits_owned_unwind() {
+    fn rvalue_match_divergent_return_unwinds_owned() {
         let src = r#"enum E {
     A(int);
     B(int);
@@ -5328,29 +5311,20 @@ fn main() -> int {
             .and_then(|tail| tail.split("break;").next())
             .unwrap_or("");
         assert!(
-            divergent_arm.contains("return 1;"),
-            "expected bare C return in divergent rvalue arm in:\n{c}"
+            divergent_arm.contains("ret_val = 1;"),
+            "expected function return lowering in divergent rvalue arm in:\n{c}"
         );
         assert!(
-            !divergent_arm.contains("ion_channel_handle_drop"),
-            "rvalue divergent arm omits channel unwind (known gap) in:\n{c}"
+            !divergent_arm.contains("return 1;"),
+            "expected goto epilogue, not bare C return, in:\n{c}"
         );
         assert!(
-            !divergent_arm.contains("ion_string_free"),
-            "rvalue divergent arm omits String drop (known gap) in:\n{c}"
-        );
-        let after_match_return = c
-            .split("ret_val = n;")
-            .nth(1)
-            .and_then(|tail| tail.split("goto epilogue;").next())
-            .unwrap_or("");
-        assert!(
-            after_match_return.contains("ion_channel_handle_drop(tx.channel)"),
-            "statement return after rvalue match should still unwind in:\n{c}"
+            divergent_arm.contains("ion_channel_handle_drop(tx.channel)"),
+            "expected channel unwind in divergent rvalue arm in:\n{c}"
         );
         assert!(
-            after_match_return.contains("ion_string_free(s)"),
-            "statement return after rvalue match should still drop String in:\n{c}"
+            divergent_arm.contains("ion_string_free(s)"),
+            "expected String drop in divergent rvalue arm in:\n{c}"
         );
     }
 
