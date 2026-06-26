@@ -254,6 +254,36 @@ fn pattern_to_ir(pattern: &Pattern) -> IRPattern {
     }
 }
 
+fn enum_name_from_type(ty: &Type) -> Option<String> {
+    match ty {
+        // Parser stores user type names as Struct until tc; enums share the same name.
+        Type::Enum(name) | Type::Struct(name) => Some(name.clone()),
+        Type::Generic { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+fn infer_match_enum_name(expr: &Expr, ctx: &LoweringContext) -> Option<String> {
+    if let Expr::EnumLit(lit) = expr {
+        return Some(lit.enum_name.clone());
+    }
+    if let Some(ty) = ctx.resolve_expr_type(expr)
+        && let Some(name) = enum_name_from_type(&ty)
+    {
+        return Some(name);
+    }
+    if let Expr::Call(call) = expr
+        && let Some(ret) = ctx
+            .function_returns
+            .get(&call.callee)
+            .and_then(|r| r.clone())
+        && let Some(name) = enum_name_from_type(&ret)
+    {
+        return Some(name);
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 pub enum IRPattern {
     Variant {
@@ -893,6 +923,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     Pattern::Variant { enum_name, .. } => Some(enum_name.clone()),
                     _ => None,
                 })
+                .or_else(|| infer_match_enum_name(&match_expr.expr, ctx))
                 .unwrap_or_else(|| "Unknown".to_string());
 
             IREexpr::Match {

@@ -5456,6 +5456,53 @@ fn main() -> int {
     }
 
     #[test]
+    fn whole_enum_binding_neutralizes_scrutinee_payloads() {
+        let src = r#"enum ReadResult {
+    Ok(String);
+    Err(int);
+}
+
+fn read() -> ReadResult {
+    return ReadResult::Ok("hello ion\n");
+}
+
+fn main() -> int {
+    match read() {
+        r => {
+            return 80;
+        },
+    };
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let binding_arm = c
+            .split("default: // binding r")
+            .nth(1)
+            .and_then(|tail| tail.split("goto epilogue;").next())
+            .unwrap_or("");
+        assert!(
+            binding_arm.contains("ReadResult r = match_val_0;"),
+            "expected whole-enum binding copy in:\n{c}"
+        );
+        assert!(
+            binding_arm.contains("switch (match_val_0.tag)"),
+            "expected scrutinee tag switch for whole-enum move-out in:\n{c}"
+        );
+        assert!(
+            binding_arm.contains("case 0:")
+                && binding_arm.contains("match_val_0.data.variant_0.arg0 = NULL"),
+            "expected Ok string payload nulled in scrutinee switch in:\n{c}"
+        );
+        assert!(
+            !binding_arm.contains("ion_string_free(match_val_0"),
+            "expected no direct scrutinee string drop in:\n{c}"
+        );
+    }
+
+    #[test]
     fn rvalue_match_divergent_return_unwinds_owned() {
         let src = r#"enum E {
     A(int);
