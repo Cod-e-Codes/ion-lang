@@ -226,18 +226,20 @@ impl TypeChecker {
                 });
             }
 
-            let elem_type = self.vec_elem_type_from_receiver(&call_expr.args[0]).or_else(|| {
-                let vec_ty = self.check_expr(&call_expr.args[0]).ok()?;
-                if let Type::Ref {
-                    inner,
-                    mutable: false,
-                } = vec_ty
-                    && let Type::Vec { elem_type } = *inner
-                {
-                    return Some(*elem_type);
-                }
-                None
-            });
+            let elem_type = self
+                .vec_elem_type_from_receiver(&call_expr.args[0])
+                .or_else(|| {
+                    let vec_ty = self.check_expr(&call_expr.args[0]).ok()?;
+                    if let Type::Ref {
+                        inner,
+                        mutable: false,
+                    } = vec_ty
+                        && let Type::Vec { elem_type } = *inner
+                    {
+                        return Some(*elem_type);
+                    }
+                    None
+                });
 
             if let Some(elem_type) = elem_type {
                 let resolved_elem = self.resolve_type_name(&elem_type)?;
