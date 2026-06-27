@@ -111,7 +111,7 @@ New builtins (channels, Vec, String, spawn) often need C runtime helpers. Keep h
 
 ## Debugging a failing stage
 
-**Stale binaries:** Rebuild `target/release/ion-compiler` (and `ion-build` when touching build code) after cgen or tc changes before `test_runner.sh` or regenerating `examples/*.c`. The harness defaults to `../target/release/ion-compiler`. Agent shells may set `CARGO_TARGET_DIR` outside the repo; override with `COMPILER=` or rebuild into `target/release/` and confirm the binary timestamp.
+**Stale binaries:** Rebuild `target/release/ion-compiler` (and `ion-build` when touching build code) after cgen or tc changes before `test_runner.sh` or regenerating `examples/*.c`. The harness defaults to `../target/release/ion-compiler`. Agent shells may set `CARGO_TARGET_DIR` outside the repo; pin it to the repo `target/` when verifying locally, or override with `COMPILER=` / `ION_BUILD=` and confirm the binary mtime.
 
 ```bash
 # See parser/tc errors

@@ -346,7 +346,7 @@ int pattern_matching_example(void) {
         case 0: { // Some
             int v = match_val_3.data.variant_0.arg0;
             if ((v == 42)) {
-            break;
+                break;
             }
             ret_val = 1;
             goto epilogue;

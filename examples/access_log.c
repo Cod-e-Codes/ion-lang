@@ -172,7 +172,7 @@ int scan_logs(ion_sender_t ION_MAYBE_UNUSED code_tx, int ION_MAYBE_UNUSED expect
             case 1: { // ClientError
                 if ((code == 401)) {
                     auth_failures = (auth_failures + 1);
-                break;
+                    break;
                 }
                 break;
             }

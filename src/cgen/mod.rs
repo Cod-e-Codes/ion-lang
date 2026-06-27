@@ -1431,6 +1431,29 @@ impl Codegen {
         }
     }
 
+    /// Drop owned bindings in the current scope frame without popping it.
+    /// Used when leaving a grouped `switch` arm early (guard match) before case-level cleanup.
+    fn scope_emit_top_frame_drops(&mut self) {
+        let Some(frame) = self.scope_stack.last().cloned() else {
+            return;
+        };
+        self.emit_frame_cleanup(&frame);
+        let to_drop: Vec<String> = frame
+            .bindings
+            .iter()
+            .filter(|b| !b.dropped && self.needs_drop(&b.ty))
+            .map(|b| b.name.clone())
+            .collect();
+        let Some(top) = self.scope_stack.last_mut() else {
+            return;
+        };
+        for name in to_drop {
+            if let Some(binding) = top.bindings.iter_mut().find(|b| b.name == name) {
+                binding.dropped = true;
+            }
+        }
+    }
+
     /// Assign `ret_val` (when needed), run scope unwind, and jump to the function epilogue.
     fn emit_function_return(&mut self, ret: &crate::ir::IRReturn) {
         self.write_indent();
@@ -3788,9 +3811,30 @@ impl Codegen {
                     );
                 }
                 for arm in group_arms {
-                    self.generate_match_arm_body(arm, match_result);
+                    if let Some(ref guard) = arm.guard {
+                        self.write_indent();
+                        self.write("if (");
+                        self.generate_expr(guard);
+                        self.writeln(") {");
+                        self.indent_level += 1;
+                        if let Some((result_var, result_type)) = match_result {
+                            self.emit_match_arm_result_stmts(&arm.body, result_var, result_type);
+                        } else {
+                            self.generate_block(&arm.body);
+                        }
+                        self.scope_emit_top_frame_drops();
+                        self.write_indent();
+                        self.writeln("break;");
+                        self.indent_level -= 1;
+                        self.write_indent();
+                        self.writeln("}");
+                    } else {
+                        self.generate_match_arm_body(arm, match_result, false);
+                    }
                 }
                 self.scope_emit_exit();
+                self.write_indent();
+                self.writeln("break;");
                 self.indent_level -= 1;
                 self.write_indent();
                 self.writeln("}");
@@ -3989,7 +4033,7 @@ impl Codegen {
                 self.write_indent();
                 self.writeln("default:");
                 self.indent_level += 1;
-                self.generate_match_arm_body(arm, match_result);
+                self.generate_match_arm_body(arm, match_result, true);
                 self.indent_level -= 1;
             }
             IRPattern::Binding { name } => {
@@ -4005,7 +4049,7 @@ impl Codegen {
                         type_params,
                     );
                 }
-                self.generate_match_arm_body(arm, match_result);
+                self.generate_match_arm_body(arm, match_result, true);
                 self.indent_level -= 1;
             }
             IRPattern::Variant { .. } => {
@@ -4014,7 +4058,12 @@ impl Codegen {
         }
     }
 
-    fn generate_match_arm_body(&mut self, arm: &IRMatchArm, match_result: Option<(&str, &Type)>) {
+    fn generate_match_arm_body(
+        &mut self,
+        arm: &IRMatchArm,
+        match_result: Option<(&str, &Type)>,
+        trailing_break: bool,
+    ) {
         if let Some(ref guard) = arm.guard {
             self.write_indent();
             self.write("if (");
@@ -4028,17 +4077,23 @@ impl Codegen {
             }
             self.indent_level -= 1;
             self.write_indent();
-            self.writeln("break;");
-            self.write_indent();
             self.writeln("}");
+            if trailing_break {
+                self.write_indent();
+                self.writeln("break;");
+            }
         } else if let Some((result_var, result_type)) = match_result {
             self.emit_match_arm_result_stmts(&arm.body, result_var, result_type);
-            self.write_indent();
-            self.writeln("break;");
+            if trailing_break {
+                self.write_indent();
+                self.writeln("break;");
+            }
         } else {
             self.generate_block(&arm.body);
-            self.write_indent();
-            self.writeln("break;");
+            if trailing_break {
+                self.write_indent();
+                self.writeln("break;");
+            }
         }
     }
 
