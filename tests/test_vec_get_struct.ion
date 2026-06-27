@@ -1,0 +1,40 @@
+// Vec::get with struct elements containing String
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Todo {
+    id: int;
+    label: String;
+    done: bool;
+}
+
+fn main() -> int {
+    let mut items: Vec<Todo> = Vec::new();
+    Vec::push(
+        &mut items,
+        Todo {
+            id: 1,
+            label: String::from("hello"),
+            done: false,
+        },
+    );
+
+    match Vec::get(&items, 0) {
+        Option::Some(todo) => {
+            if todo.id != 1 {
+                return 1;
+            }
+            let nbytes: int = String::len(&todo.label);
+            if nbytes != 5 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+
+    return 0;
+}

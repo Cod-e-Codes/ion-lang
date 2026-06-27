@@ -57,6 +57,9 @@ test_vec_get_set.ion	run	0
 test_vec_capacity.ion	run	0			
 test_vec_i32.ion	run	0			
 test_vec_struct.ion	run	2
+test_vec_get_struct.ion	run	0
+test_vec_push_mut_param.ion	run	0
+test_vec_push_nested_call.ion	run	0
 test_vec_push_struct_var.ion	run	42
 test_struct_field_move_vec.ion	run	1
 test_tuple_vec_int.ion	run	42

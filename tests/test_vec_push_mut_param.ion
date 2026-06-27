@@ -1,0 +1,31 @@
+// Vec::push through &mut Vec parameter
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Item {
+    id: int;
+}
+
+fn push_item(out: &mut Vec<Item>, id: int) {
+    Vec::push(out, Item { id: id });
+}
+
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    push_item(&mut items, 42);
+
+    match Vec::get(&items, 0) {
+        Option::Some(item) => {
+            if item.id != 42 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+
+    return 0;
+}

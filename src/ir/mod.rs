@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::tc::collect_captured_vars;
+use crate::types_util::ref_to_vec_elem;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -997,7 +998,8 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             }
         }
         Expr::Call(call_expr) => {
-            let return_type = infer_type_from_call(&call_expr.callee, &call_expr.args);
+            let return_type = builtin_option_vec_return(&call_expr.callee, &call_expr.args, ctx)
+                .or_else(|| infer_type_from_call(&call_expr.callee, &call_expr.args));
             IREexpr::Call {
                 callee: call_expr.callee.clone(),
                 args: call_expr
@@ -1136,6 +1138,25 @@ fn fn_type_from_expr_literal(lit: &FnLiteralExpr) -> Type {
         params: lit.params.iter().map(|p| p.ty.clone()).collect(),
         return_type: Box::new(lit.return_type.clone().unwrap_or(Type::Void)),
     }
+}
+
+fn vec_elem_type_from_arg_expr(arg: &Expr, ctx: &LoweringContext) -> Option<Type> {
+    let ty = match arg {
+        Expr::Ref(r) => ctx.resolve_expr_type(&r.inner)?,
+        _ => ctx.resolve_expr_type(arg)?,
+    };
+    ref_to_vec_elem(&ty).cloned()
+}
+
+fn builtin_option_vec_return(callee: &str, args: &[Expr], ctx: &LoweringContext) -> Option<Type> {
+    if callee != "Vec::get" && callee != "Vec::pop" {
+        return None;
+    }
+    let elem = vec_elem_type_from_arg_expr(args.first()?, ctx)?;
+    Some(Type::Generic {
+        name: "Option".to_string(),
+        params: vec![elem],
+    })
 }
 
 /// Infer the return type of a function call.

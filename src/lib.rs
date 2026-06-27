@@ -8,3 +8,4 @@ pub mod lexer;
 pub mod lsp;
 pub mod parser;
 pub mod tc;
+pub mod types_util;

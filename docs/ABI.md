@@ -41,6 +41,11 @@ Stable beta expectations:
 - Dropping `Vec<T>` drops owned elements when `T` needs destruction.
 - Bounds-sensitive operations either return `Option<T>` where documented or
   trigger the runtime panic path for checked indexing.
+- `Vec::get` / `Vec::pop` return heap `Option` blobs from the runtime; generated
+  C unpacks them with `ion_option_from_raw` into monomorphized `Option_T` stack
+  values (tag plus payload at `data.variant_0.arg0`).
+- `&mut Vec<T>` parameters codegen as `Vec_T**`; builtins dereference once when
+  passing the receiver to `ion_vec_push`, `ion_vec_get`, and related helpers.
 
 ## `Box<T>`
 

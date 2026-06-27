@@ -117,6 +117,9 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_capacity.ion` - Vec capacity management
 - `test_vec_i32.ion` - `Vec<i32>` with annotated `Vec::new`, `i32` indices
 - `test_vec_struct.ion` - `Vec` with struct elements, annotated `Vec::new`, and `for` iteration
+- `test_vec_get_struct.ion` - `Vec::get` with struct elements containing `String`
+- `test_vec_push_mut_param.ion` - `Vec::push` through `&mut Vec<T>` parameter
+- `test_vec_push_nested_call.ion` - `Vec::push` with nested call expression value
 - `test_vec_push_struct_var.ion` - `Vec::push` with a struct variable (address-of lvalue)
 - `test_struct_field_move_vec.ion` - move a `Vec` out of a struct field without double-free
 - `test_tuple_vec_int.ion` - tuple `(Vec<T>, int)` mangling and return

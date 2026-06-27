@@ -121,12 +121,11 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, arg_code);
             self.generate_expr(&args[0]);
             arg_code = std::mem::replace(&mut self.output, old_output);
-            // Remove leading & if present - &v where v: Vec<T> gives Vec_T**, we need Vec_T*
-            let deref_arg = arg_code.strip_prefix('&').unwrap_or(&arg_code);
+            let deref_arg = self.vec_ion_ptr_expr(&args[0], &arg_code);
             code.push_str("((");
-            code.push_str(deref_arg);
+            code.push_str(&deref_arg);
             code.push_str(") ? (int)((ion_vec_t*)(");
-            code.push_str(deref_arg);
+            code.push_str(&deref_arg);
             code.push_str("))->len : 0)");
             return Some(code);
         }
@@ -138,12 +137,11 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, arg_code);
             self.generate_expr(&args[0]);
             arg_code = std::mem::replace(&mut self.output, old_output);
-            // Remove leading & if present
-            let deref_arg = arg_code.strip_prefix('&').unwrap_or(&arg_code);
+            let deref_arg = self.vec_ion_ptr_expr(&args[0], &arg_code);
             code.push_str("((");
-            code.push_str(deref_arg);
+            code.push_str(&deref_arg);
             code.push_str(") ? (int)((ion_vec_t*)(");
-            code.push_str(deref_arg);
+            code.push_str(&deref_arg);
             code.push_str("))->capacity : 0)");
             return Some(code);
         }
@@ -155,47 +153,47 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, vec_code);
             self.generate_expr(&args[0]);
             vec_code = std::mem::replace(&mut self.output, old_output);
-            // Remove leading & if present
-            let deref_vec = vec_code.strip_prefix('&').unwrap_or(&vec_code);
+            let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
 
             let mut value_code = String::new();
             let old_output = std::mem::replace(&mut self.output, value_code);
             self.generate_expr(&args[1]);
             value_code = std::mem::replace(&mut self.output, old_output);
 
-            // Extract element type from Vec<T> in generic_instantiations
-            // Look for Vec_* types and extract the element type
-            let elem_c_type = self
-                .generic_instantiations
-                .iter()
-                .find_map(|(_mono_name, (base, params))| {
-                    if base == "Vec" && params.len() == 1 {
-                        Some(self.type_to_c(&params[0]))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "int".to_string());
+            let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
 
-            code.push_str("ion_vec_push((ion_vec_t*)(");
-            code.push_str(deref_vec);
-            code.push_str("), ");
             let value_is_lvalue = matches!(
                 args[1],
                 IREexpr::StructLit { .. } | IREexpr::Var(_) | IREexpr::FieldAccess { .. }
             );
             if value_is_lvalue {
-                code.push('&');
+                code.push_str("ion_vec_push((ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("), &");
                 code.push_str(&value_code);
+                code.push_str(", sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str("))");
+            } else if matches!(args[1], IREexpr::Call { .. }) {
+                code.push_str("({ ");
+                code.push_str(&elem_c_type);
+                code.push_str(" _ion_push_val = ");
+                code.push_str(&value_code);
+                code.push_str("; ion_vec_push((ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("), &_ion_push_val, sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str(")); })");
             } else {
-                code.push_str("&(");
+                code.push_str("ion_vec_push((ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("), &(");
                 code.push_str(&format!("({}){{", elem_c_type));
                 code.push_str(&value_code);
-                code.push_str("})");
+                code.push_str("}), sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str("))");
             }
-            code.push_str(", sizeof(");
-            code.push_str(&elem_c_type);
-            code.push_str("))");
             return Some(code);
         }
 
@@ -206,27 +204,11 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, vec_code);
             self.generate_expr(&args[0]);
             vec_code = std::mem::replace(&mut self.output, old_output);
-            // Remove leading & if present
-            let deref_vec = vec_code.strip_prefix('&').unwrap_or(&vec_code);
+            let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
 
-            // Extract element type from return type (Option<T>)
-            let elem_type = return_type
-                .and_then(|t| {
-                    if let Type::Generic { name, params } = t {
-                        if name == "Option" && params.len() == 1 {
-                            Some(&params[0])
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(&Type::Int);
-
-            let elem_c_type = self.type_to_c(elem_type);
+            let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
             code.push_str("ion_vec_pop((ion_vec_t*)(");
-            code.push_str(deref_vec);
+            code.push_str(&deref_vec);
             code.push_str("), sizeof(");
             code.push_str(&elem_c_type);
             code.push_str("))");
@@ -246,25 +228,10 @@ impl Codegen {
             self.generate_expr(&args[1]);
             index_code = std::mem::replace(&mut self.output, old_output);
 
-            let elem_type = return_type
-                .and_then(|t| {
-                    if let Type::Generic { name, params } = t {
-                        if name == "Option" && params.len() == 1 {
-                            Some(&params[0])
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(&Type::Int);
-
-            let elem_c_type = self.type_to_c(elem_type);
-            // Remove leading & if present
-            let deref_vec = vec_code.strip_prefix('&').unwrap_or(&vec_code);
+            let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
+            let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
             code.push_str("ion_vec_get((ion_vec_t*)(");
-            code.push_str(deref_vec);
+            code.push_str(&deref_vec);
             code.push_str("), ");
             code.push_str(&index_code);
             code.push_str(", sizeof(");
@@ -280,8 +247,7 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, vec_code);
             self.generate_expr(&args[0]);
             vec_code = std::mem::replace(&mut self.output, old_output);
-            // Remove leading & if present
-            let deref_vec = vec_code.strip_prefix('&').unwrap_or(&vec_code);
+            let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
 
             let mut index_code = String::new();
             let old_output = std::mem::replace(&mut self.output, index_code);
@@ -293,31 +259,46 @@ impl Codegen {
             self.generate_expr(&args[2]);
             value_code = std::mem::replace(&mut self.output, old_output);
 
-            // Extract element type from Vec<T> in generic_instantiations
-            // Look for Vec_* types and extract the element type
-            let elem_c_type = self
-                .generic_instantiations
-                .iter()
-                .find_map(|(_mono_name, (base, params))| {
-                    if base == "Vec" && params.len() == 1 {
-                        Some(self.type_to_c(&params[0]))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "int".to_string());
+            let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
 
-            // Use compound literal to take address of value
-            code.push_str("ion_vec_set((ion_vec_t*)(");
-            code.push_str(deref_vec);
-            code.push_str("), ");
-            code.push_str(&index_code);
-            code.push_str(", &(");
-            code.push_str(&format!("({}){{", elem_c_type));
-            code.push_str(&value_code);
-            code.push_str("}), sizeof(");
-            code.push_str(&elem_c_type);
-            code.push_str("))");
+            let value_is_lvalue = matches!(
+                args[2],
+                IREexpr::StructLit { .. } | IREexpr::Var(_) | IREexpr::FieldAccess { .. }
+            );
+            if value_is_lvalue {
+                code.push_str("ion_vec_set((ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("), ");
+                code.push_str(&index_code);
+                code.push_str(", &");
+                code.push_str(&value_code);
+                code.push_str(", sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str("))");
+            } else if matches!(args[2], IREexpr::Call { .. }) {
+                code.push_str("({ ");
+                code.push_str(&elem_c_type);
+                code.push_str(" _ion_set_val = ");
+                code.push_str(&value_code);
+                code.push_str("; ion_vec_set((ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("), ");
+                code.push_str(&index_code);
+                code.push_str(", &_ion_set_val, sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str(")); })");
+            } else {
+                code.push_str("ion_vec_set((ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("), ");
+                code.push_str(&index_code);
+                code.push_str(", &(");
+                code.push_str(&format!("({}){{", elem_c_type));
+                code.push_str(&value_code);
+                code.push_str("}), sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str("))");
+            }
             return Some(code);
         }
 

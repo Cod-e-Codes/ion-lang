@@ -194,6 +194,13 @@ void *ion_vec_pop(ion_vec_t *vec, size_t elem_size);
 void *ion_vec_get(const ion_vec_t *vec, int index, size_t elem_size);
 
 /**
+ * Unpack a heap Option from ion_vec_get/ion_vec_pop into a stack-local monomorphized
+ * Option (tag + payload). Frees raw.
+ */
+void ion_option_from_raw(void *dest, void *raw, size_t elem_size,
+                         size_t payload_offset);
+
+/**
  * Sets a value in the vector at the given index.
  *
  * @param vec Vector to set in

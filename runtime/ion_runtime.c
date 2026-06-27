@@ -116,6 +116,24 @@ void *ion_vec_pop(ion_vec_t *vec, size_t elem_size) {
   return opt;
 }
 
+void ion_option_from_raw(void *dest, void *raw, size_t elem_size,
+                         size_t payload_offset) {
+  if (!dest) {
+    free(raw);
+    return;
+  }
+  if (!raw) {
+    *(int *)dest = 1;
+    return;
+  }
+  ion_option_t *src = (ion_option_t *)raw;
+  *(int *)dest = src->tag;
+  if (src->tag == 0) {
+    memcpy((char *)dest + payload_offset, src->data.some_data, elem_size);
+  }
+  free(raw);
+}
+
 void *ion_vec_get(const ion_vec_t *vec, int index, size_t elem_size) {
   if (!vec || index < 0 || (size_t)index >= vec->len) {
     // Return Option::None (tag = 1, since None is second variant)

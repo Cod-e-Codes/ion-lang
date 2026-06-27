@@ -50,10 +50,13 @@ Ion identity depends on these - do not weaken them without explicit user directi
 
 ```powershell
 cargo test
+$env:CARGO_TARGET_DIR = "$PWD\target"
 cargo build --release --bin ion-compiler --bin ion-lsp --bin ion-build
 cargo clippy -- -D warnings
 & "${env:ProgramFiles}\Git\bin\bash.exe" -lc 'cd tests && ./test_runner.sh'
 ```
+
+Pin `CARGO_TARGET_DIR` to the repo `target/` when agent shells would otherwise build into a sandbox cache. Confirm `target\release\ion-compiler.exe` mtime matches the build before trusting codegen or the harness default `COMPILER` path.
 
 **Application builds:** `ion-build` reads `ion.toml` (walks up from cwd), transpiles, compiles C, links runtime. Default output under `target/`:
 

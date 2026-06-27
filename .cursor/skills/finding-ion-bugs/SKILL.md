@@ -61,7 +61,7 @@ cargo clippy -- -D warnings
 
 **Windows:** Git Bash for `test_runner.sh`. Stop `ion-lsp` / `ion-compiler` if rebuild hits "Access is denied".
 
-**Stale binaries:** Rebuild `target/release/ion-compiler` after cgen changes before `./target/release/ion-compiler` or `test_runner.sh`. If results look wrong, check the binary mtime or set `COMPILER=` to a freshly built path (agent shells may use a sandbox `CARGO_TARGET_DIR`).
+**Stale binaries:** Rebuild `target/release/ion-compiler` after cgen changes before `./target/release/ion-compiler` or `test_runner.sh`. Agent shells may set `CARGO_TARGET_DIR` outside the repo; builds then land away from `./target/release/`. Set `CARGO_TARGET_DIR` to the repo `target/` (or pass `COMPILER=` / `ION_BUILD=` to the harness) and confirm the binary mtime before trusting codegen output.
 
 ## Localize by symptom
 

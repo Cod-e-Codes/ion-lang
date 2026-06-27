@@ -12,6 +12,7 @@ use crate::ast::{
     BinOp, EnumDecl, EnumVariant, ExternBlock, Program, Span, StructDecl, Type, TypeAliasDecl, UnOp,
 };
 use crate::ir::*;
+use crate::types_util::{is_ref_to_vec, ref_to_vec_elem};
 use std::collections::HashMap;
 
 enum BoundsCheck {
@@ -226,6 +227,7 @@ impl Codegen {
         self.writeln("#include <stdio.h>");
         self.writeln("#include <stdlib.h>");
         self.writeln("#include <string.h>");
+        self.writeln("#include <stddef.h>");
         self.writeln("#include <stdint.h>"); // For integer types (int8_t, uint16_t, etc.)
         // Ion runtime (threads, channels, heap allocation, etc.)
         // Use ion_runtime.h and rely on compiler include paths
@@ -1092,6 +1094,87 @@ impl Codegen {
             },
             _ => None,
         }
+    }
+
+    /// C expression for `ion_vec_t*` from a `&Vec<T>`, `&mut Vec<T>`, or owned `Vec<T>` IR arg.
+    pub(crate) fn vec_ion_ptr_expr(&self, arg: &IREexpr, vec_code: &str) -> String {
+        let stripped = vec_code.strip_prefix('&').unwrap_or(vec_code);
+        if matches!(arg, IREexpr::Var(_))
+            && let Some(ty) = self.infer_irexpr_type(arg)
+            && is_ref_to_vec(&ty)
+        {
+            return format!("(*{stripped})");
+        }
+        stripped.to_string()
+    }
+
+    pub(crate) fn vec_elem_type_from_arg(&self, arg: &IREexpr) -> Option<Type> {
+        let inner_ty = match arg {
+            IREexpr::AddressOf { inner, .. } => self.infer_irexpr_type(inner)?,
+            _ => self.infer_irexpr_type(arg)?,
+        };
+        ref_to_vec_elem(&inner_ty).cloned()
+    }
+
+    pub(crate) fn resolve_vec_elem_c_type(
+        &self,
+        vec_arg: &IREexpr,
+        return_type: Option<&Type>,
+    ) -> String {
+        if let Some(elem) = self.vec_elem_type_from_arg(vec_arg) {
+            return self.type_to_c(&elem);
+        }
+        if let Some(Type::Generic { name, params }) = return_type
+            && name == "Option"
+            && params.len() == 1
+        {
+            return self.type_to_c(&params[0]);
+        }
+        self.generic_instantiations
+            .iter()
+            .find_map(|(_mono_name, (base, params))| {
+                if base == "Vec" && params.len() == 1 {
+                    Some(self.type_to_c(&params[0]))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "int".to_string())
+    }
+
+    pub(crate) fn write_option_from_runtime_raw(
+        &mut self,
+        mono_name: &str,
+        elem_c_type: &str,
+        dest_var: &str,
+        raw_expr: &IREexpr,
+    ) {
+        self.write(&format!("{mono_name} {dest_var};\n"));
+        self.write_indent();
+        self.write("{ void* _ion_raw = ");
+        self.generate_expr(raw_expr);
+        self.writeln(";");
+        self.write_indent();
+        self.writeln(&format!(
+            "ion_option_from_raw(&{dest_var}, _ion_raw, sizeof({elem_c_type}), offsetof({mono_name}, data.variant_0.arg0)); }}"
+        ));
+        self.mark_moves_in_expr(raw_expr);
+    }
+
+    pub(crate) fn write_option_from_runtime_raw_stmt_expr(
+        &mut self,
+        mono_name: &str,
+        elem_c_type: &str,
+        raw_expr: &IREexpr,
+    ) {
+        self.write("({ ");
+        self.write(&format!("{mono_name} _ion_opt; "));
+        self.write("void* _ion_raw = ");
+        self.generate_expr(raw_expr);
+        self.write(&format!(
+            "; ion_option_from_raw(&_ion_opt, _ion_raw, sizeof({elem_c_type}), offsetof({mono_name}, data.variant_0.arg0)); _ion_opt; }})"
+        ));
+        self.mark_moves_in_expr(raw_expr);
     }
 
     fn field_access_c_path(&self, expr: &IREexpr) -> Option<String> {
@@ -2079,11 +2162,13 @@ impl Codegen {
                                         && matches!(return_type.as_ref().unwrap(), Type::Generic { name: n, .. } if n == "Option"));
 
                                 if needs_cast {
-                                    // Cast void* to Option_T* and dereference
                                     let mono_name = mangle_type_name("Option", params);
-                                    self.write(&format!("*(({}*)(", mono_name));
-                                    self.generate_expr(init);
-                                    self.write("))");
+                                    let elem_c_type = self.type_to_c(&params[0]);
+                                    self.write_option_from_runtime_raw_stmt_expr(
+                                        &mono_name,
+                                        &elem_c_type,
+                                        init,
+                                    );
                                 } else {
                                     self.generate_expr_with_type(init, Some(&let_stmt.ty));
                                 }
@@ -2654,13 +2739,17 @@ impl Codegen {
                 };
 
                 if needs_cast {
-                    // Cast void* to Option_T* and dereference
-                    self.write(&format!(
-                        "{} {} = *(({}*)(",
-                        monomorphized_enum_name, match_var_name, monomorphized_enum_name
-                    ));
-                    self.generate_expr(expr);
-                    self.writeln("));");
+                    let elem_c_type = if type_params.is_empty() {
+                        "int".to_string()
+                    } else {
+                        self.type_to_c(&type_params[0])
+                    };
+                    self.write_option_from_runtime_raw(
+                        &monomorphized_enum_name,
+                        &elem_c_type,
+                        &match_var_name,
+                        expr,
+                    );
                 } else {
                     // Evaluate expression once into a temporary with correct enum type
                     self.write(&format!(
@@ -3611,14 +3700,17 @@ impl Codegen {
         };
 
         if needs_cast {
-            // Cast void* to Option_T* and dereference
-            self.write(&format!(
-                "{} {} = *(({}*)(",
-                monomorphized_enum_name, match_var_name, monomorphized_enum_name
-            ));
-            self.generate_expr(expr);
-            self.writeln("));");
-            self.mark_moves_in_expr(expr);
+            let elem_c_type = if type_params.is_empty() {
+                "int".to_string()
+            } else {
+                self.type_to_c(&type_params[0])
+            };
+            self.write_option_from_runtime_raw(
+                &monomorphized_enum_name,
+                &elem_c_type,
+                &match_var_name,
+                expr,
+            );
         } else {
             self.write(&format!(
                 "{} {} = ",

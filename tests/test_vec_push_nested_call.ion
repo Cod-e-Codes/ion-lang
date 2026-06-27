@@ -1,0 +1,35 @@
+// Vec::push with a nested call expression as the value argument
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Item {
+    id: int;
+}
+
+fn bump(item: Item) -> Item {
+    return Item { id: item.id + 1 };
+}
+
+fn push_bumped(out: &mut Vec<Item>, item: Item) {
+    Vec::push(out, bump(item));
+}
+
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    push_bumped(&mut items, Item { id: 41 });
+
+    match Vec::get(&items, 0) {
+        Option::Some(got) => {
+            if got.id != 42 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+
+    return 0;
+}

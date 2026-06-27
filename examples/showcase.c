@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "ion_runtime.h"
 
@@ -175,7 +176,9 @@ int vec_example(void) {
         ret_val = 1;
         goto epilogue;
     }
-    Option_int match_val_0 = *((Option_int*)(ion_vec_get((ion_vec_t*)(numbers), 0, sizeof(int))));
+    Option_int match_val_0;
+    { void* _ion_raw = ion_vec_get((ion_vec_t*)(numbers), 0, sizeof(int));
+    ion_option_from_raw(&match_val_0, _ion_raw, sizeof(int), offsetof(Option_int, data.variant_0.arg0)); }
     switch (match_val_0.tag) {
         case 0: { // Some
             int value = match_val_0.data.variant_0.arg0;
@@ -192,7 +195,9 @@ int vec_example(void) {
         }
     }
     ion_vec_set((ion_vec_t*)(numbers), 1, &((int){25}), sizeof(int));
-    Option_int match_val_1 = *((Option_int*)(ion_vec_pop((ion_vec_t*)(numbers), sizeof(int))));
+    Option_int match_val_1;
+    { void* _ion_raw = ion_vec_pop((ion_vec_t*)(numbers), sizeof(int));
+    ion_option_from_raw(&match_val_1, _ion_raw, sizeof(int), offsetof(Option_int, data.variant_0.arg0)); }
     switch (match_val_1.tag) {
         case 0: { // Some
             int value = match_val_1.data.variant_0.arg0;
@@ -226,7 +231,7 @@ int for_loop_example(void) {
     int __for_i_2197 = 0;
     (void)__for_i_2197;
     while (__for_i_2197 < ((__for_container_2197) ? (int)((ion_vec_t*)(__for_container_2197))->len : 0)) {
-        Option_int __for_opt_2197 = *((Option_int*)(ion_vec_get((ion_vec_t*)(__for_container_2197), __for_i_2197, sizeof(int))));
+        Option_int __for_opt_2197 = ({ Option_int _ion_opt; void* _ion_raw = ion_vec_get((ion_vec_t*)(__for_container_2197), __for_i_2197, sizeof(int)); ion_option_from_raw(&_ion_opt, _ion_raw, sizeof(int), offsetof(Option_int, data.variant_0.arg0)); _ion_opt; });
         (void)__for_opt_2197;
         Option_int match_val_2 = __for_opt_2197;
         switch (match_val_2.tag) {
@@ -536,7 +541,9 @@ int complex_example(void) {
         ret_val = 1;
         goto epilogue;
     }
-    Option_int match_val_7 = *((Option_int*)(ion_vec_get((ion_vec_t*)(numbers), 0, sizeof(int))));
+    Option_int match_val_7;
+    { void* _ion_raw = ion_vec_get((ion_vec_t*)(numbers), 0, sizeof(int));
+    ion_option_from_raw(&match_val_7, _ion_raw, sizeof(int), offsetof(Option_int, data.variant_0.arg0)); }
     switch (match_val_7.tag) {
         case 0: { // Some
             int value = match_val_7.data.variant_0.arg0;
@@ -552,7 +559,9 @@ int complex_example(void) {
             break;
         }
     }
-    Option_int match_val_8 = *((Option_int*)(ion_vec_get((ion_vec_t*)(numbers), 1, sizeof(int))));
+    Option_int match_val_8;
+    { void* _ion_raw = ion_vec_get((ion_vec_t*)(numbers), 1, sizeof(int));
+    ion_option_from_raw(&match_val_8, _ion_raw, sizeof(int), offsetof(Option_int, data.variant_0.arg0)); }
     switch (match_val_8.tag) {
         case 0: { // Some
             int value = match_val_8.data.variant_0.arg0;
