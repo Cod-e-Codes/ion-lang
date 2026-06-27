@@ -1258,7 +1258,7 @@ stronger contract.
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (signature hover only)
 - LSP go-to-definition for type names in type annotations (no source spans on `Type` AST nodes)
 - Function types: capture-free fn literals implemented; no capturing closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
-- Tuple values: no nested tuples, `==` on tuples, struct fields holding tuples, or generic `(T1, T2)` parameters
+- Tuple values: no nested tuples, `==` on tuples, struct fields holding tuples, or generic `(T1, T2)` parameters. Flat tuples may hold owned heap types (for example `(Vec<T>, int)`).
 
 ### 11. Future Work (Non-Normative)
 

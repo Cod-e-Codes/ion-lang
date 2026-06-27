@@ -27,13 +27,31 @@ pub(crate) fn mangle_type_name(base: &str, params: &[Type]) -> String {
 }
 
 fn mangle_type_component(ty: &Type) -> String {
-    type_to_c_impl(ty)
-        .chars()
-        .map(|ch| match ch {
-            ' ' | '*' | '(' | ')' | '[' | ']' => '_',
-            other => other,
-        })
-        .collect()
+    match ty {
+        Type::Int => "int".to_string(),
+        Type::Bool => "bool".to_string(),
+        Type::F32 => "f32".to_string(),
+        Type::F64 => "f64".to_string(),
+        Type::String => "String".to_string(),
+        Type::Struct(name) | Type::Enum(name) => name.clone(),
+        Type::Vec { elem_type } => format!("Vec_{}", mangle_type_component(elem_type)),
+        Type::Box { inner } => format!("Box_{}", mangle_type_component(inner)),
+        Type::Generic { name, params } if name == "Vec" && params.len() == 1 => {
+            format!("Vec_{}", mangle_type_component(&params[0]))
+        }
+        Type::Generic { name, params } if name == "Box" && params.len() == 1 => {
+            format!("Box_{}", mangle_type_component(&params[0]))
+        }
+        Type::Generic { name, params } if params.is_empty() => name.clone(),
+        Type::Generic { name, params } => mangle_type_name(name, params),
+        _ => type_to_c_impl(ty)
+            .chars()
+            .map(|ch| match ch {
+                ' ' | '*' | '(' | ')' | '[' | ']' => '_',
+                other => other,
+            })
+            .collect(),
+    }
 }
 
 pub(crate) fn tuple_type_name(elements: &[Type]) -> String {

@@ -13,7 +13,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 ## Codegen (`src/cgen/`)
 
 - Drop order and `ion_drop_*` for moved fields
-- **Struct field move-out**: owned fields null after partial move (`board.items = NULL`; `struct_field_move_neutralizes_source_field`)
+- **Struct field move-out**: owned fields null after partial move on the next statement (`board.items = NULL`; deferred when the move is a call argument)
 - **Vec::push lvalues**: struct variables and field paths use `&item`, not compound literal (`vec_push_struct_var_uses_address_of_lvalue`)
 - **Enum emission order**: non-generic enums before structs in single-file C output
 - **Tuple mangle**: `tuple_type_name` sanitizes `*` and brackets when names include `Vec` types

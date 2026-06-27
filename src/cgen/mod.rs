@@ -76,6 +76,9 @@ pub struct Codegen {
     mangle_merged_module_calls: bool,
     /// Set during multi-file codegen: prefix this module's functions (`io_print_int`).
     multi_file_module: Option<String>,
+    /// Owned struct fields moved in the current statement; flushed after the statement completes.
+    pending_field_nulls: Vec<String>,
+    pending_field_null_set: std::collections::HashSet<String>,
 }
 
 impl Default for Codegen {
@@ -113,6 +116,8 @@ impl Codegen {
             loop_continue_label: None,
             mangle_merged_module_calls: false,
             multi_file_module: None,
+            pending_field_nulls: Vec::new(),
+            pending_field_null_set: std::collections::HashSet::new(),
         }
     }
 
@@ -1136,12 +1141,23 @@ impl Codegen {
         if !self.needs_drop(&ty) {
             return;
         }
-        self.write_indent();
-        self.writeln(&format!(
+        if !self.pending_field_null_set.insert(path.clone()) {
+            return;
+        }
+        self.pending_field_nulls.push(format!(
             "{} = {};",
             path,
             self.zero_value_for_scrutinee_payload(&ty)
         ));
+    }
+
+    fn flush_pending_field_nulls(&mut self) {
+        let lines: Vec<String> = self.pending_field_nulls.drain(..).collect();
+        self.pending_field_null_set.clear();
+        for line in lines {
+            self.write_indent();
+            self.writeln(&line);
+        }
     }
 
     fn is_string_compare_operand(&self, expr: &IREexpr) -> bool {
@@ -1425,6 +1441,7 @@ impl Codegen {
         if let Some(value) = &ret.value {
             self.mark_moves_in_expr(value);
         }
+        self.flush_pending_field_nulls();
         self.scope_emit_return_unwind();
         self.write_indent();
         self.writeln(&format!("goto {};", self.epilogue_label));
@@ -1456,6 +1473,8 @@ impl Codegen {
         self.current_return_type = function.return_type.clone();
         self.scope_stack.clear();
         self.epilogue_label = "epilogue".to_string();
+        self.pending_field_nulls.clear();
+        self.pending_field_null_set.clear();
 
         // Store parameter types for field access resolution
         self.current_function_params.clear();
@@ -1509,6 +1528,10 @@ impl Codegen {
                 | Type::Ref { .. } => (self.type_to_c(&resolved_ret), "0".to_string()),
                 Type::Struct(_) | Type::Enum(_) => {
                     (self.type_to_c(&resolved_ret), "{0}".to_string())
+                }
+                Type::Tuple { elements } => {
+                    let name = tuple_type_name(elements);
+                    (name.clone(), format!("({name}){{0}}"))
                 }
                 Type::Generic { name, .. } => match name.as_str() {
                     "Box" | "Vec" => (self.type_to_c(&resolved_ret), "0".to_string()),
@@ -1920,6 +1943,7 @@ impl Codegen {
                     self.writeln(";");
                     self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
                     self.mark_moves_in_expr(init);
+                    self.flush_pending_field_nulls();
                     return;
                 }
                 self.write_indent();
@@ -2064,6 +2088,7 @@ impl Codegen {
                         );
                         self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
                         self.mark_moves_in_expr(match_expr);
+                        self.flush_pending_field_nulls();
                         return;
                     }
 
@@ -2149,6 +2174,7 @@ impl Codegen {
                 if let Some(init) = &let_stmt.init {
                     self.mark_moves_in_expr(init);
                 }
+                self.flush_pending_field_nulls();
             }
             IRStmt::Return(ret) => {
                 self.emit_function_return(ret);
@@ -2175,6 +2201,7 @@ impl Codegen {
                     } => {
                         self.generate_match_block(match_expr, enum_type, arms, None);
                         self.mark_moves_in_expr(match_expr);
+                        self.flush_pending_field_nulls();
                     }
                     IREexpr::Send {
                         channel,
@@ -2209,12 +2236,14 @@ impl Codegen {
                         self.write("); }");
                         self.writeln("");
                         self.mark_moves_in_expr(value.as_ref());
+                        self.flush_pending_field_nulls();
                     }
                     _ => {
                         self.write_indent();
                         self.generate_expr(expr);
                         self.writeln(";");
                         self.mark_moves_in_expr(expr);
+                        self.flush_pending_field_nulls();
                     }
                 }
             }
@@ -5689,6 +5718,51 @@ fn main() -> int {
         assert!(
             c.contains("board.items = NULL"),
             "expected moved-out vec field neutralization in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn call_struct_field_move_defers_field_null() {
+        let src = r#"struct Item { done: bool; }
+struct Batch { items: Vec<Item>; }
+fn take(items: Vec<Item>) -> int { return 0; }
+fn main() -> int {
+    let batch: Batch = Batch { items: 0 };
+    let _x: int = take(batch.items);
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("take(batch.items);")
+                && c.contains("batch.items = NULL;")
+                && c.find("take(batch.items);").unwrap() < c.find("batch.items = NULL;").unwrap(),
+            "expected deferred field null after call in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn tuple_vec_int_uses_mangled_tuple_type() {
+        let src = r#"struct Item { done: bool; }
+fn pair(items: Vec<Item>, n: int) -> (Vec<Item>, int) {
+    return (items, n);
+}
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    let t: (Vec<Item>, int) = pair(items, 1);
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("tuple_Vec_Item_int"),
+            "expected Vec tuple mangling in:\n{c}"
         );
     }
 

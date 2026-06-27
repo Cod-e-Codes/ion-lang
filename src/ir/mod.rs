@@ -195,6 +195,7 @@ pub struct IRMatchArm {
 
 struct LoweringContext {
     var_types: HashMap<String, Type>,
+    struct_decls: HashMap<String, StructDecl>,
     tuple_temp_counter: usize,
     fn_literal_counter: Rc<Cell<usize>>,
     function_returns: HashMap<String, Option<Type>>,
@@ -203,6 +204,7 @@ struct LoweringContext {
 impl LoweringContext {
     fn from_params(
         params: &[IRParam],
+        struct_decls: HashMap<String, StructDecl>,
         fn_literal_counter: Rc<Cell<usize>>,
         function_returns: HashMap<String, Option<Type>>,
     ) -> Self {
@@ -212,18 +214,54 @@ impl LoweringContext {
         }
         Self {
             var_types,
+            struct_decls,
             tuple_temp_counter: 0,
             fn_literal_counter,
             function_returns,
         }
     }
 
+    fn struct_name_from_type(ty: &Type) -> Option<&str> {
+        match ty {
+            Type::Struct(name) => Some(name),
+            Type::Generic { name, .. } => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    fn field_type(&self, base_ty: &Type, field: &str) -> Option<Type> {
+        let struct_name = Self::struct_name_from_type(base_ty)?;
+        let decl = self.struct_decls.get(struct_name)?;
+        decl.fields
+            .iter()
+            .find(|f| f.name == field)
+            .map(|f| f.ty.clone())
+    }
+
     fn resolve_expr_type(&self, expr: &Expr) -> Option<Type> {
         match expr {
             Expr::Var(v) => self.var_types.get(&v.name).cloned(),
-            Expr::Ref(r) => self.resolve_expr_type(&r.inner),
+            Expr::Ref(r) => self.resolve_expr_type(&r.inner).map(|inner_ty| Type::Ref {
+                inner: Box::new(inner_ty),
+                mutable: r.mutable,
+            }),
+            Expr::FieldAccess(acc) => {
+                let base_ty = self.resolve_expr_type(&acc.base)?;
+                self.field_type(&base_ty, &acc.field)
+            }
+            Expr::Call(call) => self
+                .function_returns
+                .get(&call.callee)
+                .and_then(|ret| ret.clone()),
             Expr::TupleLit(t) => Some(Type::Tuple {
-                elements: t.elements.iter().map(infer_type_from_expr).collect(),
+                elements: t
+                    .elements
+                    .iter()
+                    .map(|e| {
+                        self.resolve_expr_type(e)
+                            .unwrap_or_else(|| infer_type_from_expr(e))
+                    })
+                    .collect(),
             }),
             _ => Some(infer_type_from_expr(expr)),
         }
@@ -318,10 +356,15 @@ impl IRBuilder {
             .iter()
             .map(|f| (f.name.clone(), f.return_type.clone()))
             .collect();
+        let struct_decls: HashMap<String, StructDecl> = ast
+            .structs
+            .iter()
+            .map(|s| (s.name.clone(), s.clone()))
+            .collect();
         let functions = ast
             .functions
             .iter()
-            .map(|f| builder.build_function(f, &function_returns))
+            .map(|f| builder.build_function(f, &function_returns, &struct_decls))
             .collect();
         let mut program = IRProgram {
             structs: ast.structs.clone(),
@@ -338,6 +381,7 @@ impl IRBuilder {
         &self,
         function: &FnDecl,
         function_returns: &HashMap<String, Option<Type>>,
+        struct_decls: &HashMap<String, StructDecl>,
     ) -> IRFunction {
         let params: Vec<IRParam> = function
             .params
@@ -350,8 +394,12 @@ impl IRBuilder {
 
         // For minimal subset, we use a single basic block
         let fn_literal_counter = Rc::new(Cell::new(0));
-        let mut ctx =
-            LoweringContext::from_params(&params, fn_literal_counter, function_returns.clone());
+        let mut ctx = LoweringContext::from_params(
+            &params,
+            struct_decls.clone(),
+            fn_literal_counter,
+            function_returns.clone(),
+        );
         let entry = Self::lower_ast_block("entry", &function.body, &mut ctx);
         let blocks = vec![entry];
 
@@ -913,6 +961,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     let mut arm_defers = Vec::new();
                     let mut arm_ctx = LoweringContext {
                         var_types: ctx.var_types.clone(),
+                        struct_decls: ctx.struct_decls.clone(),
                         tuple_temp_counter: ctx.tuple_temp_counter,
                         fn_literal_counter: ctx.fn_literal_counter.clone(),
                         function_returns: ctx.function_returns.clone(),
@@ -981,7 +1030,10 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             let elem_types: Vec<Type> = tuple_lit
                 .elements
                 .iter()
-                .map(infer_type_from_expr)
+                .map(|e| {
+                    ctx.resolve_expr_type(e)
+                        .unwrap_or_else(|| infer_type_from_expr(e))
+                })
                 .collect();
             IREexpr::TupleLit {
                 elements: tuple_lit
@@ -1041,6 +1093,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             let symbol = format!("ion_fn_lit_{}", id);
             let mut lit_ctx = LoweringContext::from_params(
                 &lit_params,
+                ctx.struct_decls.clone(),
                 ctx.fn_literal_counter.clone(),
                 ctx.function_returns.clone(),
             );

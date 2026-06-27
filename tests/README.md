@@ -119,6 +119,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_struct.ion` - `Vec` with struct elements, annotated `Vec::new`, and `for` iteration
 - `test_vec_push_struct_var.ion` - `Vec::push` with a struct variable (address-of lvalue)
 - `test_struct_field_move_vec.ion` - move a `Vec` out of a struct field without double-free
+- `test_tuple_vec_int.ion` - tuple `(Vec<T>, int)` mangling and return
+- `test_call_struct_field_move.ion` - struct field moved into a call argument without broken C
 
 ### Modules and FFI
 - `test_module_basic.ion` - Module system and imports

@@ -1,0 +1,17 @@
+struct Item {
+    done: bool;
+}
+
+fn pair(items: Vec<Item>, n: int) -> (Vec<Item>, int) {
+    return (items, n);
+}
+
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    Vec::push(&mut items, Item { done: false });
+    let t: (Vec<Item>, int) = pair(items, 7);
+    if t.1 != 7 {
+        return 1;
+    }
+    return 42;
+}
