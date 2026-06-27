@@ -3144,6 +3144,41 @@ impl Parser {
     }
 }
 
+// Helper trait for getting span from expressions
+trait HasSpan {
+    fn span(&self) -> Span;
+}
+
+impl HasSpan for Expr {
+    fn span(&self) -> Span {
+        match self {
+            Expr::Lit(e) => e.span,
+            Expr::BoolLiteral(e) => e.span,
+            Expr::FloatLiteral(e) => e.span,
+            Expr::Var(e) => e.span,
+            Expr::BinOp(e) => e.span,
+            Expr::UnOp(e) => e.span,
+            Expr::Ref(e) => e.span,
+            Expr::Send(e) => e.span,
+            Expr::Recv(e) => e.span,
+            Expr::StructLit(e) => e.span,
+            Expr::FieldAccess(e) => e.span,
+            Expr::EnumLit(e) => e.span,
+            Expr::Match(e) => e.span,
+            Expr::Call(e) => e.span,
+            Expr::MethodCall(e) => e.span,
+            Expr::StringLit(e) => e.span,
+            Expr::ArrayLiteral(e) => e.span,
+            Expr::TupleLit(e) => e.span,
+            Expr::Index(e) => e.span,
+            Expr::Cast(e) => e.span,
+            Expr::Assign(e) => e.span,
+            Expr::FnLiteral(e) => e.span,
+            Expr::TypeConst(e) => e.span,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3244,40 +3279,5 @@ fn main() -> int {
             Some("x coordinate")
         );
         assert!(program.structs[0].fields[1].doc.is_none());
-    }
-}
-
-// Helper trait for getting span from expressions
-trait HasSpan {
-    fn span(&self) -> Span;
-}
-
-impl HasSpan for Expr {
-    fn span(&self) -> Span {
-        match self {
-            Expr::Lit(e) => e.span,
-            Expr::BoolLiteral(e) => e.span,
-            Expr::FloatLiteral(e) => e.span,
-            Expr::Var(e) => e.span,
-            Expr::BinOp(e) => e.span,
-            Expr::UnOp(e) => e.span,
-            Expr::Ref(e) => e.span,
-            Expr::Send(e) => e.span,
-            Expr::Recv(e) => e.span,
-            Expr::StructLit(e) => e.span,
-            Expr::FieldAccess(e) => e.span,
-            Expr::EnumLit(e) => e.span,
-            Expr::Match(e) => e.span,
-            Expr::Call(e) => e.span,
-            Expr::MethodCall(e) => e.span,
-            Expr::StringLit(e) => e.span,
-            Expr::ArrayLiteral(e) => e.span,
-            Expr::TupleLit(e) => e.span,
-            Expr::Index(e) => e.span,
-            Expr::Cast(e) => e.span,
-            Expr::Assign(e) => e.span,
-            Expr::FnLiteral(e) => e.span,
-            Expr::TypeConst(e) => e.span,
-        }
     }
 }
