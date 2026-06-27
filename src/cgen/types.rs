@@ -26,8 +26,18 @@ pub(crate) fn mangle_type_name(base: &str, params: &[Type]) -> String {
     }
 }
 
+fn mangle_type_component(ty: &Type) -> String {
+    type_to_c_impl(ty)
+        .chars()
+        .map(|ch| match ch {
+            ' ' | '*' | '(' | ')' | '[' | ']' => '_',
+            other => other,
+        })
+        .collect()
+}
+
 pub(crate) fn tuple_type_name(elements: &[Type]) -> String {
-    let parts: Vec<String> = elements.iter().map(type_to_c_impl).collect();
+    let parts: Vec<String> = elements.iter().map(mangle_type_component).collect();
     format!("tuple_{}", parts.join("_"))
 }
 

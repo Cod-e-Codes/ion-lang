@@ -177,11 +177,14 @@ impl Codegen {
                 })
                 .unwrap_or_else(|| "int".to_string());
 
-            // Use compound literal to take address of value (struct literals already emit one).
             code.push_str("ion_vec_push((ion_vec_t*)(");
             code.push_str(deref_vec);
             code.push_str("), ");
-            if matches!(args[1], IREexpr::StructLit { .. }) {
+            let value_is_lvalue = matches!(
+                args[1],
+                IREexpr::StructLit { .. } | IREexpr::Var(_) | IREexpr::FieldAccess { .. }
+            );
+            if value_is_lvalue {
                 code.push('&');
                 code.push_str(&value_code);
             } else {

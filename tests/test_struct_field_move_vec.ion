@@ -1,0 +1,26 @@
+struct Item {
+    done: bool;
+}
+
+struct Board {
+    items: Vec<Item>;
+}
+
+fn take_items(board: Board) -> Vec<Item> {
+    return board.items;
+}
+
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    Vec::push(&mut items, Item { done: false });
+    Vec::push(&mut items, Item { done: true });
+    let board: Board = Board { items: items };
+    let taken: Vec<Item> = take_items(board);
+    let mut open: int = 0;
+    for item in taken {
+        if !item.done {
+            open = open + 1;
+        }
+    }
+    return open;
+}

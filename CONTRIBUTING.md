@@ -12,6 +12,8 @@
 cargo build --release --bin ion-compiler --bin ion-build --bin ion-lsp
 ```
 
+After compiler codegen changes, rebuild before `tests/test_runner.sh` or regenerating committed `examples/*.c`. A stale `target/release/ion-compiler` can produce misleading harness results.
+
 Install CLI tools into your Cargo bin directory:
 
 ```bash

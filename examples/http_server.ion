@@ -1,4 +1,4 @@
-// HTTP server on port 8080. FFI sockets and spawn per client.
+// HTTP server on port 8080. FFI sockets, one accept, spawn per client, then exit.
 //
 // recv and send are Ion keywords; FFI uses recv_sys and send_sys.
 // Link with: gcc ... -Drecv_sys=recv -Dsend_sys=send
@@ -94,13 +94,11 @@ fn main() -> int {
             return 3;
         }
 
-        loop {
-            let mut client_addr: [u8; 16] = [0; 16];
-            let mut addrlen: int = 16;
-
-            let client_fd: int = accept(&server_fd, &mut client_addr[0], &mut addrlen);
-            dispatch_client(client_fd);
-        }
+        let mut client_addr: [u8; 16] = [0; 16];
+        let mut addrlen: int = 16;
+        let client_fd: int = accept(&server_fd, &mut client_addr[0], &mut addrlen);
+        dispatch_client(client_fd);
+        close(&server_fd);
     }
 
     return 0;

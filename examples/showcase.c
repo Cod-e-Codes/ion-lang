@@ -27,20 +27,15 @@ typedef struct Vec_int {
     size_t elem_size;
 } Vec_int;
 
-typedef struct tuple_ion_sender_t_ion_receiver_t {
-    ion_sender_t f0;
-    ion_receiver_t f1;
-} tuple_ion_sender_t_ion_receiver_t;
-
 typedef struct tuple_int_int {
     int f0;
     int f1;
 } tuple_int_int;
 
-typedef struct Point {
-    int x;
-    int y;
-} Point;
+typedef struct tuple_ion_sender_t_ion_receiver_t {
+    ion_sender_t f0;
+    ion_receiver_t f1;
+} tuple_ion_sender_t_ion_receiver_t;
 
 typedef struct Status {
     int tag;
@@ -63,6 +58,11 @@ static ION_MAYBE_UNUSED Status Status_Err_new(int code) {
     Status result = { .tag = 1, .data = { .variant_1 = { .code = code } } };
     return result;
 }
+
+typedef struct Point {
+    int x;
+    int y;
+} Point;
 
 typedef struct Pair_int {
     int first;
@@ -406,8 +406,8 @@ int reference_example(void) {
         (void)_ref_x;
     }
     Vec_int* values = ((Vec_int*)(ion_vec_new(sizeof(int))));
-    ion_vec_push((ion_vec_t*)(values), &((int){x}), sizeof(int));
-    ion_vec_push((ion_vec_t*)(values), &((int){y}), sizeof(int));
+    ion_vec_push((ion_vec_t*)(values), &x, sizeof(int));
+    ion_vec_push((ion_vec_t*)(values), &y, sizeof(int));
     if (((values) ? (int)((ion_vec_t*)(values))->len : 0) != 2) {
         ret_val = 1;
         goto epilogue;

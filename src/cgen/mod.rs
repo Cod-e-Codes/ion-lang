@@ -260,16 +260,19 @@ impl Codegen {
         // Vec, slice, and tuple typedefs must precede struct fields that reference them.
         self.emit_vec_slice_tuple_typedefs(program);
 
-        // Emit struct type definitions first so functions can use them.
-        // Skip generic structs - they'll be generated as monomorphized versions
+        // Enums before structs so struct fields can use enum types by value.
+        for e in &program.enums {
+            if e.generics.is_empty() {
+                self.generate_enum_type(e);
+            }
+        }
+
         for s in &program.structs {
             if s.generics.is_empty() {
-                // Non-generic struct - generate directly
                 self.write(&format!("typedef struct {} {{\n", s.name));
                 self.indent_level += 1;
                 for field in &s.fields {
                     self.write_indent();
-                    // Handle arrays specially: in struct fields, arrays must be declared as "type name[size];"
                     let field_decl = match &field.ty {
                         Type::Array { inner, size } => {
                             let base_type = self.type_to_c(inner);
@@ -284,15 +287,6 @@ impl Codegen {
                 self.indent_level -= 1;
                 self.writeln(&format!("}} {};", s.name));
                 self.writeln("");
-            }
-        }
-
-        // Emit enum type definitions
-        // Skip generic enums - they'll be generated as monomorphized versions
-        for e in &program.enums {
-            if e.generics.is_empty() {
-                // Non-generic enum - generate directly
-                self.generate_enum_type(e);
             }
         }
 
@@ -1085,6 +1079,16 @@ impl Codegen {
         match expr {
             IREexpr::Var(name) => self.lookup_var_type(name),
             IREexpr::StringLit(_) => Some(Type::String),
+            IREexpr::FieldAccess { base, field, .. } => {
+                let base_ty = if let IREexpr::Var(name) = base.as_ref() {
+                    self.lookup_var_type(name)?
+                } else {
+                    self.infer_irexpr_type(base)?
+                };
+                let (decl, substitutions) = self.struct_decl_for_type(&base_ty)?;
+                let field_decl = decl.fields.iter().find(|f| f.name == *field)?;
+                Some(Self::substitute_field_types(&field_decl.ty, &substitutions))
+            }
             IREexpr::AddressOf { inner, mutable } => {
                 self.infer_irexpr_type(inner).map(|inner_ty| Type::Ref {
                     inner: Box::new(inner_ty),
@@ -1097,6 +1101,47 @@ impl Codegen {
             },
             _ => None,
         }
+    }
+
+    fn field_access_c_path(&self, expr: &IREexpr) -> Option<String> {
+        match expr {
+            IREexpr::Var(name) => Some(name.clone()),
+            IREexpr::FieldAccess {
+                base,
+                field,
+                is_pointer,
+            } => {
+                let base_path = self.field_access_c_path(base)?;
+                Some(if *is_pointer {
+                    format!("{base_path}->{field}")
+                } else {
+                    format!("{base_path}.{field}")
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Clear a struct field after its owned value was moved out (e.g. `let v = s.items`).
+    fn emit_struct_field_moved_out(&mut self, expr: &IREexpr) {
+        let IREexpr::FieldAccess { .. } = expr else {
+            return;
+        };
+        let Some(path) = self.field_access_c_path(expr) else {
+            return;
+        };
+        let Some(ty) = self.infer_irexpr_type(expr) else {
+            return;
+        };
+        if !self.needs_drop(&ty) {
+            return;
+        }
+        self.write_indent();
+        self.writeln(&format!(
+            "{} = {};",
+            path,
+            self.zero_value_for_scrutinee_payload(&ty)
+        ));
     }
 
     fn is_string_compare_operand(&self, expr: &IREexpr) -> bool {
@@ -1213,6 +1258,9 @@ impl Codegen {
                 {
                     self.scope_mark_moved(name);
                 }
+            }
+            IREexpr::FieldAccess { .. } => {
+                self.emit_struct_field_moved_out(expr);
             }
             IREexpr::StructLit { fields, .. } => {
                 for field in fields {
@@ -4563,6 +4611,11 @@ fn collect_vec_types_from_type(ty: &Type, vec_types: &mut std::collections::Hash
         Type::Channel { elem_type } => {
             collect_vec_types_from_type(elem_type, vec_types);
         }
+        Type::Tuple { elements } => {
+            for elem in elements {
+                collect_vec_types_from_type(elem, vec_types);
+            }
+        }
         _ => {}
     }
 }
@@ -5593,6 +5646,49 @@ fn log_line() {
             c.matches("(void)_result;").count(),
             1,
             "expected single silence for _result in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn vec_push_struct_var_uses_address_of_lvalue() {
+        let src = r#"struct Item { done: bool; }
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    let item: Item = Item { done: false };
+    Vec::push(&mut items, item);
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("ion_vec_push((ion_vec_t*)(items), &item, sizeof(Item))"),
+            "expected address of struct variable in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn struct_field_move_neutralizes_source_field() {
+        let src = r#"struct Item { done: bool; }
+struct Board { items: Vec<Item>; }
+fn take(board: Board) -> Vec<Item> {
+    return board.items;
+}
+fn main() -> int {
+    let board: Board = Board { items: 0 };
+    let taken: Vec<Item> = take(board);
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("board.items = NULL"),
+            "expected moved-out vec field neutralization in:\n{c}"
         );
     }
 

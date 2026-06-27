@@ -67,6 +67,8 @@ CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitiz
 
 **Windows:** Use Git Bash, not WSL. Rebuild release after compiler changes. Stop `ion-lsp` if build fails with "Access is denied".
 
+**Stale binaries:** `test_runner.sh` defaults to `../target/release/ion-compiler`. Rebuild after codegen changes and confirm that path is the binary you just built. Override with `COMPILER=` when your build landed elsewhere (for example a sandbox `CARGO_TARGET_DIR`).
+
 ## Manifest (`test_expectations.tsv`)
 
 Tab-separated columns:

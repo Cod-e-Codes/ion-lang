@@ -1,0 +1,10 @@
+struct Item {
+    done: bool;
+}
+
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    let item: Item = Item { done: false };
+    Vec::push(&mut items, item);
+    return 42;
+}

@@ -193,7 +193,7 @@ On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows cha
 | [examples/hello_world.ion](examples/hello_world.ion) | (use `ion-compiler` only; no stdlib) | Minimal FFI `write()` to stdout |
 | [examples/hello_world_safe.ion](examples/hello_world_safe.ion) | [hello_world_safe.toml](examples/hello_world_safe.toml) or root [ion.toml](ion.toml) | stdlib `io` module |
 | [examples/spawn_channel.ion](examples/spawn_channel.ion) | [spawn_channel.toml](examples/spawn_channel.toml) | `spawn` with cross-thread channels |
-| [examples/http_server.ion](examples/http_server.ion) | [http_server.toml](examples/http_server.toml) | Sockets, FFI, concurrent clients via `spawn` |
+| [examples/http_server.ion](examples/http_server.ion) | [http_server.toml](examples/http_server.toml) | Sockets, FFI, spawn per client (single accept, then exit) |
 | [examples/showcase.ion](examples/showcase.ion) | [showcase.toml](examples/showcase.toml) | Mixed language features |
 | [examples/access_log.ion](examples/access_log.ion) | [access_log.toml](examples/access_log.toml) | Log parsing, spawn, channels, fmt/io |
 | [examples/minimal.ion](examples/minimal.ion) | (transpile-only with `ion-compiler`) | Smallest valid program |

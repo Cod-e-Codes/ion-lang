@@ -121,12 +121,11 @@ int main(void) {
             ret_val = 3;
             goto epilogue;
         }
-        while (1) {
-            uint8_t client_addr[16] = {0};
-            int addrlen = 16;
-            int client_fd = accept(server_fd, &client_addr[0], &addrlen);
-            dispatch_client(client_fd);
-        }
+        uint8_t client_addr[16] = {0};
+        int addrlen = 16;
+        int client_fd = accept(server_fd, &client_addr[0], &addrlen);
+        dispatch_client(client_fd);
+        close(server_fd);
     }
     ret_val = 0;
     goto epilogue;
