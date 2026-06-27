@@ -1,0 +1,8 @@
+fn main() -> int {
+    let get = fn() -> (int, int) { return (1, 2); };
+    let t: (int, int) = get();
+    if t.0 != 1 {
+        return 1;
+    }
+    return 42;
+}

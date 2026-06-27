@@ -13,13 +13,6 @@
 #include <stdint.h>
 #include "ion_runtime.h"
 
-static void* ion_spawn_entry_0(void* arg);
-typedef struct {
-    ion_receiver_t rx;
-    ion_sender_t tx_back;
-} ion_spawn_ctx_0;
-static int ion_fn_lit_0(int x);
-
 typedef struct Vec_int {
     void* data;
     size_t len;
@@ -27,15 +20,15 @@ typedef struct Vec_int {
     size_t elem_size;
 } Vec_int;
 
-typedef struct tuple_int_int {
-    int f0;
-    int f1;
-} tuple_int_int;
-
 typedef struct tuple_ion_sender_t_ion_receiver_t {
     ion_sender_t f0;
     ion_receiver_t f1;
 } tuple_ion_sender_t_ion_receiver_t;
+
+typedef struct tuple_int_int {
+    int f0;
+    int f1;
+} tuple_int_int;
 
 typedef struct Status {
     int tag;
@@ -109,6 +102,13 @@ static ION_MAYBE_UNUSED Result_int_int Result_int_int_Err_new(int arg0) {
     Result_int_int result = { .tag = 1, .data = { .variant_1 = { .arg0 = arg0 } } };
     return result;
 }
+
+static void* ion_spawn_entry_0(void* arg);
+typedef struct {
+    ion_receiver_t rx;
+    ion_sender_t tx_back;
+} ion_spawn_ctx_0;
+static int ion_fn_lit_0(int x);
 
 int add(int ION_MAYBE_UNUSED x, int ION_MAYBE_UNUSED y);
 int multiply(int ION_MAYBE_UNUSED x, int ION_MAYBE_UNUSED y);

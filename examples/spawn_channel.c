@@ -13,16 +13,16 @@
 #include <stdint.h>
 #include "ion_runtime.h"
 
+typedef struct tuple_ion_sender_t_ion_receiver_t {
+    ion_sender_t f0;
+    ion_receiver_t f1;
+} tuple_ion_sender_t_ion_receiver_t;
+
 static void* ion_spawn_entry_0(void* arg);
 typedef struct {
     ion_receiver_t rx;
     ion_sender_t tx_back;
 } ion_spawn_ctx_0;
-
-typedef struct tuple_ion_sender_t_ion_receiver_t {
-    ion_sender_t f0;
-    ion_receiver_t f1;
-} tuple_ion_sender_t_ion_receiver_t;
 
 int main(void);
 int main(void) {

@@ -120,6 +120,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_push_struct_var.ion` - `Vec::push` with a struct variable (address-of lvalue)
 - `test_struct_field_move_vec.ion` - move a `Vec` out of a struct field without double-free
 - `test_tuple_vec_int.ion` - tuple `(Vec<T>, int)` mangling and return
+- `test_tuple_vec_int_epilogue.ion` - tuple return with loop body before epilogue `return`
+- `test_tuple_fn_lit.ion` - fn literal returning a tuple; `ret_val` compound init
 - `test_call_struct_field_move.ion` - struct field moved into a call argument without broken C
 
 ### Modules and FFI

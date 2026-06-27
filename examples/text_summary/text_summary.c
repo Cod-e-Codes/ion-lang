@@ -51,11 +51,11 @@ int main(void);
 void fmt_print_int(int ION_MAYBE_UNUSED n);
 void fmt_println_int(int ION_MAYBE_UNUSED n);
 ion_string_t* fmt_int_to_string(int ION_MAYBE_UNUSED n);
+ReadResult fs_read_to_string_result(ion_string_t* ION_MAYBE_UNUSED path);
 void io_print(ion_string_t* ION_MAYBE_UNUSED s);
 void io_println(ion_string_t* ION_MAYBE_UNUSED s);
 void io_print_str(uint8_t* ION_MAYBE_UNUSED s, int ION_MAYBE_UNUSED len);
 void io_print_int(int ION_MAYBE_UNUSED n);
-ReadResult fs_read_to_string_result(ion_string_t* ION_MAYBE_UNUSED path);
 TextCounts summarize_text(ion_string_t* ION_MAYBE_UNUSED text) {
     TextCounts ret_val = {0};
     int lines = 0;
@@ -190,6 +190,46 @@ epilogue:
         return ret_val;
 }
 
+ReadResult fs_read_to_string_result(ion_string_t* ION_MAYBE_UNUSED path) {
+    ReadResult ret_val = {0};
+    {
+        int fd = open(path->data, 0);
+        if (fd < 0) {
+            ret_val = ReadResult_Err_new((-1));
+            if (path) { ion_string_free(path); }
+            goto epilogue;
+        }
+        ion_string_t* text = ion_string_new();
+        uint8_t buf[256] = {0};
+        int n = read(fd, &buf[0], 256);
+        while (n > 0) {
+            int i = 0;
+            while (i < n) {
+                ion_string_push_byte(text, (unsigned char)(buf[i]));
+                i = (i + 1);
+            }
+            n = read(fd, &buf[0], 256);
+        }
+        if (n < 0) {
+            int _closed = close(fd);
+            (void)_closed;
+            ret_val = ReadResult_Err_new((-2));
+            if (text) { ion_string_free(text); }
+            if (path) { ion_string_free(path); }
+            goto epilogue;
+        }
+        int _closed = close(fd);
+        (void)_closed;
+        ret_val = ReadResult_Ok_new(text);
+        if (path) { ion_string_free(path); }
+        goto epilogue;
+    }
+    if (path) { ion_string_free(path); }
+    goto epilogue;
+epilogue:
+        return ret_val;
+}
+
 void io_print(ion_string_t* ION_MAYBE_UNUSED s) {
     {
         int _result = write(1, s->data, (int)s->len);
@@ -282,45 +322,5 @@ void io_print_int(int ION_MAYBE_UNUSED n) {
     goto epilogue;
 epilogue:
         return;
-}
-
-ReadResult fs_read_to_string_result(ion_string_t* ION_MAYBE_UNUSED path) {
-    ReadResult ret_val = {0};
-    {
-        int fd = open(path->data, 0);
-        if (fd < 0) {
-            ret_val = ReadResult_Err_new((-1));
-            if (path) { ion_string_free(path); }
-            goto epilogue;
-        }
-        ion_string_t* text = ion_string_new();
-        uint8_t buf[256] = {0};
-        int n = read(fd, &buf[0], 256);
-        while (n > 0) {
-            int i = 0;
-            while (i < n) {
-                ion_string_push_byte(text, (unsigned char)(buf[i]));
-                i = (i + 1);
-            }
-            n = read(fd, &buf[0], 256);
-        }
-        if (n < 0) {
-            int _closed = close(fd);
-            (void)_closed;
-            ret_val = ReadResult_Err_new((-2));
-            if (text) { ion_string_free(text); }
-            if (path) { ion_string_free(path); }
-            goto epilogue;
-        }
-        int _closed = close(fd);
-        (void)_closed;
-        ret_val = ReadResult_Ok_new(text);
-        if (path) { ion_string_free(path); }
-        goto epilogue;
-    }
-    if (path) { ion_string_free(path); }
-    goto epilogue;
-epilogue:
-        return ret_val;
 }
 

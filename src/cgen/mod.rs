@@ -3,9 +3,9 @@ mod drop;
 mod types;
 
 use self::types::{
-    fn_type_to_c_decl, fn_type_to_c_function_header, mangle_module_callee, mangle_type_name,
-    resolve_type_alias, substitute_type_params, tuple_type_name, type_to_c_impl,
-    type_to_c_return_type,
+    fn_type_to_c_decl, fn_type_to_c_function_header, format_ret_val_decl, mangle_module_callee,
+    mangle_type_name, resolve_type_alias, ret_val_decl, substitute_type_params, tuple_type_name,
+    type_to_c_impl, type_to_c_return_type,
 };
 
 use crate::ast::{
@@ -485,6 +485,7 @@ impl Codegen {
 
         // Generate function prototypes (forward declarations) for ALL functions
         // This is required for single-file mode where functions may be called before definition
+        let proto_insert_pos = self.output.len();
         for func in &program.functions {
             let param_list = self.format_ir_param_list_c(&func.params);
             if let Some(ret_ty) = func.return_type.as_ref() {
@@ -512,15 +513,7 @@ impl Codegen {
             self.generate_function(function);
         }
 
-        if (!self.spawn_forward_decls.is_empty() || !self.fn_literal_forward_decls.is_empty())
-            && let Some(pos) = self.output.find("#include \"ion_runtime.h\"\n\n")
-        {
-            let insert_at = pos + "#include \"ion_runtime.h\"\n\n".len();
-            let mut forward_decls = self.spawn_forward_decls.clone();
-            forward_decls.push_str(&self.fn_literal_forward_decls);
-            forward_decls.push('\n');
-            self.output.insert_str(insert_at, &forward_decls);
-        }
+        self.insert_spawn_fn_literal_forward_decls(proto_insert_pos);
 
         if !self.spawn_definitions.is_empty() || !self.fn_literal_definitions.is_empty() {
             self.writeln("");
@@ -860,19 +853,12 @@ impl Codegen {
         self.writeln("");
 
         // Generate function implementations (both public and private)
+        let impl_insert_pos = self.output.len();
         for function in &program.functions {
             self.generate_function(function);
         }
 
-        if (!self.spawn_forward_decls.is_empty() || !self.fn_literal_forward_decls.is_empty())
-            && let Some(pos) = self.output.find("#include \"ion_runtime.h\"\n\n")
-        {
-            let insert_at = pos + "#include \"ion_runtime.h\"\n\n".len();
-            let mut forward_decls = self.spawn_forward_decls.clone();
-            forward_decls.push_str(&self.fn_literal_forward_decls);
-            forward_decls.push('\n');
-            self.output.insert_str(insert_at, &forward_decls);
-        }
+        self.insert_spawn_fn_literal_forward_decls(impl_insert_pos);
 
         if !self.spawn_definitions.is_empty() || !self.fn_literal_definitions.is_empty() {
             self.writeln("");
@@ -1516,34 +1502,7 @@ impl Codegen {
         if let Some(ref ty) = function.return_type {
             self.write_indent();
             let resolved_ret = resolve_type_alias(ty, &self.type_aliases);
-            let (ret_var_type, init_value) = match &resolved_ret {
-                Type::Array { inner, .. } => {
-                    (format!("{}*", self.type_to_c(inner)), "0".to_string())
-                }
-                Type::Fn { .. } => (fn_type_to_c_decl(&resolved_ret, "ret_val"), "0".to_string()),
-                Type::Box { .. }
-                | Type::Vec { .. }
-                | Type::String
-                | Type::Channel { .. }
-                | Type::Ref { .. } => (self.type_to_c(&resolved_ret), "0".to_string()),
-                Type::Struct(_) | Type::Enum(_) => {
-                    (self.type_to_c(&resolved_ret), "{0}".to_string())
-                }
-                Type::Tuple { elements } => {
-                    let name = tuple_type_name(elements);
-                    (name.clone(), format!("({name}){{0}}"))
-                }
-                Type::Generic { name, .. } => match name.as_str() {
-                    "Box" | "Vec" => (self.type_to_c(&resolved_ret), "0".to_string()),
-                    _ => (self.type_to_c(&resolved_ret), "{0}".to_string()),
-                },
-                _ => (self.type_to_c(&resolved_ret), "0".to_string()),
-            };
-            if matches!(&resolved_ret, Type::Fn { .. }) {
-                self.writeln(&format!("{} = {};", ret_var_type, init_value));
-            } else {
-                self.writeln(&format!("{} ret_val = {};", ret_var_type, init_value));
-            }
+            self.writeln(&format_ret_val_decl(&ret_val_decl(&resolved_ret)));
         }
 
         self.scope_begin(&[]);
@@ -1665,23 +1624,11 @@ impl Codegen {
         def.push_str(") {\n");
 
         if let Some(ty) = &lit.return_type {
-            let (ret_var_type, init_value) = match ty {
-                Type::Array { inner, .. } => {
-                    (format!("{}*", self.type_to_c(inner)), "0".to_string())
-                }
-                Type::Box { .. }
-                | Type::Vec { .. }
-                | Type::String
-                | Type::Channel { .. }
-                | Type::Ref { .. } => (self.type_to_c(ty), "0".to_string()),
-                Type::Struct(_) | Type::Enum(_) => (self.type_to_c(ty), "{0}".to_string()),
-                Type::Generic { name, .. } => match name.as_str() {
-                    "Box" | "Vec" => (self.type_to_c(ty), "0".to_string()),
-                    _ => (self.type_to_c(ty), "{0}".to_string()),
-                },
-                _ => (self.type_to_c(ty), "0".to_string()),
-            };
-            def.push_str(&format!("    {} ret_val = {};\n", ret_var_type, init_value));
+            let resolved = resolve_type_alias(ty, &self.type_aliases);
+            def.push_str(&format!(
+                "    {}\n",
+                format_ret_val_decl(&ret_val_decl(&resolved))
+            ));
         }
 
         let saved_output = std::mem::take(&mut self.output);
@@ -4809,6 +4756,16 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
 }
 
 impl Codegen {
+    fn insert_spawn_fn_literal_forward_decls(&mut self, insert_at: usize) {
+        if self.spawn_forward_decls.is_empty() && self.fn_literal_forward_decls.is_empty() {
+            return;
+        }
+        let mut forward_decls = self.spawn_forward_decls.clone();
+        forward_decls.push_str(&self.fn_literal_forward_decls);
+        forward_decls.push('\n');
+        self.output.insert_str(insert_at, &forward_decls);
+    }
+
     fn emit_vec_slice_tuple_typedefs(&mut self, program: &IRProgram) {
         let mut vec_types = std::collections::HashSet::new();
         collect_vec_types_impl(program, &mut vec_types);
@@ -5399,6 +5356,46 @@ fn main() -> int { return 0; }"#;
         assert!(
             c.contains("int (*ret_val)(int) = 0"),
             "expected fn pointer ret_val decl in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn tuple_return_ret_val_decl() {
+        let src = r#"struct Item { done: bool; }
+fn pack(items: Vec<Item>) -> (Vec<Item>, int) {
+    let mut open: int = 0;
+    for item in items {
+        if !item.done { open = open + 1; }
+    }
+    return (Vec::new(), open);
+}
+fn main() -> int { return 0; }"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("tuple_Vec_Item_int ret_val = (tuple_Vec_Item_int){0}"),
+            "expected tuple ret_val init in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn fn_literal_tuple_return_ret_val_decl() {
+        let src = r#"fn main() -> int {
+    let get = fn() -> (int, int) { return (1, 2); };
+    let t: (int, int) = get();
+    return t.0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("tuple_int_int ret_val = (tuple_int_int){0}"),
+            "expected fn literal tuple ret_val init in:\n{c}"
         );
     }
 

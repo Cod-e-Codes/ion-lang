@@ -1,0 +1,29 @@
+struct Item {
+    done: bool;
+}
+
+fn pack(items: Vec<Item>) -> (Vec<Item>, int) {
+    let mut rebuilt: Vec<Item> = Vec::new();
+    let mut open: int = 0;
+
+    for item in items {
+        let is_done: bool = item.done;
+        if !is_done {
+            open = open + 1;
+        }
+        Vec::push(&mut rebuilt, item);
+    }
+
+    return (rebuilt, open);
+}
+
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    Vec::push(&mut items, Item { done: false });
+    Vec::push(&mut items, Item { done: true });
+    let t: (Vec<Item>, int) = pack(items);
+    if t.1 != 1 {
+        return 1;
+    }
+    return 42;
+}

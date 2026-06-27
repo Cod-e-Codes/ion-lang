@@ -13,11 +13,6 @@
 #include <stdint.h>
 #include "ion_runtime.h"
 
-static void* ion_spawn_entry_0(void* arg);
-typedef struct {
-    int client_fd;
-} ion_spawn_ctx_0;
-
 typedef struct SockAddrIn {
     uint16_t sin_family;
     uint16_t sin_port;
@@ -34,6 +29,11 @@ extern int recv_sys(int sockfd, uint8_t* buf, int len, int flags);
 extern int send_sys(int sockfd, uint8_t* buf, int len, int flags);
 extern int close(int fd);
 extern uint16_t htons(uint16_t hostshort);
+
+static void* ion_spawn_entry_0(void* arg);
+typedef struct {
+    int client_fd;
+} ion_spawn_ctx_0;
 
 SockAddrIn create_sockaddr_in(uint16_t ION_MAYBE_UNUSED port);
 int handle_client(int ION_MAYBE_UNUSED client_fd);

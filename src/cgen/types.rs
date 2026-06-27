@@ -59,6 +59,66 @@ pub(crate) fn tuple_type_name(elements: &[Type]) -> String {
     format!("tuple_{}", parts.join("_"))
 }
 
+/// C declarator and initializer for a function's synthetic `ret_val`.
+pub(crate) enum RetValDecl {
+    /// Fn-pointer return: declarator already names `ret_val`.
+    FnPtr { decl: String },
+    /// Value return: separate type and initializer.
+    Value { ty: String, init: String },
+}
+
+pub(crate) fn ret_val_decl(resolved: &Type) -> RetValDecl {
+    match resolved {
+        Type::Array { inner, .. } => RetValDecl::Value {
+            ty: format!("{}*", type_to_c_impl(inner)),
+            init: "0".to_string(),
+        },
+        Type::Fn { .. } => RetValDecl::FnPtr {
+            decl: format!("{} = 0", fn_type_to_c_decl(resolved, "ret_val")),
+        },
+        Type::Box { .. }
+        | Type::Vec { .. }
+        | Type::String
+        | Type::Channel { .. }
+        | Type::Ref { .. } => RetValDecl::Value {
+            ty: type_to_c_impl(resolved),
+            init: "0".to_string(),
+        },
+        Type::Struct(_) | Type::Enum(_) => RetValDecl::Value {
+            ty: type_to_c_impl(resolved),
+            init: "{0}".to_string(),
+        },
+        Type::Tuple { elements } => {
+            let name = tuple_type_name(elements);
+            RetValDecl::Value {
+                ty: name.clone(),
+                init: format!("({name}){{0}}"),
+            }
+        }
+        Type::Generic { name, .. } => match name.as_str() {
+            "Box" | "Vec" => RetValDecl::Value {
+                ty: type_to_c_impl(resolved),
+                init: "0".to_string(),
+            },
+            _ => RetValDecl::Value {
+                ty: type_to_c_impl(resolved),
+                init: "{0}".to_string(),
+            },
+        },
+        _ => RetValDecl::Value {
+            ty: type_to_c_impl(resolved),
+            init: "0".to_string(),
+        },
+    }
+}
+
+pub(crate) fn format_ret_val_decl(decl: &RetValDecl) -> String {
+    match decl {
+        RetValDecl::FnPtr { decl } => format!("{decl};"),
+        RetValDecl::Value { ty, init } => format!("{ty} ret_val = {init};"),
+    }
+}
+
 /// Map a module-qualified Ion callee (`io::print_int`) to a unique C symbol (`io_print_int`).
 /// Type-associated builtins (`Box::new`, `Vec::len`, etc.) keep their existing mangling path.
 pub(crate) fn mangle_module_callee(callee: &str) -> Option<String> {

@@ -60,6 +60,9 @@ test_vec_struct.ion	run	2
 test_vec_push_struct_var.ion	run	42
 test_struct_field_move_vec.ion	run	1
 test_tuple_vec_int.ion	run	42
+test_tuple_vec_int_epilogue.ion	run	42
+test_tuple_fn_lit.ion	run	42
+test_tuple_fn_lit.ion	cgen			tuple_int_int ret_val = (tuple_int_int){0}
 test_call_struct_field_move.ion	run	1			
 test_index_i32.ion	run	0			
 test_string_new.ion	run	0			
