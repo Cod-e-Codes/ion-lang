@@ -68,7 +68,9 @@ inside `unsafe` blocks may omit those checks.
 Struct layout is C-oriented and field-order preserving in generated C. Enum
 layout is compiler-generated and should be treated as stable only for C emitted
 by the same Ion compiler/runtime version unless a beta release explicitly
-documents a layout guarantee.
+documents a layout guarantee. Enum literals (`Enum::Variant(...)`) lower to C
+compound initializers (`(Enum_T){ .tag = N, .data = { ... } }`); the compiler
+does not emit per-variant `_new` helper functions.
 
 ## Channels and `spawn`
 

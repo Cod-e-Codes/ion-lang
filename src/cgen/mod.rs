@@ -158,12 +158,6 @@ impl Codegen {
         ));
         self.writeln(" * GNU C (GCC/Clang). Merged stdlib/import code may appear below. */");
         self.writeln("");
-        self.writeln("#ifdef __GNUC__");
-        self.writeln("#define ION_MAYBE_UNUSED __attribute__((unused))");
-        self.writeln("#else");
-        self.writeln("#define ION_MAYBE_UNUSED");
-        self.writeln("#endif");
-        self.writeln("");
     }
 
     fn should_silence_unused_binding(name: &str, ty: &Type) -> bool {
@@ -173,6 +167,59 @@ impl Codegen {
     fn emit_silence_unused_binding(&mut self, name: &str) {
         self.write_indent();
         self.writeln(&format!("(void){name};"));
+    }
+
+    fn enum_variant_index(enum_decl: &EnumDecl, variant_name: &str) -> Option<usize> {
+        enum_decl
+            .variants
+            .iter()
+            .position(|v| v.name == variant_name)
+    }
+
+    fn emit_enum_variant_compound_literal(
+        &mut self,
+        c_type_name: &str,
+        enum_base_name: &str,
+        variant_name: &str,
+        args: &[IREexpr],
+        named_fields: Option<&[(String, IREexpr)]>,
+    ) {
+        let enum_decl = self
+            .enum_map
+            .get(enum_base_name)
+            .cloned()
+            .unwrap_or_else(|| panic!("unknown enum `{enum_base_name}` in enum literal codegen"));
+        let variant_idx = Self::enum_variant_index(&enum_decl, variant_name).unwrap_or_else(|| {
+            panic!("unknown variant `{variant_name}` on enum `{enum_base_name}`")
+        });
+        let variant = &enum_decl.variants[variant_idx];
+        let has_payloads = !variant.payload_types.is_empty() || variant.named_fields.is_some();
+
+        self.write(&format!(
+            "({c_type_name}){{ .tag = {variant_idx}, .data = {{"
+        ));
+        if has_payloads {
+            self.write(&format!(" .variant_{variant_idx} = {{"));
+            if let Some(named_fields) = named_fields {
+                for (i, (field_name, field_expr)) in named_fields.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&format!(" .{field_name} = "));
+                    self.generate_expr(field_expr);
+                }
+            } else {
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&format!(" .arg{i} = "));
+                    self.generate_expr(arg);
+                }
+            }
+            self.write(" }");
+        }
+        self.write(" } }");
     }
 
     fn param_is_byte_ptr(param_ty: &Type) -> bool {
@@ -1036,6 +1083,13 @@ impl Codegen {
         }
     }
 
+    fn scope_register_param_binding(&mut self, name: &str, ty: &Type) {
+        self.scope_register_binding(name, ty);
+        if Self::should_silence_unused_binding(name, ty) {
+            self.emit_silence_unused_binding(name);
+        }
+    }
+
     fn scope_mark_binding_read(&mut self, name: &str) {
         for frame in self.scope_stack.iter_mut().rev() {
             if let Some(binding) = frame.bindings.iter_mut().find(|b| b.name == name) {
@@ -1550,11 +1604,7 @@ impl Codegen {
                     format!("{} {}[{}]", self.type_to_c(inner), param.name, size)
                 }
                 Type::Fn { .. } => fn_type_to_c_decl(&param.ty, &param.name),
-                _ => format!(
-                    "{} ION_MAYBE_UNUSED {}",
-                    self.type_to_c(&param.ty),
-                    param.name
-                ),
+                _ => format!("{} {}", self.type_to_c(&param.ty), param.name),
             })
             .collect::<Vec<_>>()
             .join(", ")
@@ -1613,7 +1663,7 @@ impl Codegen {
 
         self.scope_begin(&[]);
         for param in &function.params {
-            self.scope_register_binding(&param.name, &param.ty);
+            self.scope_register_param_binding(&param.name, &param.ty);
         }
 
         // Generate function body (blocks)
@@ -1756,7 +1806,7 @@ impl Codegen {
 
         self.scope_begin(&[]);
         for param in &lit.params {
-            self.scope_register_binding(&param.name, &param.ty);
+            self.scope_register_param_binding(&param.name, &param.ty);
         }
         self.generate_block(&lit.body);
         self.scope_emit_exit();
@@ -1842,7 +1892,7 @@ impl Codegen {
 
         self.scope_begin(&[]);
         for (name, ty) in &spawn.captures {
-            self.scope_register_binding(name, ty);
+            self.scope_register_param_binding(name, ty);
         }
         self.generate_block(&spawn.body);
         self.scope_emit_exit();
@@ -2656,17 +2706,13 @@ impl Codegen {
                 args,
                 named_fields,
             } => {
-                // Generate enum constructor call: EnumName_VariantName_new(arg1, arg2, ...)
-                // Use type context to get monomorphized name if it's a generic type
                 let monomorphized_enum_name = if let Some(context_ty) = type_context {
-                    // Check if the enum is generic - if so, use the type context (which should be monomorphized)
                     let is_generic = self
                         .enum_map
                         .get(enum_name)
                         .map(|e| !e.generics.is_empty())
                         .unwrap_or(false);
                     if is_generic {
-                        // Use the type context which should already be the monomorphized name
                         self.type_to_c(context_ty)
                     } else {
                         enum_name.clone()
@@ -2674,28 +2720,13 @@ impl Codegen {
                 } else {
                     enum_name.clone()
                 };
-                let constructor_name = format!("{}_{}_new", monomorphized_enum_name, variant);
-                self.write(&constructor_name);
-                self.write("(");
-
-                // Handle struct variants with named fields
-                if let Some(named_fields) = named_fields {
-                    for (i, (_field_name, field_expr)) in named_fields.iter().enumerate() {
-                        if i > 0 {
-                            self.write(", ");
-                        }
-                        self.generate_expr(field_expr);
-                    }
-                } else {
-                    // Handle tuple variants with positional arguments
-                    for (i, arg) in args.iter().enumerate() {
-                        if i > 0 {
-                            self.write(", ");
-                        }
-                        self.generate_expr(arg);
-                    }
-                }
-                self.write(")");
+                self.emit_enum_variant_compound_literal(
+                    &monomorphized_enum_name,
+                    enum_name,
+                    variant,
+                    args,
+                    named_fields.as_deref(),
+                );
             }
             IREexpr::Match {
                 expr,
@@ -3314,73 +3345,6 @@ impl Codegen {
         self.indent_level -= 1;
         self.writeln(&format!("}} {};", enum_name));
         self.writeln("");
-
-        // Generate constructor functions for each variant
-        for (variant_idx, variant) in enum_decl.variants.iter().enumerate() {
-            let constructor_name = format!("{}_{}_new", enum_name, variant.name);
-            self.write(&format!(
-                "static ION_MAYBE_UNUSED {} {}",
-                enum_name, constructor_name
-            ));
-            self.write("(");
-
-            // Handle struct variants with named fields
-            if let Some(ref named_fields) = variant.named_fields {
-                for (i, (field_name, field_ty)) in named_fields.iter().enumerate() {
-                    if i > 0 {
-                        self.write(", ");
-                    }
-                    self.write(&format!("{} {}", self.type_to_c(field_ty), field_name));
-                }
-            } else {
-                // Handle tuple variants with positional arguments
-                for (i, payload_ty) in variant.payload_types.iter().enumerate() {
-                    if i > 0 {
-                        self.write(", ");
-                    }
-                    self.write(&format!("{} arg{}", self.type_to_c(payload_ty), i));
-                }
-            }
-
-            self.writeln(") {");
-            self.indent_level += 1;
-            self.write_indent();
-            self.write(&format!(
-                "{} result = {{ .tag = {}, .data = {{",
-                enum_name, variant_idx
-            ));
-
-            let has_payloads = !variant.payload_types.is_empty() || variant.named_fields.is_some();
-            if has_payloads {
-                self.write(&format!(" .variant_{} = {{", variant_idx));
-
-                // Handle struct variants with named fields
-                if let Some(ref named_fields) = variant.named_fields {
-                    for (i, (field_name, _)) in named_fields.iter().enumerate() {
-                        if i > 0 {
-                            self.write(", ");
-                        }
-                        self.write(&format!(" .{} = {}", field_name, field_name));
-                    }
-                } else {
-                    // Handle tuple variants with positional arguments
-                    for (i, _) in variant.payload_types.iter().enumerate() {
-                        if i > 0 {
-                            self.write(", ");
-                        }
-                        self.write(&format!(" .arg{} = arg{}", i, i));
-                    }
-                }
-
-                self.write(" }");
-            }
-            self.writeln(" } };");
-            self.write_indent();
-            self.writeln("return result;");
-            self.indent_level -= 1;
-            self.writeln("}");
-            self.writeln("");
-        }
     }
 
     fn generate_extern_block(&mut self, extern_block: &ExternBlock) {
@@ -5070,46 +5034,6 @@ impl Codegen {
         self.indent_level -= 1;
         self.writeln(&format!("}} {};", monomorphized_name));
         self.writeln("");
-
-        // Generate constructor functions for each variant
-        for (variant_idx, variant) in decl.variants.iter().enumerate() {
-            let constructor_name = format!("{}_{}_new", monomorphized_name, variant.name);
-            self.write(&format!(
-                "static ION_MAYBE_UNUSED {} {}",
-                monomorphized_name, constructor_name
-            ));
-            self.write("(");
-            for (i, payload_ty) in variant.payload_types.iter().enumerate() {
-                if i > 0 {
-                    self.write(", ");
-                }
-                let substituted_ty = substitute_generic_types(payload_ty, &substitutions);
-                self.write(&format!("{} arg{}", self.type_to_c(&substituted_ty), i));
-            }
-            self.writeln(") {");
-            self.indent_level += 1;
-            self.write_indent();
-            self.write(&format!(
-                "{} result = {{ .tag = {}, .data = {{",
-                monomorphized_name, variant_idx
-            ));
-            if !variant.payload_types.is_empty() {
-                self.write(&format!(" .variant_{} = {{", variant_idx));
-                for (i, _) in variant.payload_types.iter().enumerate() {
-                    if i > 0 {
-                        self.write(", ");
-                    }
-                    self.write(&format!(" .arg{} = arg{}", i, i));
-                }
-                self.write(" }");
-            }
-            self.writeln(" } };");
-            self.write_indent();
-            self.writeln("return result;");
-            self.indent_level -= 1;
-            self.writeln("}");
-            self.writeln("");
-        }
     }
 }
 
@@ -5577,6 +5501,60 @@ fn main() -> int { return 0; }"#;
         assert!(
             c.contains("(void)x;"),
             "expected unused binding silence in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn enum_literal_uses_compound_init_not_constructor() {
+        let src = r#"enum Option {
+    Some(int);
+    None;
+}
+
+fn main() -> int {
+    let x: Option = Option::Some(42);
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("(Option){ .tag = 0, .data = { .variant_0 = { .arg0 = 42 } } }"),
+            "expected compound enum literal in:\n{c}"
+        );
+        assert!(
+            !c.contains("_new("),
+            "expected no enum constructor helpers in:\n{c}"
+        );
+        assert!(
+            !c.contains("ION_MAYBE_UNUSED"),
+            "expected no ION_MAYBE_UNUSED in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn unused_fn_param_silenced_without_maybe_unused_attribute() {
+        let src = r#"fn ignore(x: int) -> int {
+    return 0;
+}
+
+fn main() -> int {
+    return ignore(1);
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            !c.contains("ION_MAYBE_UNUSED"),
+            "expected no ION_MAYBE_UNUSED in:\n{c}"
+        );
+        assert!(
+            c.contains("(void)x;"),
+            "expected unused param silence in:\n{c}"
         );
     }
 

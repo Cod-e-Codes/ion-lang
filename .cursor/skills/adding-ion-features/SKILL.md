@@ -91,6 +91,7 @@ Add new `TypeCheckError` variants only when existing ones can't express the fail
 - `IRBuilder::build` - keep lowering deterministic
 - `cgen` - generated C must compile with `gcc` + `runtime/ion_runtime.c` (or precompiled `.o` via `test_runner.sh`) + `-lpthread`
 - Multi-file: test with `--mode multi` if imports or visibility involved
+- Warning hygiene under `-Wall -Wextra -Werror`: enum literals use compound initializers (not `_new` helpers); unused locals/params use `(void)` silences via binding read tracking (`scope_mark_binding_read`, `emit_frame_cleanup`), with immediate `(void)` for `_`-prefixed or borrow bindings at registration
 
 ### Project build (`src/build/`)
 
