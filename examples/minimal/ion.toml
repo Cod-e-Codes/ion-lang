@@ -1,0 +1,5 @@
+name = "minimal"
+main = "minimal.ion"
+output = "minimal"
+mode = "single"
+out_dir = "target"

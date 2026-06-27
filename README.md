@@ -118,15 +118,15 @@ cargo build --release --bin ion-build
 
 `ion build` transpiles, compiles generated C, links the runtime, and writes the executable under `target/` by default.
 
-Source: [examples/hello_world_safe.ion](examples/hello_world_safe.ion). For a minimal FFI example without stdlib, see [examples/hello_world.ion](examples/hello_world.ion).
+Source: [examples/hello_world_safe/hello_world_safe.ion](examples/hello_world_safe/hello_world_safe.ion). For a minimal FFI example without stdlib, see [examples/hello_world/hello_world.ion](examples/hello_world/hello_world.ion).
 
 ### Advanced: Manual Transpile and Link
 
 For codegen inspection, integration test workflows, or debugging generated C, use `ion-compiler` directly (see [ION_SPEC.md section 10.1](ION_SPEC.md#101-project-build-ion-build)):
 
 ```bash
-./target/release/ion-compiler examples/hello_world.ion
-gcc examples/hello_world.c runtime/ion_runtime.c -o hello_world \
+./target/release/ion-compiler examples/hello_world/hello_world.ion
+gcc examples/hello_world/target/hello_world.c runtime/ion_runtime.c -o hello_world \
     -I. -I.. -Iruntime -I../runtime -lpthread
 ./hello_world
 ```
@@ -137,15 +137,15 @@ The integration harness (`tests/test_runner.sh`) calls `ion-compiler` and `gcc` 
 
 `ion-build` discovers `ion.toml` by walking up from the current directory. Required fields: `name`, `main`, `output`. Common optional fields: `mode` (`single` or `multi`), `out_dir` (default `target`), `cflags`, `ldflags`, `stdlib_paths`, `emit_in_source`.
 
-Root [ion.toml](ion.toml) builds [examples/hello_world_safe.ion](examples/hello_world_safe.ion). Per-example manifests live under [examples/](examples/) (for example `spawn_channel.toml`, `http_server.toml`, `examples/data_lib/ion.toml`). Use `--manifest path` when the file is not named `ion.toml`:
+Root [ion.toml](ion.toml) builds [examples/hello_world_safe/hello_world_safe.ion](examples/hello_world_safe/hello_world_safe.ion). Each example lives in its own directory under [examples/](examples/) with an `ion.toml` manifest. Use `--manifest path` when cwd is not the example directory:
 
 ```powershell
-cd examples
-..\target\release\ion-build.exe build --manifest http_server.toml
-.\target\http_server.exe
+cd examples\spawn_channel
+..\..\target\release\ion-build.exe build
+.\target\spawn_channel.exe
 ```
 
-FFI programs that rename C symbols (for example `recv_sys`) set compile-time `-D` flags in `cflags`, not `ldflags`. See [examples/http_server.toml](examples/http_server.toml).
+FFI programs that rename C symbols (for example `recv_sys`) set compile-time `-D` flags in `cflags`, not `ldflags`. See [examples/http_server/ion.toml](examples/http_server/ion.toml).
 
 ### Multi-file projects
 
@@ -161,53 +161,31 @@ For manual multi-file codegen in the source directory (no `ion-build`), use `ion
 
 ## Example Programs
 
-Top-level `examples/*.ion` files each have a checked-in merged `examples/*.c` codegen snapshot. Regenerate after compiler codegen changes (from repo root, relative paths keep portable banners):
+Each example is a subdirectory of [examples/](examples/) with `ion.toml`. Build with `ion-build` from that directory; generated C and executables go under `target/` (not committed).
 
-```bash
-for f in examples/*.ion; do ./target/release/ion-compiler "$f"; done
-./target/release/ion-compiler examples/text_summary/text_summary.ion
-```
-
-Committed `.c` snapshots are for review and `ion-compiler` regression; building and running examples uses `ion-build` and the manifests below.
-
-**Build and run** (from `examples/` unless noted):
+**Build and run:**
 
 ```powershell
-# Single-file example with a manifest in examples/
-..\target\release\ion-build.exe build --manifest spawn_channel.toml
+cd examples\spawn_channel
+..\..\target\release\ion-build.exe build
 .\target\spawn_channel.exe
-
-# http_server (FFI cflags in http_server.toml)
-..\target\release\ion-build.exe build --manifest http_server.toml
-
-# text_summary (has its own ion.toml; needs sample.txt in that directory)
-cd text_summary
-..\..\target\release\ion-build.exe build
-.\target\text_summary.exe
-
-# todo_demo (interactive stdin commands)
-cd todo_demo
-..\..\target\release\ion-build.exe build
-.\target\todo_demo.exe
 ```
 
 On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows channel/spawn builds add `-lws2_32` automatically.
 
-| File | Manifest | What it demonstrates |
-|------|----------|---------------------|
-| [examples/hello_world.ion](examples/hello_world.ion) | (use `ion-compiler` only; no stdlib) | Minimal FFI `write()` to stdout |
-| [examples/hello_world_safe.ion](examples/hello_world_safe.ion) | [hello_world_safe.toml](examples/hello_world_safe.toml) or root [ion.toml](ion.toml) | stdlib `io` module |
-| [examples/spawn_channel.ion](examples/spawn_channel.ion) | [spawn_channel.toml](examples/spawn_channel.toml) | `spawn` with cross-thread channels |
-| [examples/http_server.ion](examples/http_server.ion) | [http_server.toml](examples/http_server.toml) | Sockets, FFI, spawn per client (single accept, then exit) |
-| [examples/showcase.ion](examples/showcase.ion) | [showcase.toml](examples/showcase.toml) | Mixed language features |
-| [examples/access_log.ion](examples/access_log.ion) | [access_log.toml](examples/access_log.toml) | Log parsing, spawn, channels, fmt/io |
-| [examples/minimal.ion](examples/minimal.ion) | (transpile-only with `ion-compiler`) | Smallest valid program |
-| [examples/channel_worker.ion](examples/channel_worker.ion) | [channel_worker.toml](examples/channel_worker.toml) | Channel worker |
-| [examples/text_summary/text_summary.ion](examples/text_summary/text_summary.ion) | [text_summary/ion.toml](examples/text_summary/ion.toml) | `fs` read, string iteration, counts |
-| [examples/todo_demo/todo_demo.ion](examples/todo_demo/todo_demo.ion) | [todo_demo/ion.toml](examples/todo_demo/ion.toml) | Interactive todo list: `Vec` of structs with `String`, stdin via FFI `read`; see [todo_demo/README.md](examples/todo_demo/README.md) |
-| [examples/data_lib/main.ion](examples/data_lib/main.ion) | [data_lib/ion.toml](examples/data_lib/ion.toml) | Multi-module library; see [data_lib/README.md](examples/data_lib/README.md) |
-
-`examples/data_lib/` and `examples/todo_demo/` keep `.ion` sources and manifests only; `ion-build` writes under each project's `target/` (not committed).
+| Directory | What it demonstrates |
+|-----------|---------------------|
+| [hello_world/](examples/hello_world/) | Minimal FFI `write()` to stdout (no stdlib) |
+| [hello_world_safe/](examples/hello_world_safe/) | stdlib `io` module; also built by root [ion.toml](ion.toml) |
+| [minimal/](examples/minimal/) | Smallest valid program |
+| [spawn_channel/](examples/spawn_channel/) | `spawn` with cross-thread channels |
+| [channel_worker/](examples/channel_worker/) | Channel worker |
+| [showcase/](examples/showcase/) | Mixed language features |
+| [access_log/](examples/access_log/) | Log parsing, spawn, channels, fmt/io |
+| [http_server/](examples/http_server/) | Sockets FFI, spawn per client, stdin `quit` to stop; see [http_server/README.md](examples/http_server/README.md) |
+| [text_summary/](examples/text_summary/) | `fs` read, string iteration, counts |
+| [todo_demo/](examples/todo_demo/) | Interactive todo list (`Vec` of structs, stdin); see [todo_demo/README.md](examples/todo_demo/README.md) |
+| [data_lib/](examples/data_lib/) | Multi-module library; see [data_lib/README.md](examples/data_lib/README.md) |
 
 ## Project Structure
 

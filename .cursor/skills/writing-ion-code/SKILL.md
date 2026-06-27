@@ -45,7 +45,7 @@ For syntax templates and anti-patterns, see [references/verified-patterns.md](re
 
 ## Minimal program (stdlib I/O)
 
-From [examples/hello_world_safe.ion](../../../examples/hello_world_safe.ion):
+From [examples/hello_world_safe/hello_world_safe.ion](../../../examples/hello_world_safe/hello_world_safe.ion):
 
 ```ion
 import "stdlib/io.ion" as io;
@@ -100,7 +100,7 @@ Tuple values (flat only, no nesting): `let t: (int, int) = (1, 2);` then `t.0`, 
 
 **Channels and spawn**
 
-From [examples/spawn_channel.ion](../../../examples/spawn_channel.ion):
+From [examples/spawn_channel/spawn_channel.ion](../../../examples/spawn_channel/spawn_channel.ion):
 
 ```ion
 let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
@@ -154,12 +154,13 @@ Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (define enu
 
 ## Build and verify
 
-With `ion.toml` in the project or example directory (or `examples/*.toml` with `--manifest`):
+With `ion.toml` in the example directory:
 
 ```powershell
 cargo build --release --bin ion-build
-cd examples   # or example subdirectory with ion.toml
-..\target\release\ion-build.exe build --manifest spawn_channel.toml
+cd examples\spawn_channel
+..\..\target\release\ion-build.exe build
+.\target\spawn_channel.exe
 .\target\spawn_channel.exe
 echo $LASTEXITCODE
 ```

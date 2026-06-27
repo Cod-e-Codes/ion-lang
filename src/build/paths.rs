@@ -257,9 +257,9 @@ mod tests {
     #[test]
     fn portable_source_label_strips_absolute_path_to_repo_relative() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let abs = root.join("examples/hello_world_safe.ion");
+        let abs = root.join("examples/hello_world_safe/hello_world_safe.ion");
         let label = portable_source_label(&abs);
-        assert_eq!(label, "examples/hello_world_safe.ion");
+        assert_eq!(label, "examples/hello_world_safe/hello_world_safe.ion");
         assert!(!label.contains("Users"));
     }
 

@@ -23,21 +23,9 @@ target/
 # ------------------------------------
 # 4. Ion-Specific Generated Files
 # ------------------------------------
-# Ignore compiled binaries in examples
-examples/hello_world
-examples/hello_world_safe
-examples/http_server
-examples/minimal
-examples/showcase
-
-# Ion-generated C and object files (Uncomment if you generate these files in your project root)
-# *.c
-# *.o
-
-# Do NOT ignore .c or .ion source files in examples
-!examples/*.c
-!examples/**/*.c
-!examples/*.ion
+examples/**/target/
+examples/**/*.c
+examples/**/*.o
 
 # ------------------------------------
 # 5. Editor / OS Files

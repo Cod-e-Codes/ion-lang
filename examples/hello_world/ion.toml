@@ -1,5 +1,5 @@
 name = "hello_world"
-main = "examples/hello_world_safe/hello_world_safe.ion"
+main = "hello_world.ion"
 output = "hello_world"
 mode = "single"
 out_dir = "target"

@@ -1196,7 +1196,7 @@ cargo build --release --bin ion-build
 .\target\release\ion-build.exe build
 ```
 
-Manifest discovery walks upward from the current directory for a file named `ion.toml`. To use another filename (for example `examples/http_server.toml`), pass `--manifest <path>`; the manifest's parent directory is the project root and `main` paths are relative to that directory.
+Manifest discovery walks upward from the current directory for a file named `ion.toml`. Pass `--manifest <path>` when cwd is not the example directory; the manifest's parent directory is the project root and `main` paths are relative to that directory.
 
 `ion-compiler` remains available for codegen inspection, LSP internals, and integration tests that grep `.c` output. It does not require `ion.toml`.
 

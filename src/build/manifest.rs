@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(manifest.name, "hello_world");
         assert_eq!(
             manifest.main,
-            PathBuf::from("examples/hello_world_safe.ion")
+            PathBuf::from("examples/hello_world_safe/hello_world_safe.ion")
         );
         assert_eq!(manifest.mode, BuildMode::Single);
     }

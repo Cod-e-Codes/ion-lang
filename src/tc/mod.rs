@@ -4914,7 +4914,7 @@ fn greet() -> int {
         use crate::compiler::Compiler;
         use std::path::Path;
 
-        let path = Path::new("examples/access_log.ion");
+        let path = Path::new("examples/access_log/access_log.ion");
         let src = std::fs::read_to_string(path).expect("access_log.ion");
         let tokens = crate::lexer::Lexer::new(&src).tokenize().unwrap();
         let ast = parser::Parser::new(tokens).parse().unwrap();
@@ -5029,7 +5029,7 @@ fn main() -> int {
     return 0;
 }
 "#;
-        let path = Path::new("examples/access_log.ion");
+        let path = Path::new("examples/access_log/access_log.ion");
         let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
         let ast = parser::Parser::new(tokens).parse().unwrap();
         let mut compiler = Compiler::new();

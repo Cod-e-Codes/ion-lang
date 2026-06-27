@@ -102,7 +102,7 @@ Read these when the task matches:
 1. **Spec first** - If semantics change, update `ION_SPEC.md` before or alongside code.
 2. **Minimal diff** - Match existing patterns in the module you're editing; don't refactor adjacent code.
 3. **Test both paths** - Positive compile+run tests and negative compile-error tests where applicable.
-4. **Rebuild release** - Integration harness defaults to `target/release/ion-compiler`. After codegen changes, rebuild before `test_runner.sh` or regenerating `examples/*.c`. Confirm the binary timestamp matches your build; a stale `target/release/ion-compiler` can pass an old harness run or fail on new tests. Cursor agent shells may set `CARGO_TARGET_DIR` outside the repo; point `COMPILER=` at the binary you just built, or unset `CARGO_TARGET_DIR` and rebuild into `target/release/`.
+4. **Rebuild release** - Integration harness defaults to `target/release/ion-compiler`. After codegen changes, rebuild before `test_runner.sh` or rebuilding examples.
 
 ## Common pitfalls
 
