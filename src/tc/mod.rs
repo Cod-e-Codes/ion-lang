@@ -5021,7 +5021,7 @@ fn classify(code: int) -> int {
         use std::path::Path;
 
         let src = r#"
-import "../stdlib/io.ion" as io;
+import "stdlib/io.ion" as io;
 
 fn main() -> int {
     let s: String = String::from("hi");
@@ -5032,7 +5032,8 @@ fn main() -> int {
         let path = Path::new("examples/access_log/access_log.ion");
         let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
         let ast = parser::Parser::new(tokens).parse().unwrap();
-        let mut compiler = Compiler::new();
+        let (stdlib_paths, project_root) = crate::build::discover_import_config(path);
+        let mut compiler = Compiler::with_import_config(stdlib_paths, project_root);
         let _ = compiler.load_imports(path, &ast.imports);
         let program = compiler.merge_modules(&ast, path);
         let mut checker = TypeChecker::new();
