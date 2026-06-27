@@ -95,6 +95,10 @@ pub enum IREexpr {
     Lit(i64),
     BoolLiteral(bool),
     FloatLiteral(f64),
+    IntLimit {
+        ty: Type,
+        max: bool,
+    },
     Var(String),
     AddressOf {
         inner: Box<IREexpr>,
@@ -810,6 +814,17 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
         Expr::Lit(lit_expr) => IREexpr::Lit(lit_expr.value),
         Expr::BoolLiteral(bool_expr) => IREexpr::BoolLiteral(bool_expr.value),
         Expr::FloatLiteral(float_expr) => IREexpr::FloatLiteral(float_expr.value),
+        Expr::TypeConst(type_const) => {
+            let ty = crate::integer_limits::resolve_integer_limit(
+                &type_const.type_name,
+                &type_const.member,
+            )
+            .unwrap_or(Type::Int);
+            IREexpr::IntLimit {
+                ty,
+                max: type_const.member == "MAX",
+            }
+        }
         Expr::Var(var_expr) => IREexpr::Var(var_expr.name.clone()),
         Expr::Ref(ref_expr) => {
             // Reference expression: &x or &mut x
@@ -1376,6 +1391,7 @@ fn rewrite_generic_calls_in_expr(
             );
         }
         IREexpr::Lit(_)
+        | IREexpr::IntLimit { .. }
         | IREexpr::BoolLiteral(_)
         | IREexpr::FloatLiteral(_)
         | IREexpr::Var(_)
@@ -1387,6 +1403,7 @@ fn infer_ir_expr_type(expr: &IREexpr, var_types: &HashMap<String, Type>) -> Opti
     match expr {
         IREexpr::Var(name) => var_types.get(name).cloned(),
         IREexpr::Lit(_) => Some(Type::Int),
+        IREexpr::IntLimit { ty, .. } => Some(ty.clone()),
         IREexpr::BoolLiteral(_) => Some(Type::Bool),
         IREexpr::FloatLiteral(_) => Some(Type::F64),
         IREexpr::StringLit(_) => Some(Type::String),
@@ -1757,6 +1774,10 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             value: Box::new(substitute_types_in_expr(value, substitutions)),
         },
         IREexpr::Lit(v) => IREexpr::Lit(*v),
+        IREexpr::IntLimit { ty, max } => IREexpr::IntLimit {
+            ty: substitute_type(ty, substitutions),
+            max: *max,
+        },
         IREexpr::BoolLiteral(v) => IREexpr::BoolLiteral(*v),
         IREexpr::FloatLiteral(v) => IREexpr::FloatLiteral(*v),
         IREexpr::Var(v) => IREexpr::Var(v.clone()),

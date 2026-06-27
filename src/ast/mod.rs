@@ -286,6 +286,14 @@ pub enum Expr {
     Cast(CastExpr),
     Assign(AssignExpr),
     FnLiteral(FnLiteralExpr),
+    TypeConst(TypeConstExpr),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeConstExpr {
+    pub type_name: String,
+    pub member: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

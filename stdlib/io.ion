@@ -45,7 +45,7 @@ pub fn print_int(n: int) {
 
     if value < 0 {
         negative = true;
-        if value == -2147483648 {
+        if value == int::MIN {
             unsafe {
                 let _result: int = write(1, "-2147483648", 11);
             }

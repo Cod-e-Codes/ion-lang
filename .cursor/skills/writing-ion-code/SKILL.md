@@ -65,6 +65,14 @@ Import paths like `import "stdlib/io.ion" as io;` resolve via stdlib search path
 ```ion
 let x: int = 10;
 let mut v: Vec<int> = Vec::new();
+let items: Vec<MyStruct> = Vec::new(); // element type from annotation
+```
+
+**Integer limits**
+
+```ion
+if n == int::MIN { ... }
+let cap: int = int::MAX;
 ```
 
 **Structs and enums**

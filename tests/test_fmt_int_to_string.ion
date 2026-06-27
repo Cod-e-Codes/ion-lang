@@ -1,4 +1,4 @@
-import "../stdlib/fmt.ion" as fmt;
+import "stdlib/fmt.ion" as fmt;
 
 fn main() -> int {
     let zero: String = fmt::int_to_string(0);
@@ -13,9 +13,12 @@ fn main() -> int {
     if neg != String::from("-99") {
         return 3;
     }
-    let min: String = fmt::int_to_string(-2147483648);
+    let min: String = fmt::int_to_string(int::MIN);
     if min != String::from("-2147483648") {
         return 4;
+    }
+    if int::MAX != 2147483647 {
+        return 5;
     }
     return 0;
 }

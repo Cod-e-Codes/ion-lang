@@ -33,7 +33,7 @@ pub fn int_to_string(n: int) -> String {
 
     if value < 0 {
         negative = true;
-        if value == -2147483648 {
+        if value == int::MIN {
             return String::from("-2147483648");
         }
         value = 0 - value;

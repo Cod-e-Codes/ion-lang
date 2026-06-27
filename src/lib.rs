@@ -2,6 +2,7 @@ pub mod ast;
 pub mod build;
 pub mod cgen;
 pub mod compiler;
+pub mod integer_limits;
 pub mod ir;
 pub mod lexer;
 pub mod lsp;

@@ -2265,8 +2265,17 @@ impl Codegen {
                     self.generate_expr(operand);
                 }
                 UnOp::Neg => {
-                    self.write("-");
-                    self.generate_expr(operand);
+                    if let IREexpr::Lit(v) = operand.as_ref() {
+                        if *v == 2147483647i64 + 1 {
+                            self.write(&crate::cgen::types::c_int_limit(&Type::Int, false));
+                        } else {
+                            self.write("-");
+                            self.generate_expr(operand);
+                        }
+                    } else {
+                        self.write("-");
+                        self.generate_expr(operand);
+                    }
                 }
             },
             _ => {
@@ -2280,6 +2289,9 @@ impl Codegen {
         match expr {
             IREexpr::Lit(value) => {
                 self.write(&value.to_string());
+            }
+            IREexpr::IntLimit { ty, max } => {
+                self.write(&crate::cgen::types::c_int_limit(ty, *max));
             }
             IREexpr::BoolLiteral(value) => {
                 // Boolean literals: true -> 1, false -> 0
@@ -2319,6 +2331,12 @@ impl Codegen {
                     self.write(")");
                 }
                 UnOp::Neg => {
+                    if let IREexpr::Lit(v) = operand.as_ref()
+                        && *v == 2147483647i64 + 1
+                    {
+                        self.write(&crate::cgen::types::c_int_limit(&Type::Int, false));
+                        return;
+                    }
                     self.write("(-");
                     self.generate_expr(operand);
                     self.write(")");
@@ -4176,6 +4194,7 @@ fn collect_slice_types_from_expr(
 ) {
     match expr {
         IREexpr::Lit(_)
+        | IREexpr::IntLimit { .. }
         | IREexpr::BoolLiteral(_)
         | IREexpr::FloatLiteral(_)
         | IREexpr::Var(_)
@@ -4474,6 +4493,7 @@ fn collect_tuple_types_from_expr(
             collect_tuple_types_from_expr(value, tuple_types);
         }
         IREexpr::Lit(_)
+        | IREexpr::IntLimit { .. }
         | IREexpr::BoolLiteral(_)
         | IREexpr::FloatLiteral(_)
         | IREexpr::Var(_)
@@ -4604,6 +4624,7 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
     match expr {
         IREexpr::Var(_)
         | IREexpr::Lit(_)
+        | IREexpr::IntLimit { .. }
         | IREexpr::BoolLiteral(_)
         | IREexpr::FloatLiteral(_)
         | IREexpr::StringLit(_) => {}
@@ -5127,6 +5148,7 @@ fn collect_generic_from_expr(
     match expr {
         IREexpr::Var(_)
         | IREexpr::Lit(_)
+        | IREexpr::IntLimit { .. }
         | IREexpr::BoolLiteral(_)
         | IREexpr::FloatLiteral(_)
         | IREexpr::StringLit(_) => {}

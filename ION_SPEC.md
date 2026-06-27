@@ -488,6 +488,8 @@ Ion includes the following primitive types:
 - Boolean: `bool`
 - Unit / void: `void` (function return type with no value)
 
+Each integer primitive exposes compile-time limits as `Type::MIN` and `Type::MAX` (for example `int::MIN`, `i32::MAX`, `u8::MIN`). These lower to C-safe literals (avoiding `-2147483648`-style unary overflow in generated C).
+
 Additional built-in generic types:
 
 - `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`)

@@ -83,7 +83,7 @@ void io_print_int(int ION_MAYBE_UNUSED n) {
     }
     if (value < 0) {
         negative = 1;
-        if (value == (-2147483648)) {
+        if (value == (0 - 2147483647 - 1)) {
             {
                 int _result = write(1, (uint8_t*)"-2147483648", 11);
                 (void)_result;

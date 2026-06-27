@@ -217,7 +217,6 @@ impl TypeChecker {
                     span: call_expr.span,
                 });
             }
-            let vec_ty = self.check_expr(&call_expr.args[0])?;
             let index_ty = self.check_expr(&call_expr.args[1])?;
             if !self.is_integer_type(&index_ty) {
                 return Err(TypeCheckError::TypeMismatch {
@@ -226,24 +225,28 @@ impl TypeChecker {
                     span: call_expr.args[1].span(),
                 });
             }
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: false,
-            } = vec_ty
-                && let Type::Vec { ref elem_type } = **inner_ty
-            {
-                if self.enums.contains_key("Option") {
-                    return Ok(Some(Type::Generic {
-                        name: "Option".to_string(),
-                        params: vec![(**elem_type).clone()],
-                    }));
-                } else {
-                    return Ok(Some(Type::Generic {
-                        name: "Option".to_string(),
-                        params: vec![Type::Int],
-                    }));
+
+            let elem_type = self.vec_elem_type_from_receiver(&call_expr.args[0]).or_else(|| {
+                let vec_ty = self.check_expr(&call_expr.args[0]).ok()?;
+                if let Type::Ref {
+                    inner,
+                    mutable: false,
+                } = vec_ty
+                    && let Type::Vec { elem_type } = *inner
+                {
+                    return Some(*elem_type);
                 }
+                None
+            });
+
+            if let Some(elem_type) = elem_type {
+                let resolved_elem = self.resolve_type_name(&elem_type)?;
+                return Ok(Some(Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![resolved_elem],
+                }));
             }
+            let vec_ty = self.check_expr(&call_expr.args[0])?;
             return Err(TypeCheckError::TypeMismatch {
                 expected: "&Vec<T>".to_string(),
                 got: type_to_string(&vec_ty),
@@ -424,5 +427,17 @@ impl TypeChecker {
 
         // Not a built-in function
         Ok(None)
+    }
+
+    /// Element type for `&vec` when `vec` is a local binding (for-loop temps keep full `Vec<T>`).
+    fn vec_elem_type_from_receiver(&self, receiver: &Expr) -> Option<Type> {
+        if let Expr::Ref(r) = receiver
+            && let Expr::Var(v) = r.inner.as_ref()
+            && let Some(info) = self.variables.get(&v.name)
+            && let Type::Vec { elem_type } = &info.ty
+        {
+            return Some((**elem_type).clone());
+        }
+        None
     }
 }

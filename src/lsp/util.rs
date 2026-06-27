@@ -50,6 +50,16 @@ pub const BUILTIN_TYPE_MEMBERS: &[(&str, &[&str])] = &[
     ),
     ("String", &["new", "from", "len", "push_str", "push_byte"]),
     ("Box", &["new", "unwrap"]),
+    ("int", &["MIN", "MAX"]),
+    ("i8", &["MIN", "MAX"]),
+    ("i16", &["MIN", "MAX"]),
+    ("i32", &["MIN", "MAX"]),
+    ("i64", &["MIN", "MAX"]),
+    ("u8", &["MIN", "MAX"]),
+    ("u16", &["MIN", "MAX"]),
+    ("u32", &["MIN", "MAX"]),
+    ("u64", &["MIN", "MAX"]),
+    ("uint", &["MIN", "MAX"]),
 ];
 
 pub fn span_to_range(span: &Span) -> Range {

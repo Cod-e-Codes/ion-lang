@@ -348,3 +348,30 @@ pub(crate) fn type_to_c_return_type(ty: &Type) -> String {
         _ => type_to_c_impl(ty),
     }
 }
+
+/// C-safe literal for `Type::MIN` / `Type::MAX` (avoids `-2147483648`-style overflow in C).
+pub(crate) fn c_int_limit(ty: &Type, max: bool) -> String {
+    match (ty, max) {
+        (Type::Int | Type::I32, false) => "(0 - 2147483647 - 1)".to_string(),
+        (Type::Int | Type::I32, true) => "2147483647".to_string(),
+        (Type::I8, false) => "(-128)".to_string(),
+        (Type::I8, true) => "127".to_string(),
+        (Type::I16, false) => "(-32768)".to_string(),
+        (Type::I16, true) => "32767".to_string(),
+        (Type::I64, false) => {
+            "((int64_t)0 - (int64_t)9223372036854775807LL - (int64_t)1)".to_string()
+        }
+        (Type::I64, true) => "9223372036854775807LL".to_string(),
+        (Type::U8, false)
+        | (Type::U16, false)
+        | (Type::U32, false)
+        | (Type::U64, false)
+        | (Type::UInt, false) => "0".to_string(),
+        (Type::U8, true) => "255".to_string(),
+        (Type::U16, true) => "65535".to_string(),
+        (Type::U32, true) => "4294967295U".to_string(),
+        (Type::U64, true) => "18446744073709551615ULL".to_string(),
+        (Type::UInt, true) => "4294967295U".to_string(),
+        _ => "0".to_string(),
+    }
+}

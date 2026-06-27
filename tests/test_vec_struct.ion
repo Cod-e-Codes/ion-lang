@@ -1,0 +1,21 @@
+struct Item {
+    done: bool;
+}
+
+fn count_open(items: Vec<Item>) -> int {
+    let mut open: int = 0;
+    for item in items {
+        if !item.done {
+            open = open + 1;
+        }
+    }
+    return open;
+}
+
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    Vec::push(&mut items, Item { done: false });
+    Vec::push(&mut items, Item { done: true });
+    Vec::push(&mut items, Item { done: false });
+    return count_open(items);
+}

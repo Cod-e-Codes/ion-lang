@@ -125,6 +125,7 @@ impl TypeChecker {
             Expr::Lit(_) => Ok(()),          // Literals don't move anything
             Expr::BoolLiteral(_) => Ok(()),  // Boolean literals don't move anything
             Expr::FloatLiteral(_) => Ok(()), // Float literals don't move anything
+            Expr::TypeConst(_) => Ok(()),
             Expr::Var(var_expr) => {
                 if self.functions.contains_key(&var_expr.name)
                     || self.extern_functions.contains_key(&var_expr.name)

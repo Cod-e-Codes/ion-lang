@@ -2400,6 +2400,10 @@ impl Parser {
             false
         };
 
+        if next_is_colon_colon && let Some(expr) = self.try_parse_integer_limit_expr(&kind, span)? {
+            return Ok(expr);
+        }
+
         // If it's a keyword followed by ::, treat it as a function call
         if next_is_colon_colon {
             let keyword_name = match &kind {
@@ -2576,6 +2580,14 @@ impl Parser {
                 } else {
                     false
                 };
+
+                if name == "u8"
+                    && next_is_colon_colon
+                    && let Some(expr) =
+                        self.try_parse_integer_limit_expr(&TokenKind::Ident(name.clone()), span)?
+                {
+                    return Ok(expr);
+                }
 
                 // Heuristic: avoid treating `if x { ... }` or `match x { ... }` as a struct literal.
                 let prev_is_if = if self.current > 0 {
@@ -3038,6 +3050,58 @@ impl Parser {
         self.import_aliases.contains(name) || matches!(name, "Box" | "Vec" | "String")
     }
 
+    fn integer_type_keyword_name(kind: &TokenKind) -> Option<&'static str> {
+        match kind {
+            TokenKind::Int => Some("int"),
+            TokenKind::I8 => Some("i8"),
+            TokenKind::I16 => Some("i16"),
+            TokenKind::I32 => Some("i32"),
+            TokenKind::I64 => Some("i64"),
+            TokenKind::U16 => Some("u16"),
+            TokenKind::U32 => Some("u32"),
+            TokenKind::U64 => Some("u64"),
+            TokenKind::UInt => Some("uint"),
+            TokenKind::Ident(name) if name == "u8" => Some("u8"),
+            _ => None,
+        }
+    }
+
+    fn try_parse_integer_limit_expr(
+        &mut self,
+        kind: &TokenKind,
+        span: Span,
+    ) -> Result<Option<Expr>, ParseError> {
+        let type_name = match Self::integer_type_keyword_name(kind) {
+            Some(name) => name,
+            None => return Ok(None),
+        };
+        if self.current + 3 >= self.tokens.len() {
+            return Ok(None);
+        }
+        let TokenKind::Ident(member) = &self.tokens[self.current + 3].kind else {
+            return Ok(None);
+        };
+        if member != "MIN" && member != "MAX" {
+            return Ok(None);
+        }
+        if self.current + 4 < self.tokens.len()
+            && matches!(self.tokens[self.current + 4].kind, TokenKind::LParen)
+        {
+            return Ok(None);
+        }
+        let member_name = member.clone();
+        self.advance(); // type keyword
+        self.advance(); // :
+        self.advance(); // :
+        let member_span = Span::from_token(&self.tokens[self.current]);
+        self.advance(); // MIN or MAX
+        Ok(Some(Expr::TypeConst(TypeConstExpr {
+            type_name: type_name.to_string(),
+            member: member_name,
+            span: span.merge(&member_span),
+        })))
+    }
+
     fn is_at_end(&self) -> bool {
         matches!(self.peek().kind, TokenKind::EOF)
     }
@@ -3088,6 +3152,17 @@ mod tests {
     fn parse_with_source(src: &str) -> Program {
         let tokens = Lexer::new(src).tokenize().unwrap();
         Parser::with_source(tokens, src).parse().unwrap()
+    }
+
+    #[test]
+    fn parses_integer_type_limits() {
+        parse_with_source(
+            r#"fn main() -> int {
+    let x: int = int::MIN;
+    let y: int = int::MAX;
+    return x + y;
+}"#,
+        );
     }
 
     #[test]
@@ -3202,6 +3277,7 @@ impl HasSpan for Expr {
             Expr::Cast(e) => e.span,
             Expr::Assign(e) => e.span,
             Expr::FnLiteral(e) => e.span,
+            Expr::TypeConst(e) => e.span,
         }
     }
 }

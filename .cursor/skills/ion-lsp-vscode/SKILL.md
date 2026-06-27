@@ -68,7 +68,7 @@ Adjust path for OS (no `.exe` on Linux/macOS).
 3. **Type-check** - `tc::TypeChecker::check_program_collecting_with_source` on merged program, symbols seeded from buffer AST (`check_program_collecting` for unit tests)
 4. Publish diagnostics from lexer, parser, import resolution, or type-check errors
 5. **Hover** - expression types, symbol docs, builtin signatures
-6. **Completion** - prefix-filtered; context-aware for `alias::` and `Type.` / `expr.`
+6. **Completion** - prefix-filtered; context-aware for `alias::` and `Type.` / `expr.` (`int`, `i8`-`i64`, `u8`-`u64`, `uint` expose `MIN`/`MAX` via `BUILTIN_TYPE_MEMBERS` in `util.rs`)
 7. **Go to definition** - variables, calls, methods, fields, variants, type aliases; cross-file via `module_paths`
 8. **References**, **document symbols**, **signature help**, **semantic tokens**
 9. **`did_change_watched_files`** - re-check open files whose import dependencies changed

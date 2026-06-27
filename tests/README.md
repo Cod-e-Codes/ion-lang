@@ -116,6 +116,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_get_set.ion` - Vec get and set operations
 - `test_vec_capacity.ion` - Vec capacity management
 - `test_vec_i32.ion` - `Vec<i32>` with annotated `Vec::new`, `i32` indices
+- `test_vec_struct.ion` - `Vec` with struct elements, annotated `Vec::new`, and `for` iteration
 
 ### Modules and FFI
 - `test_module_basic.ion` - Module system and imports
@@ -223,7 +224,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_match_guard.ion` - Match arms with `if` guards
 - `test_generic_field_access.ion` - Field access on generic struct values
 - `test_io_print_int.ion` - `io::print_int` decimal output
-- `test_fmt_int_to_string.ion` - `fmt::int_to_string` decimal output (`0`, positive, negative, `INT_MIN`)
+- `test_fmt_int_to_string.ion` - `fmt::int_to_string` decimal output (`0`, positive, negative, `int::MIN`)
 - `test_fmt_println_int.ion` - `fmt::println_int` via stdlib merge; codegen uses `io_print_int` in `fmt_print_int`
 - `test_fs_read.ion` - `fs::read_to_string_result` reads `fixtures/small.txt` (exit 80)
 

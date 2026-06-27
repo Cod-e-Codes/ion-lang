@@ -38,6 +38,7 @@ impl HasSpan for Expr {
             Expr::Cast(e) => e.span,
             Expr::Assign(e) => e.span,
             Expr::FnLiteral(e) => e.span,
+            Expr::TypeConst(e) => e.span,
         }
     }
 }
@@ -1322,16 +1323,15 @@ impl TypeChecker {
                 }
 
                 if let Some(ref init) = let_stmt.init {
-                    // First check the expression type (this verifies variables are Valid)
-                    let init_type = self.check_expr(init)?;
-
-                    // Resolve type annotation - convert Struct(name) to Enum(name) if it's actually an enum
-                    // Also resolve type aliases
+                    // Resolve type annotation first so Vec::new() can infer element type.
                     let resolved_type_ann = if let Some(ref type_ann) = let_stmt.type_ann {
                         Some(self.resolve_type_name(type_ann)?)
                     } else {
                         None
                     };
+
+                    // First check the expression type (this verifies variables are Valid)
+                    let init_type = self.check_let_init_type(init, resolved_type_ann.as_ref())?;
 
                     if let Some(ref type_ann) = resolved_type_ann {
                         // Resolve init_type aliases too
@@ -1784,7 +1784,8 @@ impl TypeChecker {
                 //   }
 
                 // Check iterable type - must be Vec<T>, String, or Array<T>
-                let iterable_type = self.check_expr(&for_stmt.iterable)?;
+                let iterable_raw = self.check_expr(&for_stmt.iterable)?;
+                let iterable_type = self.resolve_type_name(&iterable_raw)?;
                 let elem_type = match iterable_type {
                     Type::Vec { ref elem_type } => (**elem_type).clone(),
                     Type::String => Type::U8,
@@ -1814,7 +1815,7 @@ impl TypeChecker {
                     name_span: index_init_span,
                     patterns: None,
                     mutable: false,
-                    type_ann: None,
+                    type_ann: Some(iterable_type.clone()),
                     init: Some(container_expr.clone()),
                     span: index_init_span,
                 });
@@ -2056,6 +2057,34 @@ impl TypeChecker {
         self.check_expr_with_context(expr, true)
     }
 
+    fn check_let_init_type(
+        &mut self,
+        init: &Expr,
+        resolved_type_ann: Option<&Type>,
+    ) -> Result<Type, TypeCheckError> {
+        if let (Expr::Call(call), Some(Type::Vec { elem_type })) = (init, resolved_type_ann) {
+            if call.callee == "Vec::new" && call.args.is_empty() {
+                return Ok(Type::Vec {
+                    elem_type: elem_type.clone(),
+                });
+            }
+            if call.callee == "Vec::with_capacity" && call.args.len() == 1 {
+                let cap_ty = self.check_expr(&call.args[0])?;
+                if !self.is_integer_type(&cap_ty) {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "integer type".to_string(),
+                        got: type_to_string(&cap_ty),
+                        span: call.args[0].span(),
+                    });
+                }
+                return Ok(Type::Vec {
+                    elem_type: elem_type.clone(),
+                });
+            }
+        }
+        self.check_expr(init)
+    }
+
     fn check_expr_with_context(
         &mut self,
         expr: &Expr,
@@ -2066,6 +2095,17 @@ impl TypeChecker {
             Expr::BoolLiteral(_) => Ok(Type::Bool),
             Expr::FloatLiteral(_) => Ok(Type::F64), // Float literals default to f64
             Expr::StringLit(_) => Ok(Type::String),
+            Expr::TypeConst(type_const) => crate::integer_limits::resolve_integer_limit(
+                &type_const.type_name,
+                &type_const.member,
+            )
+            .map(Ok)
+            .unwrap_or_else(|| {
+                Err(TypeCheckError::Message(format!(
+                    "unknown integer limit '{}::{}'",
+                    type_const.type_name, type_const.member
+                )))
+            }),
             Expr::Var(var_expr) => {
                 // Check if this is a qualified name (mod::item)
                 if var_expr.name.contains("::") {
@@ -4660,7 +4700,7 @@ fn collect_expr_var_refs(
     locals: &std::collections::HashSet<String>,
 ) {
     match expr {
-        Expr::Lit(_) | Expr::BoolLiteral(_) | Expr::FloatLiteral(_) => {}
+        Expr::Lit(_) | Expr::BoolLiteral(_) | Expr::FloatLiteral(_) | Expr::TypeConst(_) => {}
         Expr::Var(var_expr) => {
             if !locals.contains(&var_expr.name) {
                 refs.push(var_expr.name.clone());
