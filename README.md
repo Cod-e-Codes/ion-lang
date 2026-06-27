@@ -184,6 +184,11 @@ Committed `.c` snapshots are for review and `ion-compiler` regression; building 
 cd text_summary
 ..\..\target\release\ion-build.exe build
 .\target\text_summary.exe
+
+# todo_demo (interactive stdin commands)
+cd todo_demo
+..\..\target\release\ion-build.exe build
+.\target\todo_demo.exe
 ```
 
 On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows channel/spawn builds add `-lws2_32` automatically.
@@ -199,9 +204,10 @@ On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows cha
 | [examples/minimal.ion](examples/minimal.ion) | (transpile-only with `ion-compiler`) | Smallest valid program |
 | [examples/channel_worker.ion](examples/channel_worker.ion) | [channel_worker.toml](examples/channel_worker.toml) | Channel worker |
 | [examples/text_summary/text_summary.ion](examples/text_summary/text_summary.ion) | [text_summary/ion.toml](examples/text_summary/ion.toml) | `fs` read, string iteration, counts |
+| [examples/todo_demo/todo_demo.ion](examples/todo_demo/todo_demo.ion) | [todo_demo/ion.toml](examples/todo_demo/ion.toml) | Interactive todo list: `Vec` of structs with `String`, stdin via FFI `read`; see [todo_demo/README.md](examples/todo_demo/README.md) |
 | [examples/data_lib/main.ion](examples/data_lib/main.ion) | [data_lib/ion.toml](examples/data_lib/ion.toml) | Multi-module library; see [data_lib/README.md](examples/data_lib/README.md) |
 
-`examples/data_lib/` keeps only `.ion` sources; `ion-build` writes `.c`, `.h`, and the executable under `examples/data_lib/target/` (not committed).
+`examples/data_lib/` and `examples/todo_demo/` keep `.ion` sources and manifests only; `ion-build` writes under each project's `target/` (not committed).
 
 ## Project Structure
 

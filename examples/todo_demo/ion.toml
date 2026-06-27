@@ -1,0 +1,5 @@
+name = "todo_demo"
+main = "todo_demo.ion"
+output = "todo_demo"
+mode = "single"
+out_dir = "target"

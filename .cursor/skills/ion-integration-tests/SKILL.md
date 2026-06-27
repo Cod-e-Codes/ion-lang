@@ -17,7 +17,7 @@ End-to-end tests: Ion → C → gcc → run executable → assert exit code (or 
 
 The harness runs tests under `tests/` only. Files in `examples/` are documented demos; build and run them with `ion-build` and per-example manifests (see [README.md](../../../README.md#example-programs)). Regenerate committed `examples/*.c` snapshots with `ion-compiler` after codegen changes.
 
-**Example output policy:** Top-level single-file examples commit one merged `.c` next to the `.ion`. `text_summary/` commits one `.c` plus `sample.txt`. Multi-file `data_lib/` keeps `.ion` only (see `examples/data_lib/README.md`).
+**Example output policy:** Top-level single-file examples commit one merged `.c` next to the `.ion`. `text_summary/` commits one `.c` plus `sample.txt`. `data_lib/` and `todo_demo/` keep `.ion` and `ion.toml` only (see each directory's `README.md`).
 
 After compiler codegen changes, regenerate committed example `.c` files:
 
@@ -27,7 +27,7 @@ for f in examples/*.ion; do ./target/release/ion-compiler "$f"; done
 ./target/release/ion-compiler examples/text_summary/text_summary.ion
 ```
 
-Multi-file `examples/data_lib/` has no committed `.c`; see `examples/data_lib/README.md`.
+Multi-file `examples/data_lib/` has no committed `.c`; see `examples/data_lib/README.md`. `examples/todo_demo/` is the same; see `examples/todo_demo/README.md`.
 
 To build examples, use `ion-build` (see README). Manual `gcc` + `runtime/ion_runtime.c` is for the test harness and advanced debugging only.
 

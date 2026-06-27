@@ -148,6 +148,8 @@ Import with paths like `import "stdlib/io.ion" as io;`:
 | `fs.ion` | `read_to_string_result(path: String) -> ReadResult` (POSIX/MinGW) |
 | `result.ion` | generic `Result<T, E>` for library authors |
 
+No stdlib stdin/line input. For POSIX `read` on fd 0, see [examples/todo_demo/](../../../examples/todo_demo/).
+
 Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (define enums in-file or import). `String` literals assign to `String`; use `String::from("...")` when a owned copy is needed.
 
 ## Build and verify
@@ -162,7 +164,7 @@ cd examples   # or example subdirectory with ion.toml
 echo $LASTEXITCODE
 ```
 
-Multi-file: `cd examples\data_lib` then `..\..\target\release\ion-build.exe build`. See [examples/data_lib/README.md](../../../examples/data_lib/README.md).
+Multi-file: `cd examples\data_lib` then `..\..\target\release\ion-build.exe build`. See [examples/data_lib/README.md](../../../examples/data_lib/README.md). Interactive stdin: [examples/todo_demo/README.md](../../../examples/todo_demo/README.md).
 
 For codegen inspection or `tests/` integration harness work, use `ion-compiler` plus manual `gcc` (see `ion-lang` skill). On Windows add `-lws2_32` for channel/spawn when linking manually. Stop `ion-lsp` if rebuild fails with "Access is denied".
 

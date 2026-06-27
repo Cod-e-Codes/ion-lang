@@ -1,0 +1,356 @@
+// Interactive todo list: Vec<struct with String>, rebuild-style updates, stdlib I/O.
+
+import "stdlib/fmt.ion" as fmt;
+import "stdlib/io.ion" as io;
+
+extern "C" {
+    fn read(fd: int, buf: *u8, count: int) -> int;
+}
+
+enum ParseId {
+    Ok { value: int };
+    Bad;
+}
+
+struct Todo {
+    id: int;
+    label: String;
+    done: bool;
+}
+
+struct AppState {
+    items: Vec<Todo>;
+    next_id: int;
+}
+
+fn read_line() -> String {
+    let mut text: String = String::new();
+    let mut byte_buf: [u8; 1] = [0; 1];
+
+    loop {
+        unsafe {
+            let n: int = read(0, &byte_buf[0], 1);
+            if n <= 0 {
+                return text;
+            }
+        }
+        let ch: u8 = byte_buf[0];
+        if ch == 10 as u8 {
+            return text;
+        }
+        if ch != 13 as u8 {
+            String::push_byte(&mut text, ch);
+        }
+    }
+
+    return text;
+}
+
+fn trim_left(s: String) -> String {
+    let mut out: String = String::new();
+    let mut skipping: bool = true;
+    for ch in s {
+        if skipping && (ch == 32 || ch == 9) {
+            continue;
+        }
+        skipping = false;
+        String::push_byte(&mut out, ch);
+    }
+    return out;
+}
+
+fn trim_line(s: String) -> String {
+    return trim_left(s);
+}
+
+fn first_token(line: String) -> (String, String) {
+    let mut verb: String = String::new();
+    let mut rest: String = String::new();
+    let mut past_space: bool = false;
+
+    for ch in line {
+        if !past_space {
+            if ch == 32 || ch == 9 {
+                past_space = true;
+            } else {
+                String::push_byte(&mut verb, ch);
+            }
+        } else {
+            String::push_byte(&mut rest, ch);
+        }
+    }
+
+    return (verb, rest);
+}
+
+fn parse_int(s: String) -> ParseId {
+    let mut value: int = 0;
+    let mut any: bool = false;
+
+    for ch in s {
+        if ch >= 48 && ch <= 57 {
+            any = true;
+            value = value * 10 + ((ch as int) - 48);
+        } else if ch != 32 && ch != 9 {
+            return ParseId::Bad;
+        }
+    }
+
+    if !any {
+        return ParseId::Bad;
+    }
+    return ParseId::Ok { value: value };
+}
+
+fn print_label(label: String) -> String {
+    let nbytes: int = String::len(&label);
+    unsafe {
+        io::print_str(label.data, nbytes);
+    }
+    return label;
+}
+
+fn print_todo_line(id: int, label: String, done: bool) -> String {
+    io::print(fmt::int_to_string(id));
+    io::print(String::from(": "));
+    let kept: String = print_label(label);
+    if done {
+        io::println(String::from(" [done]"));
+    } else {
+        io::println(String::from(""));
+    }
+    return kept;
+}
+
+fn show(items: Vec<Todo>) -> Vec<Todo> {
+    let mut rebuilt: Vec<Todo> = Vec::new();
+
+    if Vec::len(&items) == 0 {
+        io::println(String::from("(empty)"));
+        return items;
+    }
+
+    for item in items {
+        let id: int = item.id;
+        let label: String = item.label;
+        let done: bool = item.done;
+
+        let printed_label: String = print_todo_line(id, label, done);
+
+        Vec::push(
+            &mut rebuilt,
+            Todo {
+                id: id,
+                label: printed_label,
+                done: done,
+            },
+        );
+    }
+
+    return rebuilt;
+}
+
+fn complete_todo(items: Vec<Todo>, id: int) -> Vec<Todo> {
+    let mut out: Vec<Todo> = Vec::new();
+
+    for item in items {
+        let tid: int = item.id;
+        let tlabel: String = item.label;
+        let tdone: bool = item.done;
+
+        let mut new_done: bool = tdone;
+        if tid == id {
+            new_done = true;
+        }
+
+        Vec::push(
+            &mut out,
+            Todo {
+                id: tid,
+                label: tlabel,
+                done: new_done,
+            },
+        );
+    }
+
+    return out;
+}
+
+fn keep_todo(out: &mut Vec<Todo>, todo: Todo, keep: bool) {
+    if keep {
+        Vec::push(out, todo);
+    } else {
+        let _gone: Todo = todo;
+    }
+}
+
+fn remove_todo(items: Vec<Todo>, id: int) -> Vec<Todo> {
+    let mut out: Vec<Todo> = Vec::new();
+
+    for item in items {
+        let tid: int = item.id;
+        let keep: bool = tid != id;
+        let todo: Todo = Todo {
+            id: tid,
+            label: item.label,
+            done: item.done,
+        };
+        keep_todo(&mut out, todo, keep);
+    }
+
+    return out;
+}
+
+fn add_todo(state: AppState, label: String) -> AppState {
+    let mut items: Vec<Todo> = state.items;
+    Vec::push(
+        &mut items,
+        Todo {
+            id: state.next_id,
+            label: label,
+            done: false,
+        },
+    );
+    return AppState {
+        items: items,
+        next_id: state.next_id + 1,
+    };
+}
+
+fn print_help() {
+    io::println(String::from("commands:"));
+    io::println(String::from("  list              show all todos"));
+    io::println(String::from("  add <label>       add a todo"));
+    io::println(String::from("  done <id>         mark todo done"));
+    io::println(String::from("  remove <id>       delete a todo"));
+    io::println(String::from("  help              show this help"));
+    io::println(String::from("  quit              exit"));
+}
+
+fn handle_add(items: Vec<Todo>, next_id: int, arg: String) -> AppState {
+    let label: String = trim_left(arg);
+    if String::len(&label) == 0 {
+        io::println(String::from("usage: add <label>"));
+        return AppState {
+            items: items,
+            next_id: next_id,
+        };
+    }
+    let pending: AppState = AppState {
+        items: items,
+        next_id: next_id,
+    };
+    let updated: AppState = add_todo(pending, label);
+    io::println(String::from("added"));
+    return updated;
+}
+
+fn handle_done(items: Vec<Todo>, next_id: int, arg: String) -> AppState {
+    let id_text: String = trim_left(arg);
+    match parse_int(id_text) {
+        ParseId::Ok { value: id } => {
+            let new_items: Vec<Todo> = complete_todo(items, id);
+            io::println(String::from("marked done"));
+            return AppState {
+                items: new_items,
+                next_id: next_id,
+            };
+        }
+        ParseId::Bad => {
+            io::println(String::from("usage: done <id>"));
+            return AppState {
+                items: items,
+                next_id: next_id,
+            };
+        }
+    };
+}
+
+fn handle_remove(items: Vec<Todo>, next_id: int, arg: String) -> AppState {
+    let id_text: String = trim_left(arg);
+    match parse_int(id_text) {
+        ParseId::Ok { value: id } => {
+            let new_items: Vec<Todo> = remove_todo(items, id);
+            io::println(String::from("removed"));
+            return AppState {
+                items: new_items,
+                next_id: next_id,
+            };
+        }
+        ParseId::Bad => {
+            io::println(String::from("usage: remove <id>"));
+            return AppState {
+                items: items,
+                next_id: next_id,
+            };
+        }
+    };
+}
+
+fn drop_string(s: String) {
+    let _gone: String = s;
+}
+
+fn handle_command(state: AppState, verb: String, arg: String) -> AppState {
+    let items: Vec<Todo> = state.items;
+    let next_id: int = state.next_id;
+
+    if verb == String::from("help") || verb == String::from("?") {
+        drop_string(arg);
+        print_help();
+        return AppState {
+            items: items,
+            next_id: next_id,
+        };
+    } else if verb == String::from("list") {
+        drop_string(arg);
+        let shown: Vec<Todo> = show(items);
+        return AppState {
+            items: shown,
+            next_id: next_id,
+        };
+    } else if verb == String::from("add") {
+        return handle_add(items, next_id, arg);
+    } else if verb == String::from("done") {
+        return handle_done(items, next_id, arg);
+    } else if verb == String::from("remove") {
+        return handle_remove(items, next_id, arg);
+    }
+
+    drop_string(arg);
+    io::println(String::from("unknown command (try help)"));
+    return AppState {
+        items: items,
+        next_id: next_id,
+    };
+}
+
+fn repl(state: AppState) -> int {
+    io::print(String::from("todo> "));
+    let line: String = read_line();
+    let trimmed: String = trim_line(line);
+
+    if String::len(&trimmed) == 0 {
+        return repl(state);
+    }
+
+    let (verb, arg): (String, String) = first_token(trimmed);
+
+    if verb == String::from("quit") || verb == String::from("exit") {
+        return 0;
+    }
+
+    let next: AppState = handle_command(state, verb, arg);
+    return repl(next);
+}
+
+fn main() -> int {
+    let empty_items: Vec<Todo> = Vec::new();
+    let start: AppState = AppState {
+        items: empty_items,
+        next_id: 1,
+    };
+
+    io::println(String::from("Ion todo demo (type help)"));
+    return repl(start);
+}
