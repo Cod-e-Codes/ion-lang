@@ -116,6 +116,9 @@ test_channel_split.ion	run	0
 test_channel_string.ion	run	3			
 test_channel_send_call_expr.ion	run	7			
 test_channel_send_field_call_expr.ion	run	11			
+test_channel_contention.ion	run	73			
+test_channel_shutdown.ion	run	91			
+test_vec_search_index_ok.ion	run	84			
 test_enum_struct_variant.ion	run	42			
 test_for_loop.ion	run	0			
 test_escape_sequences.ion	run	0			
@@ -153,6 +156,9 @@ test_spawn_borrow_error.ion	error		BorrowConflict
 test_spawn_move_error.ion	error		UseAfterMove		
 test_struct_ref_error.ion	error		ReferenceEscape		
 test_enum_ref_error.ion	error		ReferenceEscape		
+test_match_ref_return_error.ion	error		ReferenceEscape		
+test_vec_index_ref_error.ion	error		ReferenceEscape		
+test_nested_struct_ref_error.ion	error		ReferenceEscape		
 test_module_visibility.ion	error		Cannot access non-public		
 test_unsafe_extern_required.ion	error		must be inside an unsafe block		
 test_if_bool_required.ion	error		bool.*if condition\|if condition.*bool		
@@ -179,3 +185,7 @@ test_array_bounds_panic.ion	cgen			ion_panic("Array index out of bounds")
 test_slice_bounds_panic.ion	cgen			ion_panic("Slice index out of bounds")	
 test_fmt_println_int.ion	cgen			io_print_int	^[[:space:]]+print_int\(
 test_doc_comments.ion	run	42			
+test_channel_shutdown.ion	cgen			ion_channel_handle_drop	
+test_channel_shutdown.ion	cgen			ion_spawn	
+test_channel_shutdown.ion	cgen			ion_channel_recv	
+test_channel_contention.ion	cgen			ion_spawn	

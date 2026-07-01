@@ -83,6 +83,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_move_in_loop_copy.ion` - Fresh copy-type bindings each loop iteration (exit 30)
 - `test_scope_drop_elif.ion` - Vec drop inside an else-if branch
 - `test_channel_basic.ion` - Channel operations
+- `test_channel_contention.ion` - Four producer spawns, one channel each; sum exit 73
+- `test_channel_shutdown.ion` - Worker recv loop; `Sender` dropped in `send_jobs` (exit 91)
 - `test_spawn_basic.ion` - Spawn statements
 - `test_spawn_channel.ion` - Cross-thread channel send/recv via spawn (channel handle drop at scope exit)
 - `test_if_basic.ion` - If statements with else
@@ -118,6 +120,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_i32.ion` - `Vec<i32>` with annotated `Vec::new`, `i32` indices
 - `test_vec_struct.ion` - `Vec` with struct elements, annotated `Vec::new`, and `for` iteration
 - `test_vec_get_struct.ion` - `Vec::get` with struct elements containing `String`
+- `test_vec_search_index_ok.ion` - `find_index` returns `int`; caller uses `Vec::get` (exit 84)
 - `test_vec_push_mut_param.ion` - `Vec::push` through `&mut Vec<T>` parameter
 - `test_vec_push_nested_call.ion` - `Vec::push` with nested call expression value
 - `test_vec_push_struct_var.ion` - `Vec::push` with a struct variable (address-of lvalue)
@@ -242,6 +245,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 The harness also runs `ion-build` (not via `test_expectations.tsv`):
 
 - `build_hello/` - minimal `ion.toml` project; expects exit code 55
+- `../examples/worker_pool/` - `ion-build` smoke on worker_pool example; expects exit code 0
 - `build_bad_main/` - invalid `main` path; expects `main file not found` on stderr
 
 Set `ION_BUILD` to override the `ion-build` binary path (default `../target/release/ion-build`).
@@ -260,6 +264,9 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 - `test_spawn_move_error.ion` - Move errors in spawn blocks
 - `test_struct_ref_error.ion` - Reference in struct fields
 - `test_enum_ref_error.ion` - Reference in enum variants
+- `test_match_ref_return_error.ion` - `match`/branch returning `&` local (ReferenceEscape)
+- `test_vec_index_ref_error.ion` - Helper almost returning `&vec[i]` via `Vec::get` (ReferenceEscape)
+- `test_nested_struct_ref_error.ion` - Nested struct storing a reference field (ReferenceEscape)
 - `test_module_visibility.ion` - Module visibility violations
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls
 - `test_if_bool_required.ion` - Boolean requirement for if conditions

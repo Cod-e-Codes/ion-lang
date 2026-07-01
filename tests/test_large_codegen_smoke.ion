@@ -1,0 +1,299 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Payload0 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload1 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload2 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload3 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload4 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload5 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload6 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload7 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload8 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload9 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload10 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload11 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload12 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload13 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload14 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload15 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload16 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload17 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload18 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload19 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload20 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload21 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload22 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload23 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload24 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload25 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload26 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload27 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload28 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload29 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload30 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload31 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload32 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload33 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload34 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload35 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload36 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload37 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload38 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+struct Payload39 {
+    id: int;
+    tag: int;
+    data: Vec<int>;
+}
+
+
+fn build_payload(id: int) -> Payload0 {
+    let mut data: Vec<int> = Vec::new();
+    Vec::push(&mut data, id);
+    return Payload0 { id: id, tag: id * 2, data: data };
+}
+
+fn main() -> int {
+    let (job_tx, job_rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let (done_tx, done_rx): (Sender<int>, Receiver<int>) = channel<int>();
+
+    spawn {
+        let mut rx: Receiver<int> = job_rx;
+        let mut sum: int = 0;
+        let mut n: int = 0;
+        while n < 20 {
+            sum = sum + recv(&mut rx);
+            n = n + 1;
+        }
+        send(&done_tx, sum);
+    };
+
+    send(&job_tx, 0);
+    send(&job_tx, 1);
+    send(&job_tx, 2);
+    send(&job_tx, 3);
+    send(&job_tx, 4);
+    send(&job_tx, 5);
+    send(&job_tx, 6);
+    send(&job_tx, 7);
+    send(&job_tx, 8);
+    send(&job_tx, 9);
+    send(&job_tx, 10);
+    send(&job_tx, 11);
+    send(&job_tx, 12);
+    send(&job_tx, 13);
+    send(&job_tx, 14);
+    send(&job_tx, 15);
+    send(&job_tx, 16);
+    send(&job_tx, 17);
+    send(&job_tx, 18);
+    send(&job_tx, 19);
+
+    let mut items: Vec<Payload0> = Vec::new();
+    let built: Payload0 = build_payload(7);
+    Vec::push(&mut items, built);
+
+    let mut done_rx_mut: Receiver<int> = done_rx;
+    let total: int = recv(&mut done_rx_mut);
+    if total != 190 {
+        return 1;
+    }
+    return 0;
+}

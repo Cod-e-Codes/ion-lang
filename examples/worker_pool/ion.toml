@@ -1,0 +1,5 @@
+name = "worker_pool"
+main = "worker_pool.ion"
+output = "worker_pool"
+mode = "single"
+out_dir = "target"

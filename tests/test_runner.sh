@@ -336,6 +336,45 @@ test_ion_build() {
     return 0
 }
 
+test_ion_build_worker_pool() {
+    local project_dir="../examples/worker_pool"
+    if [ ! -f "$project_dir/ion.toml" ]; then
+        return 0
+    fi
+
+    test_count=$((test_count + 1))
+    echo -n "Testing ion-build (worker_pool example)... "
+
+    local build_output
+    build_output=$(cd "$project_dir" && "$ION_BUILD" build 2>&1)
+    local build_exit=$?
+    if [ "$build_exit" -ne 0 ]; then
+        echo -e "${RED}FAIL${NC} - ion-build failed"
+        echo "  Error output: $build_output"
+        fail_count=$((fail_count + 1))
+        return 1
+    fi
+
+    if [ ! -f "$project_dir/target/worker_pool${EXE_SUFFIX}" ]; then
+        echo -e "${RED}FAIL${NC} - Executable not generated in examples/worker_pool/target/"
+        fail_count=$((fail_count + 1))
+        return 1
+    fi
+
+    "$project_dir/target/worker_pool${EXE_SUFFIX}" > /dev/null 2>&1
+    local actual_exit=$?
+    if [ "$actual_exit" -eq 0 ]; then
+        echo -e "${GREEN}PASS${NC}"
+        pass_count=$((pass_count + 1))
+    else
+        echo -e "${RED}FAIL${NC} - Expected exit code 0, got $actual_exit"
+        fail_count=$((fail_count + 1))
+    fi
+
+    rm -rf "$project_dir/target" 2>/dev/null
+    return 0
+}
+
 test_ion_build_bad_main() {
     if [ ! -f "build_bad_main/ion.toml" ]; then
         return 0
@@ -504,6 +543,7 @@ test_multifile || true
 test_multi_struct || true
 test_multi_fmt_io || true
 test_ion_build || true
+test_ion_build_worker_pool || true
 test_ion_build_bad_main || true
 
 echo ""

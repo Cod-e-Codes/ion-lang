@@ -67,6 +67,44 @@ jobs:
           test_array_to_slice_coercion 10
           EOF
 
+      - name: Generated C thread sanitizer (Linux)
+        shell: bash
+        env:
+          COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          CC: gcc
+          CFLAGS: -fsanitize=thread -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=thread
+        run: |
+          cd tests
+          "$CC" $CFLAGS -c ../runtime/ion_runtime.c -I. -I.. -I../runtime -o .ion_test_runtime_tsan.o
+          while IFS=$'\t' read -r test kind expected _rest; do
+            [ "$kind" = "run" ] || continue
+            case "$test" in
+              test_channel_*|test_spawn_*) ;;
+              *) continue ;;
+            esac
+            [ -f "${test}.ion" ] || continue
+            "$COMPILER" "${test}.ion" >/dev/null
+            "$CC" $CFLAGS "${test}.c" .ion_test_runtime_tsan.o -I. -I.. -I../runtime -lpthread $LDFLAGS -o "$test"
+            set +e
+            "./$test" >/dev/null
+            status=$?
+            set -e
+            if [ "$status" -ne "$expected" ]; then
+              echo "$test: expected exit $expected, got $status"
+              exit 1
+            fi
+            rm -f "${test}.c" "$test"
+          done < <(awk -F '\t' 'NR > 1 && $2 == "run" && ($1 ~ /^test_channel_/ || $1 ~ /^test_spawn_/) { print $1, $2, $3 }' test_expectations.tsv)
+
+      - name: Large codegen smoke (Linux)
+        shell: bash
+        env:
+          COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          CC: gcc
+          CFLAGS: -Wall -Wextra -Werror
+        run: bash tests/large_codegen_smoke.sh
+
       - name: Generated C warning-clean (Linux)
         shell: bash
         env:

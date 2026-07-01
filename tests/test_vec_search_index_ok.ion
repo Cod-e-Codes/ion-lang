@@ -1,0 +1,49 @@
+// find_index returns an index; caller reads via Vec::get (ION_SPEC 8.2).
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn find_index(values: &Vec<int>, target: int) -> int {
+    let mut i: int = 0;
+    let len: int = Vec::len(values);
+    while i < len {
+        match Vec::get(values, i) {
+            Option::Some(v) => {
+                if v == target {
+                    return i;
+                }
+            }
+            Option::None => {
+                return -1;
+            }
+        };
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn main() -> int {
+    let mut items: Vec<int> = Vec::new();
+    Vec::push(&mut items, 11);
+    Vec::push(&mut items, 22);
+    Vec::push(&mut items, 33);
+
+    let idx: int = find_index(&items, 22);
+    if idx != 1 {
+        return 1;
+    }
+
+    match Vec::get(&items, idx) {
+        Option::Some(value) => {
+            if value != 22 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+
+    return 84;
+}

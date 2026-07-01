@@ -1,0 +1,46 @@
+// Three workers; per-worker job and result channels.
+fn worker_count() -> int {
+    return 3;
+}
+
+fn jobs_per_worker() -> int {
+    return 4;
+}
+
+fn main() -> int {
+    let mut grand_total: int = 0;
+    let mut w: int = 0;
+    while w < worker_count() {
+        let (job_tx, job_rx): (Sender<int>, Receiver<int>) = channel<int>();
+        let (result_tx, result_rx): (Sender<int>, Receiver<int>) = channel<int>();
+
+        spawn {
+            let mut rx: Receiver<int> = job_rx;
+            let mut sum: int = 0;
+            let mut j: int = 0;
+            while j < jobs_per_worker() {
+                let job: int = recv(&mut rx);
+                sum = sum + job;
+                j = j + 1;
+            }
+            send(&result_tx, sum);
+        };
+
+        let mut job_id: int = 1;
+        while job_id <= jobs_per_worker() {
+            let payload: int = (w + 1) * 100 + job_id;
+            send(&job_tx, payload);
+            job_id = job_id + 1;
+        }
+
+        let mut result_rx_mut: Receiver<int> = result_rx;
+        let partial: int = recv(&mut result_rx_mut);
+        grand_total = grand_total + partial;
+        w = w + 1;
+    }
+
+    if grand_total != 2430 {
+        return 1;
+    }
+    return 0;
+}

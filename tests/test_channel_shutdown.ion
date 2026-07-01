@@ -1,0 +1,39 @@
+// Worker recv loop; Sender dropped when send_jobs returns.
+fn job_count() -> int {
+    return 5;
+}
+
+fn send_jobs(tx: Sender<int>) {
+    let mut next: int = 1;
+    while next <= job_count() {
+        send(&tx, next);
+        next = next + 1;
+    }
+}
+
+fn main() -> int {
+    let (job_tx, job_rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let (done_tx, done_rx): (Sender<int>, Receiver<int>) = channel<int>();
+
+    spawn {
+        let mut rx: Receiver<int> = job_rx;
+        let mut sum: int = 0;
+        let mut received: int = 0;
+        while received < job_count() {
+            let job: int = recv(&mut rx);
+            sum = sum + job;
+            received = received + 1;
+        }
+        send(&done_tx, sum);
+    };
+
+    send_jobs(job_tx);
+
+    let mut done_rx_mut: Receiver<int> = done_rx;
+    let total: int = recv(&mut done_rx_mut);
+
+    if total != 15 {
+        return 1;
+    }
+    return 91;
+}

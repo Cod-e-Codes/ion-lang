@@ -1,0 +1,14 @@
+// Match arm that would return a reference to a local binding (no-escape).
+fn pick(x: int, y: int, use_x: bool) -> &int {
+    if use_x {
+        return &x;
+    }
+    return &y;
+}
+
+fn main() -> int {
+    let a: int = 1;
+    let b: int = 2;
+    let _r: &int = pick(a, b, true);
+    return 0;
+}
