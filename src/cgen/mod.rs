@@ -3629,9 +3629,7 @@ impl Codegen {
 
             // Stack-local Option<&T> from Vec::get_ref is assigned directly.
             let returns_heap_option = if let Some(Type::Generic { name, params }) = return_type {
-                name == "Option"
-                    && params.len() == 1
-                    && !matches!(params[0], Type::Ref { .. })
+                name == "Option" && params.len() == 1 && !matches!(params[0], Type::Ref { .. })
             } else {
                 false
             };

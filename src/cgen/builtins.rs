@@ -238,10 +238,15 @@ impl Codegen {
         // Vec::get_ref<T>(vec: &Vec<T>, index: int) -> Option<&T> (stack-local, no move-out)
         if callee == "Vec::get_ref" && args.len() == 2 {
             let option_name = return_type
-                .map(|t| mangle_type_name("Option", match t {
-                    Type::Generic { params, .. } => params.as_slice(),
-                    _ => &[],
-                }))
+                .map(|t| {
+                    mangle_type_name(
+                        "Option",
+                        match t {
+                            Type::Generic { params, .. } => params.as_slice(),
+                            _ => &[],
+                        },
+                    )
+                })
                 .unwrap_or_else(|| "Option_int_".to_string());
             let ref_c_type = return_type
                 .and_then(|t| {
@@ -269,16 +274,19 @@ impl Codegen {
             self.generate_expr(&args[1]);
             index_code = std::mem::replace(&mut self.output, old_output);
 
-            let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type.and_then(|t| {
-                if let Type::Generic { params, .. } = t
-                    && params.len() == 1
-                    && let Type::Ref { inner, .. } = &params[0]
-                {
-                    Some(inner.as_ref())
-                } else {
-                    None
-                }
-            }));
+            let elem_c_type = self.resolve_vec_elem_c_type(
+                &args[0],
+                return_type.and_then(|t| {
+                    if let Type::Generic { params, .. } = t
+                        && params.len() == 1
+                        && let Type::Ref { inner, .. } = &params[0]
+                    {
+                        Some(inner.as_ref())
+                    } else {
+                        None
+                    }
+                }),
+            );
             let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
 
             let mut code = String::new();
@@ -394,9 +402,9 @@ impl Codegen {
         // String::len(s: &String) -> int
         if callee == "String::len" && args.len() == 1 {
             let mut code = String::new();
-            let needs_deref = self
-                .infer_irexpr_type(&args[0])
-                .is_some_and(|ty| matches!(ty, Type::Ref { inner, .. } if matches!(*inner, Type::String)));
+            let needs_deref = self.infer_irexpr_type(&args[0]).is_some_and(
+                |ty| matches!(ty, Type::Ref { inner, .. } if matches!(*inner, Type::String)),
+            );
             if needs_deref {
                 code.push_str("((");
                 let mut arg_code = String::new();

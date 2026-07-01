@@ -867,7 +867,9 @@ impl TypeChecker {
                     mutable: true,
                 }))
             }
-            ("Vec", "Vec::len") | ("Vec", "Vec::capacity") | ("Vec", "Vec::get")
+            ("Vec", "Vec::len")
+            | ("Vec", "Vec::capacity")
+            | ("Vec", "Vec::get")
             | ("Vec", "Vec::get_ref") => {
                 // These methods require &Vec<T>
                 let elem_type = match receiver_type {
@@ -2472,7 +2474,8 @@ impl TypeChecker {
                             Type::Struct(ref name) => {
                                 if self.is_type_param(name) {
                                     return Err(TypeCheckError::TypeMismatch {
-                                        expected: "concrete struct value for field access".to_string(),
+                                        expected: "concrete struct value for field access"
+                                            .to_string(),
                                         got: format!("type parameter '{}'", name),
                                         span: acc.span,
                                     });
@@ -2495,7 +2498,10 @@ impl TypeChecker {
                                     })?;
                                 field.ty.clone()
                             }
-                            Type::Generic { ref name, ref params } => {
+                            Type::Generic {
+                                ref name,
+                                ref params,
+                            } => {
                                 let decl = self.structs.get(name).ok_or_else(|| {
                                     TypeCheckError::TypeMismatch {
                                         expected: "known struct type".to_string(),
@@ -2534,12 +2540,13 @@ impl TypeChecker {
                                 }
                             },
                             Type::Tuple { ref elements } => {
-                                let index: usize =
-                                    acc.field.parse().map_err(|_| TypeCheckError::TypeMismatch {
+                                let index: usize = acc.field.parse().map_err(|_| {
+                                    TypeCheckError::TypeMismatch {
                                         expected: "numeric tuple field index".to_string(),
                                         got: acc.field.clone(),
                                         span: acc.span,
-                                    })?;
+                                    }
+                                })?;
                                 if index >= elements.len() {
                                     return Err(TypeCheckError::TypeMismatch {
                                         expected: format!(
@@ -2561,8 +2568,7 @@ impl TypeChecker {
                             }
                         };
                         if let Type::Struct(ref struct_name) = *inner
-                            && let Some(target) =
-                                self.lookup_field_target(struct_name, &acc.field)
+                            && let Some(target) = self.lookup_field_target(struct_name, &acc.field)
                         {
                             self.record_reference(acc.field_span, target);
                         }
