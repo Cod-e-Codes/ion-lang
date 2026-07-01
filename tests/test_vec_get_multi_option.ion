@@ -1,0 +1,44 @@
+// Match on Vec::get must use Option<T> for each vector's element type, not the first Vec in the program.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Customer {
+    id: int;
+    name: String;
+}
+
+fn main() -> int {
+    let mut customers: Vec<Customer> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    Vec::push(
+        &mut customers,
+        Customer {
+            id: 1,
+            name: String::from("a"),
+        },
+    );
+    Vec::push(&mut names, String::from("b"));
+    match Vec::get(&customers, 0) {
+        Option::Some(c) => {
+            if c.id != 1 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    match Vec::get(&names, 0) {
+        Option::Some(s) => {
+            if String::len(&s) != 1 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    };
+    return 0;
+}

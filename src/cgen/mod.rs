@@ -2738,48 +2738,8 @@ impl Codegen {
                 let enum_decl = self.enum_map.get(enum_type).cloned();
 
                 // Try to extract type from the expression if it's a Call to Vec::pop or Vec::get
-                let (monomorphized_enum_name, type_params) = if let IREexpr::Call {
-                    callee,
-                    return_type,
-                    ..
-                } = expr.as_ref()
-                {
-                    // If matching on Vec::pop or Vec::get result, extract element type from Vec argument
-                    if callee == "Vec::pop" || callee == "Vec::get" {
-                        // Extract element type from Vec<T> in generic_instantiations
-                        // Look for Vec_* types and extract the element type
-                        if let Some(elem_type) = self.generic_instantiations.iter().find_map(
-                            |(_mono_name, (base, params))| {
-                                if base == "Vec" && params.len() == 1 {
-                                    Some(params[0].clone())
-                                } else {
-                                    None
-                                }
-                            },
-                        ) {
-                            // We have the element type, construct Option<T>
-                            let mono_name =
-                                mangle_type_name("Option", std::slice::from_ref(&elem_type));
-                            (mono_name, vec![elem_type])
-                        } else {
-                            // Fall back to searching in generic_instantiations
-                            self.find_enum_instantiation(enum_type, enum_decl.as_ref())
-                        }
-                    } else if let Some(Type::Generic { name, params }) = return_type
-                        && name == "Option"
-                        && params.len() == 1
-                    {
-                        // We have Option<T> from return_type, compute the monomorphized name
-                        let mono_name = mangle_type_name("Option", params);
-                        (mono_name, params.clone())
-                    } else {
-                        // Fall back to searching in generic_instantiations
-                        self.find_enum_instantiation(enum_type, enum_decl.as_ref())
-                    }
-                } else {
-                    // Fall back to searching in generic_instantiations
-                    self.find_enum_instantiation(enum_type, enum_decl.as_ref())
-                };
+                let (monomorphized_enum_name, type_params) =
+                    self.resolve_option_match_instantiation(expr, enum_type, enum_decl.as_ref());
 
                 let match_var_name = format!("match_val_{}", self.match_counter);
                 self.match_counter += 1;
@@ -3535,6 +3495,50 @@ impl Codegen {
         }
     }
 
+    /// Resolve monomorphized `Option<T>` when matching on `Vec::get` / `Vec::pop`.
+    fn resolve_option_match_instantiation(
+        &self,
+        scrutinee: &IREexpr,
+        enum_type: &str,
+        enum_decl: Option<&EnumDecl>,
+    ) -> (String, Vec<Type>) {
+        if let IREexpr::Call {
+            callee,
+            args,
+            return_type,
+            ..
+        } = scrutinee
+        {
+            let is_vec_pop_or_get = callee == "Vec::pop"
+                || callee == "Vec::get"
+                || callee == "METHOD::pop"
+                || callee == "METHOD::get";
+
+            if is_vec_pop_or_get {
+                if let Some(Type::Generic { name, params }) = return_type
+                    && name == "Option"
+                    && params.len() == 1
+                {
+                    let mono_name = mangle_type_name("Option", params);
+                    return (mono_name, params.clone());
+                }
+                if let Some(first_arg) = args.first()
+                    && let Some(elem_type) = self.vec_elem_type_from_arg(first_arg)
+                {
+                    let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem_type));
+                    return (mono_name, vec![elem_type]);
+                }
+            } else if let Some(Type::Generic { name, params }) = return_type
+                && name == "Option"
+                && params.len() == 1
+            {
+                let mono_name = mangle_type_name("Option", params);
+                return (mono_name, params.clone());
+            }
+        }
+        self.find_enum_instantiation(enum_type, enum_decl)
+    }
+
     fn generate_match_block(
         &mut self,
         expr: &IREexpr,
@@ -3547,100 +3551,8 @@ impl Codegen {
         let enum_decl = self.enum_map.get(enum_type).cloned();
 
         // Try to extract type from the expression if it's a Call to Vec::pop or Vec::get
-        let (monomorphized_enum_name, type_params) = if let IREexpr::Call {
-            callee,
-            return_type,
-            ..
-        } = expr
-        {
-            // Check if this is a Vec::pop/Vec::get or METHOD::pop/METHOD::get call
-            let is_vec_pop_or_get = callee == "Vec::pop"
-                || callee == "Vec::get"
-                || callee == "METHOD::pop"
-                || callee == "METHOD::get";
-
-            // If matching on Vec::pop or Vec::get result, extract element type from Vec argument
-            if is_vec_pop_or_get {
-                // Extract element type from Vec<T> in generic_instantiations
-                // Look for Vec_* types and extract the element type
-                if let Some(elem_type) =
-                    self.generic_instantiations
-                        .iter()
-                        .find_map(|(_mono_name, (base, params))| {
-                            if base == "Vec" && params.len() == 1 {
-                                Some(params[0].clone())
-                            } else {
-                                None
-                            }
-                        })
-                {
-                    // We have the element type, construct Option<T>
-                    let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem_type));
-                    (mono_name, vec![elem_type])
-                } else {
-                    // Fall back: if we have Vec types, use the first one's element type
-                    // Otherwise, try to extract from return_type or fall back
-                    if let Some(Type::Generic { name, params }) = return_type
-                        && name == "Option"
-                        && params.len() == 1
-                    {
-                        let mono_name = mangle_type_name("Option", params);
-                        (mono_name, params.clone())
-                    } else {
-                        // Fall back to searching in generic_instantiations
-                        self.find_enum_instantiation(enum_type, enum_decl.as_ref())
-                    }
-                }
-            } else if let Some(Type::Generic { name, params }) = return_type
-                && name == "Option"
-                && params.len() == 1
-            {
-                // We have Option<T> from return_type, compute the monomorphized name
-                let mono_name = mangle_type_name("Option", params);
-                (mono_name, params.clone())
-            } else {
-                // Fall back to searching in generic_instantiations
-                self.find_enum_instantiation(enum_type, enum_decl.as_ref())
-            }
-        } else {
-            // Fall back to searching in generic_instantiations
-            let (name, params) = self.find_enum_instantiation(enum_type, enum_decl.as_ref());
-
-            // If we found params, use them. Otherwise check for generic Option as last resort
-            if !params.is_empty() {
-                // Already have type parameters, use them
-                (name, params)
-            } else if enum_type == "Option" {
-                // Check if Option enum is generic (has generics in its declaration)
-                let is_generic = enum_decl
-                    .as_ref()
-                    .map(|decl| !decl.generics.is_empty())
-                    .unwrap_or(false);
-
-                if is_generic {
-                    // It's a generic Option but we don't have the params yet
-                    // Check if we have it in generic_instantiations
-                    if let Some((mono_name, params)) = self
-                        .generic_instantiations
-                        .iter()
-                        .find(|(_, (base, _))| base == "Option")
-                        .map(|(mono, (_, params))| (mono.clone(), params.clone()))
-                    {
-                        (mono_name, params)
-                    } else {
-                        // Last resort: assume int for generic Option
-                        let mono_name = mangle_type_name("Option", &[Type::Int]);
-                        (mono_name, vec![Type::Int])
-                    }
-                } else {
-                    // Non-generic Option, use the base name as-is
-                    (name, params)
-                }
-            } else {
-                // For other enum types, use the result from find_enum_instantiation
-                (name, params)
-            }
-        };
+        let (monomorphized_enum_name, type_params) =
+            self.resolve_option_match_instantiation(expr, enum_type, enum_decl.as_ref());
 
         // Ensure Option<int> is in generic_instantiations
         // Note: The actual type generation happens at file scope before functions
@@ -4676,13 +4588,13 @@ fn collect_vec_types_impl(program: &IRProgram, vec_types: &mut std::collections:
 fn collect_vec_types_from_type(ty: &Type, vec_types: &mut std::collections::HashSet<String>) {
     match ty {
         Type::Vec { elem_type } => {
-            let vec_name = format!("Vec_{}", mangle_type_name(&type_to_c_impl(elem_type), &[]));
+            let vec_name = mangle_type_name("Vec", std::slice::from_ref(elem_type));
             vec_types.insert(vec_name);
             // Recursively collect nested Vec types
             collect_vec_types_from_type(elem_type, vec_types);
         }
         Type::Generic { name, params } if name == "Vec" && params.len() == 1 => {
-            let vec_name = format!("Vec_{}", mangle_type_name(&type_to_c_impl(&params[0]), &[]));
+            let vec_name = mangle_type_name("Vec", params);
             vec_types.insert(vec_name);
             // Recursively collect nested Vec types
             for param in params {
@@ -5817,6 +5729,78 @@ fn main() -> int {
         assert!(
             c.contains("ion_vec_push((ion_vec_t*)(items), &item, sizeof(Item))"),
             "expected address of struct variable in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn vec_string_mangles_ion_type_name() {
+        let src = r#"enum Option<T> { Some(T); None; }
+fn main() -> int {
+    let mut names: Vec<String> = Vec::new();
+    Vec::push(&mut names, String::from("a"));
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("typedef struct Vec_String"),
+            "expected Vec_String typedef in:\n{c}"
+        );
+        assert!(
+            !c.contains("Vec_ion_string"),
+            "unexpected C-type mangling in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn vec_get_match_uses_per_vector_option_type() {
+        let src = r#"enum Option<T> { Some(T); None; }
+struct Customer { id: int; name: String; }
+fn main() -> int {
+    let mut customers: Vec<Customer> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    Vec::push(&mut customers, Customer { id: 1, name: String::from("a") });
+    Vec::push(&mut names, String::from("b"));
+    match Vec::get(&customers, 0) {
+        Option::Some(c) => { if c.id != 1 { return 1; } }
+        Option::None => { return 2; }
+    };
+    match Vec::get(&names, 0) {
+        Option::Some(s) => { if String::len(&s) != 1 { return 3; } }
+        Option::None => { return 4; }
+    };
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("Option_Customer match_val_0") && c.contains("Option_String match_val_1"),
+            "expected per-vector Option types in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn string_push_str_owned_reads_source_buffer() {
+        let src = r#"fn main() -> int {
+    let mut s: String = String::from("n=");
+    let part: String = String::from("42");
+    String::push_str(&mut s, part);
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("_ion_push_other") && c.contains("_ion_push_other->data"),
+            "expected owned String append via source buffer in:\n{c}"
         );
     }
 

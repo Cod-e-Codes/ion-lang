@@ -26,6 +26,8 @@ Stable beta expectations:
 - `String::new`, `String::from`, `String::len`, `String::push_str`, and
   `String::push_byte` preserve ownership of the `String` receiver unless a
   function explicitly consumes it.
+- `String::push_str` appends string literals or owned `String` values (the
+  latter reads `.data`/`.len` from the source heap buffer).
 - Dropping a `String` releases its backing allocation once.
 - `String == String` and `String != String` compare byte contents.
 
@@ -43,7 +45,11 @@ Stable beta expectations:
   trigger the runtime panic path for checked indexing.
 - `Vec::get` / `Vec::pop` return heap `Option` blobs from the runtime; generated
   C unpacks them with `ion_option_from_raw` into monomorphized `Option_T` stack
-  values (tag plus payload at `data.variant_0.arg0`).
+  values (tag plus payload at `data.variant_0.arg0`). `match` on `Vec::get` /
+  `Vec::pop` resolves `Option<T>` from the call's return type or the vector
+  argument's element type (not the first `Vec` in the program).
+- Monomorphized container typedefs use Ion type names (`Vec_String`,
+  `Option_Customer`), not C runtime typedefs (`ion_string_t`, etc.).
 - `&mut Vec<T>` parameters codegen as `Vec_T**`; builtins dereference once when
   passing the receiver to `ion_vec_push`, `ion_vec_get`, and related helpers.
 

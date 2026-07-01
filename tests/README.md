@@ -106,6 +106,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_string_from.ion` - String::from() function
 - `test_string_new.ion` - String::new() function
 - `test_string_push_str.ion` - String::push_str() function
+- `test_string_push_str_owned.ion` - String::push_str() with an owned String argument
 - `test_string_push_byte.ion` - String::push_byte() function
 - `test_string_eq.ion` - String `==` and `!=` value equality (exit 55)
 - `test_generic_types.ion` - Generic type system
@@ -120,6 +121,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_i32.ion` - `Vec<i32>` with annotated `Vec::new`, `i32` indices
 - `test_vec_struct.ion` - `Vec` with struct elements, annotated `Vec::new`, and `for` iteration
 - `test_vec_get_struct.ion` - `Vec::get` with struct elements containing `String`
+- `test_vec_get_multi_option.ion` - `match Vec::get` picks `Option<T>` per vector element type
+- `test_vec_string_mangle.ion` - `Vec<String>` monomorphizes as `Vec_String` in generated C
 - `test_vec_search_index_ok.ion` - `find_index` returns `int`; caller uses `Vec::get` (exit 84)
 - `test_vec_push_mut_param.ion` - `Vec::push` through `&mut Vec<T>` parameter
 - `test_vec_push_nested_call.ion` - `Vec::push` with nested call expression value

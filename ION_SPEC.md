@@ -1049,7 +1049,7 @@ Note that:
 
 - String literals can be directly assigned to `String` type: `let s: String = "hello";`
 - `String::from()` creates a heap-allocated copy of a string literal.
-- `String::push_str()` appends a string literal to an existing `String`.
+- `String::push_str()` appends a string literal or an owned `String` (reads the source buffer).
 - `String::push_byte()` appends a single byte to an existing `String`.
 - `==` and `!=` compare UTF-8 byte content (value equality), not pointer identity.
 

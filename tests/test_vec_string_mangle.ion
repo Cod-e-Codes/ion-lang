@@ -1,0 +1,21 @@
+// Vec<String> monomorphization uses Ion type names (Vec_String), not C typedefs.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut names: Vec<String> = Vec::new();
+    Vec::push(&mut names, String::from("a"));
+    match Vec::get(&names, 0) {
+        Option::Some(s) => {
+            if String::len(&s) != 1 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    return 0;
+}

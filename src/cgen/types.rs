@@ -6,23 +6,8 @@ pub(crate) fn mangle_type_name(base: &str, params: &[Type]) -> String {
     if params.is_empty() {
         base.to_string()
     } else {
-        let param_strs: Vec<String> = params.iter().map(type_to_c_impl).collect();
-        // Sanitize type names for C identifiers (replace spaces and special chars with _)
-        let sanitized_params: Vec<String> = param_strs
-            .iter()
-            .map(|s| {
-                s.chars()
-                    .map(|c| {
-                        if c.is_alphanumeric() || c == '_' {
-                            c
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-        format!("{}_{}", base, sanitized_params.join("_"))
+        let param_strs: Vec<String> = params.iter().map(mangle_type_component).collect();
+        format!("{}_{}", base, param_strs.join("_"))
     }
 }
 
@@ -382,10 +367,7 @@ pub(crate) fn type_to_c_impl(ty: &Type) -> String {
                     format!("{}*", type_to_c_impl(&params[0]))
                 }
                 "Vec" if params.len() == 1 => {
-                    format!(
-                        "Vec_{}*",
-                        mangle_type_name(&type_to_c_impl(&params[0]), &[])
-                    )
+                    format!("{}*", mangle_type_name("Vec", params))
                 }
                 _ => {
                     // Generic user-defined types - mangle the name with parameters
@@ -399,7 +381,10 @@ pub(crate) fn type_to_c_impl(ty: &Type) -> String {
         }
         Type::Vec { elem_type } => {
             // Vec<T> will be a pointer to a vector structure
-            format!("Vec_{}*", mangle_type_name(&type_to_c_impl(elem_type), &[]))
+            format!(
+                "{}*",
+                mangle_type_name("Vec", std::slice::from_ref(elem_type))
+            )
         }
         Type::String => "ion_string_t*".to_string(),
         Type::Array { inner, size } => {

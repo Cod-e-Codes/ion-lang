@@ -1,0 +1,12 @@
+// String::push_str with an owned String argument (not only string literals).
+import "stdlib/fmt.ion" as fmt;
+
+fn main() -> int {
+    let mut s: String = String::from("n=");
+    let part: String = fmt::int_to_string(42);
+    String::push_str(&mut s, part);
+    if String::len(&s) != 4 {
+        return 1;
+    }
+    return 0;
+}

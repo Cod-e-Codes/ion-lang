@@ -1,4 +1,5 @@
 use super::*;
+use crate::cgen::types::mangle_type_name;
 
 impl Codegen {
     /// Generate code for built-in function calls.
@@ -68,12 +69,7 @@ impl Codegen {
                 .unwrap_or(&Type::Int);
 
             let elem_c_type = self.type_to_c(elem_type);
-            // Vec::new returns ion_vec_t*, but we need Vec_T*
-            // Cast ion_vec_t* to Vec_T*
-            // mangle_type_name expects a base name and params, but elem_c_type is already a C type name
-            // So we just use it directly
-            let vec_type_name =
-                format!("Vec_{}", elem_c_type.replace(' ', "_").replace('*', "ptr"));
+            let vec_type_name = mangle_type_name("Vec", std::slice::from_ref(elem_type));
             let code = format!(
                 "(({}*)(ion_vec_new(sizeof({}))))",
                 vec_type_name, elem_c_type
@@ -94,8 +90,7 @@ impl Codegen {
                 .unwrap_or(&Type::Int);
 
             let elem_c_type = self.type_to_c(elem_type);
-            let vec_type_name =
-                format!("Vec_{}", elem_c_type.replace(' ', "_").replace('*', "ptr"));
+            let vec_type_name = mangle_type_name("Vec", std::slice::from_ref(elem_type));
             let mut code = String::new();
             code.push_str(&format!(
                 "(({}*)(ion_vec_with_capacity(sizeof(",
@@ -369,25 +364,24 @@ impl Codegen {
             self.generate_expr(&args[1]);
             other_code = std::mem::replace(&mut self.output, old_output);
 
-            code.push_str("ion_string_push_str(");
-            code.push_str(deref_str);
-            code.push_str(", ");
             if other_code.starts_with('"') {
+                code.push_str("ion_string_push_str(");
+                code.push_str(deref_str);
+                code.push_str(", ");
                 let len = other_code.len() - 2;
                 code.push_str(&other_code);
                 code.push_str(", ");
                 code.push_str(&len.to_string());
+                code.push(')');
             } else {
-                // For String type, remove & if present
+                // Owned String or &String: append using heap buffer (.data/.len).
                 let deref_other = other_code.strip_prefix('&').unwrap_or(&other_code);
+                code.push_str("({ ion_string_t* _ion_push_other = ");
                 code.push_str(deref_other);
-                code.push_str(", (");
-                code.push_str(deref_other);
-                code.push_str(") ? (");
-                code.push_str(deref_other);
-                code.push_str(")->len : 0");
+                code.push_str("; ion_string_push_str(");
+                code.push_str(deref_str);
+                code.push_str(", ((_ion_push_other != NULL && _ion_push_other->data != NULL) ? (const char*)_ion_push_other->data : \"\"), (_ion_push_other != NULL ? _ion_push_other->len : (size_t)0)); })");
             }
-            code.push(')');
             return Some(code);
         }
 
