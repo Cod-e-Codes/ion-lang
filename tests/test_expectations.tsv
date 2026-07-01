@@ -61,7 +61,14 @@ test_vec_get_struct.ion	run	0
 test_vec_get_multi_option.ion	run	0
 test_vec_get_multi_option.ion	cgen			Option_Customer
 test_vec_get_multi_option.ion	cgen			Option_String
-test_vec_get_putback.ion	run	0
+test_vec_get_putback.ion	run	0			
+test_vec_get_ref_scan.ion	run	0			
+test_vec_get_ref_oob.ion	run	0			
+test_vec_get_ref_set_after.ion	run	0			
+test_vec_get_ref_string.ion	run	0			
+test_vec_get_ref_nested.ion	run	0			
+test_vec_get_ref_return_error.ion	error		ReferenceEscape		
+test_vec_get_ref_mut_error.ion	error		BorrowConflict		
 test_vec_string_mangle.ion	run	0
 test_vec_string_mangle.ion	cgen			typedef struct Vec_String
 test_vec_push_mut_param.ion	run	0

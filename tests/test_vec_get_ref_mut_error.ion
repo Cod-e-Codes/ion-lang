@@ -1,0 +1,17 @@
+// Vec::set conflicts with active get_ref shared borrow.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    match Vec::get_ref(&v, 0) {
+        Option::Some(_x) => {
+            Vec::set(&mut v, 0, 2);
+        }
+        Option::None => {}
+    };
+    return 0;
+}

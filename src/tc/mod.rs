@@ -688,6 +688,7 @@ impl TypeChecker {
             "Vec::len" => Some("fn Vec::len(vec: &Vec<T>) -> int"),
             "Vec::capacity" => Some("fn Vec::capacity(vec: &Vec<T>) -> int"),
             "Vec::get" => Some("fn Vec::get(vec: &Vec<T>, index: int) -> Option<T>"),
+            "Vec::get_ref" => Some("fn Vec::get_ref(vec: &Vec<T>, index: int) -> Option<&T>"),
             "Vec::set" => Some("fn Vec::set(vec: &mut Vec<T>, index: int, value: T) -> int"),
             "String::new" => Some("fn String::new() -> String"),
             "String::from" => Some("fn String::from(s: &str) -> String"),
@@ -866,7 +867,8 @@ impl TypeChecker {
                     mutable: true,
                 }))
             }
-            ("Vec", "Vec::len") | ("Vec", "Vec::capacity") | ("Vec", "Vec::get") => {
+            ("Vec", "Vec::len") | ("Vec", "Vec::capacity") | ("Vec", "Vec::get")
+            | ("Vec", "Vec::get_ref") => {
                 // These methods require &Vec<T>
                 let elem_type = match receiver_type {
                     Type::Vec { elem_type } => elem_type.clone(),
@@ -1435,6 +1437,14 @@ impl TypeChecker {
                         && let Some((owner, span)) = self.borrow_owner_from_expr(&ref_expr.inner)
                     {
                         self.register_borrow(&owner, ref_expr.mutable, span)?;
+                    }
+
+                    // Shared borrow on vec owner while `Option<&T>` from `Vec::get_ref` is live.
+                    if let Expr::Call(call) = init
+                        && call.callee == "Vec::get_ref"
+                        && call.args.len() == 2
+                    {
+                        self.register_get_ref_borrow_from_receiver(&call.args[0], let_stmt.span)?;
                     }
 
                     // New variable starts as Valid (it owns the value from init)
@@ -2457,6 +2467,107 @@ impl TypeChecker {
                         }
                         Ok(elements[index].clone())
                     }
+                    Type::Ref { inner, mutable: _ } => {
+                        let field_ty = match *inner {
+                            Type::Struct(ref name) => {
+                                if self.is_type_param(name) {
+                                    return Err(TypeCheckError::TypeMismatch {
+                                        expected: "concrete struct value for field access".to_string(),
+                                        got: format!("type parameter '{}'", name),
+                                        span: acc.span,
+                                    });
+                                }
+                                let decl = self.structs.get(name).ok_or_else(|| {
+                                    TypeCheckError::TypeMismatch {
+                                        expected: "known struct type".to_string(),
+                                        got: name.clone(),
+                                        span: acc.span,
+                                    }
+                                })?;
+                                let field = decl
+                                    .fields
+                                    .iter()
+                                    .find(|f| f.name == acc.field)
+                                    .ok_or_else(|| TypeCheckError::TypeMismatch {
+                                        expected: format!("field of struct '{}'", decl.name),
+                                        got: acc.field.clone(),
+                                        span: acc.span,
+                                    })?;
+                                field.ty.clone()
+                            }
+                            Type::Generic { ref name, ref params } => {
+                                let decl = self.structs.get(name).ok_or_else(|| {
+                                    TypeCheckError::TypeMismatch {
+                                        expected: "known struct type".to_string(),
+                                        got: name.clone(),
+                                        span: acc.span,
+                                    }
+                                })?;
+                                let substitutions = decl
+                                    .generics
+                                    .iter()
+                                    .zip(params.iter())
+                                    .map(|(p, t)| (p.clone(), t.clone()))
+                                    .collect::<std::collections::HashMap<_, _>>();
+                                let field = decl
+                                    .fields
+                                    .iter()
+                                    .find(|f| f.name == acc.field)
+                                    .ok_or_else(|| TypeCheckError::TypeMismatch {
+                                        expected: format!("field of struct '{}'", decl.name),
+                                        got: acc.field.clone(),
+                                        span: acc.span,
+                                    })?;
+                                substitute_generic_types_impl(&field.ty, &substitutions)
+                            }
+                            Type::String => match acc.field.as_str() {
+                                "data" => Type::RawPtr {
+                                    inner: Box::new(Type::U8),
+                                },
+                                "len" => Type::Int,
+                                _ => {
+                                    return Err(TypeCheckError::TypeMismatch {
+                                        expected: "field 'data' or 'len' on String".to_string(),
+                                        got: acc.field.clone(),
+                                        span: acc.span,
+                                    });
+                                }
+                            },
+                            Type::Tuple { ref elements } => {
+                                let index: usize =
+                                    acc.field.parse().map_err(|_| TypeCheckError::TypeMismatch {
+                                        expected: "numeric tuple field index".to_string(),
+                                        got: acc.field.clone(),
+                                        span: acc.span,
+                                    })?;
+                                if index >= elements.len() {
+                                    return Err(TypeCheckError::TypeMismatch {
+                                        expected: format!(
+                                            "tuple field index 0..{}",
+                                            elements.len().saturating_sub(1)
+                                        ),
+                                        got: acc.field.clone(),
+                                        span: acc.span,
+                                    });
+                                }
+                                elements[index].clone()
+                            }
+                            ref other => {
+                                return Err(TypeCheckError::TypeMismatch {
+                                    expected: "struct value for field access".to_string(),
+                                    got: type_to_string(other),
+                                    span: acc.span,
+                                });
+                            }
+                        };
+                        if let Type::Struct(ref struct_name) = *inner
+                            && let Some(target) =
+                                self.lookup_field_target(struct_name, &acc.field)
+                        {
+                            self.record_reference(acc.field_span, target);
+                        }
+                        Ok(field_ty)
+                    }
                     other => Err(TypeCheckError::TypeMismatch {
                         expected: "struct value for field access".to_string(),
                         got: type_to_string(&other),
@@ -2475,9 +2586,10 @@ impl TypeChecker {
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge | BinOp::Eq | BinOp::Ne => {
                         // Comparison operations - return bool
-                        // Allow comparing numeric types (even if different) or equal non-numeric types
-                        if (self.is_numeric_type(&left_type) && self.is_numeric_type(&right_type))
-                            || types_equal(&left_type, &right_type)
+                        let left_cmp = Self::comparison_operand_type(&left_type);
+                        let right_cmp = Self::comparison_operand_type(&right_type);
+                        if (self.is_numeric_type(&left_cmp) && self.is_numeric_type(&right_cmp))
+                            || types_equal(&left_cmp, &right_cmp)
                         {
                             Ok(Type::Bool)
                         } else {
@@ -2930,10 +3042,31 @@ impl TypeChecker {
                 let mut match_value_type: Option<Type> = None;
                 let mut has_diverging_arm = false;
                 let expr_ty_clone = expr_ty.clone();
+                let get_ref_owner = if Self::is_get_ref_call(&match_expr.expr) {
+                    if let Expr::Call(call) = match_expr.expr.as_ref() {
+                        self.vec_owner_from_get_ref_receiver(&call.args[0])
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
                 for arm in &match_expr.arms {
                     // Save current scope
                     let prev_vars = self.variables.clone();
+
+                    let borrows_vec_for_arm = get_ref_owner.is_some()
+                        && matches!(
+                            &arm.pattern,
+                            Pattern::Variant { variant, .. } if variant == "Some"
+                        );
+                    if borrows_vec_for_arm {
+                        self.push_borrow_scope();
+                        if let Some((ref owner, owner_span)) = get_ref_owner {
+                            self.register_borrow(owner, false, owner_span)?;
+                        }
+                    }
 
                     // Add pattern bindings to scope before checking the arm body
                     self.add_pattern_bindings(
@@ -2992,6 +3125,9 @@ impl TypeChecker {
                                 }
                             });
                         }
+                    }
+                    if borrows_vec_for_arm {
+                        self.pop_borrow_scope();
                     }
                     self.variables = prev_vars;
                 }
@@ -3887,6 +4023,14 @@ impl TypeChecker {
             Type::I32 | Type::U32 | Type::Int | Type::UInt => Some(32),
             Type::I64 | Type::U64 => Some(64),
             _ => None,
+        }
+    }
+
+    /// For comparisons, `&T` compares as `T` when `T` is a copy type.
+    fn comparison_operand_type(ty: &Type) -> Type {
+        match ty {
+            Type::Ref { inner, .. } if Self::is_copy_type(inner) => (**inner).clone(),
+            other => other.clone(),
         }
     }
 

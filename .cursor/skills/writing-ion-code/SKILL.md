@@ -150,7 +150,7 @@ Import with paths like `import "stdlib/io.ion" as io;`:
 
 No stdlib stdin/line input. For POSIX `read` on fd 0, see [examples/todo_demo/](../../../examples/todo_demo/).
 
-Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (define enums in-file or import). `String` literals assign to `String`; use `String::from("...")` when a owned copy is needed.
+Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (define enums in-file or import). `Vec::get` / `Vec::pop` move elements out; use `Vec::get_ref(&v, i)` for read-only in-function peek (`Option<&T>`, local only). `String` literals assign to `String`; use `String::from("...")` when a owned copy is needed.
 
 ## Build and verify
 

@@ -1,0 +1,24 @@
+// Cannot return &T from get_ref (no-escape).
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn peek(values: &Vec<int>, idx: int) -> &int {
+    match Vec::get_ref(values, idx) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            let zero: int = 0;
+            return &zero;
+        }
+    };
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let _r: &int = peek(&v, 0);
+    return 0;
+}

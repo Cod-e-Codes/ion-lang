@@ -123,6 +123,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_get_struct.ion` - `Vec::get` with struct elements containing `String`
 - `test_vec_get_multi_option.ion` - `match Vec::get` picks `Option<T>` per vector element type
 - `test_vec_get_putback.ion` - put-back scan after `Vec::get` move-out preserves vector length
+- `test_vec_get_ref_scan.ion` - read-only scan via `Vec::get_ref` without hollowing the vector
+- `test_vec_get_ref_oob.ion` - `Vec::get_ref` on empty index, OOB, and valid index
+- `test_vec_get_ref_set_after.ion` - `Vec::set` after `get_ref` borrow ends
+- `test_vec_get_ref_string.ion` - `Vec::get_ref` with `String` elements
+- `test_vec_get_ref_nested.ion` - `get_ref` on nested `Vec` in a struct field
 - `test_vec_string_mangle.ion` - `Vec<String>` monomorphizes as `Vec_String` in generated C
 - `test_vec_search_index_ok.ion` - `find_index` returns `int`; caller uses `Vec::get` (exit 84)
 - `test_vec_push_mut_param.ion` - `Vec::push` through `&mut Vec<T>` parameter
@@ -270,6 +275,8 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 - `test_enum_ref_error.ion` - Reference in enum variants
 - `test_match_ref_return_error.ion` - `match`/branch returning `&` local (ReferenceEscape)
 - `test_vec_index_ref_error.ion` - Helper almost returning `&vec[i]` via `Vec::get` (ReferenceEscape)
+- `test_vec_get_ref_return_error.ion` - Returning `&T` from `Vec::get_ref` (ReferenceEscape)
+- `test_vec_get_ref_mut_error.ion` - `Vec::set` while `get_ref` borrow is active (BorrowConflict)
 - `test_nested_struct_ref_error.ion` - Nested struct storing a reference field (ReferenceEscape)
 - `test_module_visibility.ion` - Module visibility violations
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls

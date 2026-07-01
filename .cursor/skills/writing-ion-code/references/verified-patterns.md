@@ -47,7 +47,7 @@ s.push_str("hi");
 let lit: String = "hello";
 ```
 
-`Vec::get` / `Vec::pop` return `Option<T>`. `Vec::set(&mut v, index, value)` returns `int` (0 = ok).
+`Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). `Vec::set(&mut v, index, value)` returns `int` (0 = ok).
 
 ## Box
 

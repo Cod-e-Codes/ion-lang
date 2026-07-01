@@ -1149,6 +1149,16 @@ fn vec_elem_type_from_arg_expr(arg: &Expr, ctx: &LoweringContext) -> Option<Type
 }
 
 fn builtin_option_vec_return(callee: &str, args: &[Expr], ctx: &LoweringContext) -> Option<Type> {
+    if callee == "Vec::get_ref" {
+        let elem = vec_elem_type_from_arg_expr(args.first()?, ctx)?;
+        return Some(Type::Generic {
+            name: "Option".to_string(),
+            params: vec![Type::Ref {
+                inner: Box::new(elem),
+                mutable: false,
+            }],
+        });
+    }
     if callee != "Vec::get" && callee != "Vec::pop" {
         return None;
     }

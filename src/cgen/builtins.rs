@@ -235,6 +235,67 @@ impl Codegen {
             return Some(code);
         }
 
+        // Vec::get_ref<T>(vec: &Vec<T>, index: int) -> Option<&T> (stack-local, no move-out)
+        if callee == "Vec::get_ref" && args.len() == 2 {
+            let option_name = return_type
+                .map(|t| mangle_type_name("Option", match t {
+                    Type::Generic { params, .. } => params.as_slice(),
+                    _ => &[],
+                }))
+                .unwrap_or_else(|| "Option_int_".to_string());
+            let ref_c_type = return_type
+                .and_then(|t| {
+                    if let Type::Generic { params, .. } = t
+                        && params.len() == 1
+                        && let Type::Ref { inner, .. } = &params[0]
+                    {
+                        Some(self.type_to_c(&Type::Ref {
+                            inner: inner.clone(),
+                            mutable: false,
+                        }))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "int*".to_string());
+
+            let mut vec_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, vec_code);
+            self.generate_expr(&args[0]);
+            vec_code = std::mem::replace(&mut self.output, old_output);
+
+            let mut index_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, index_code);
+            self.generate_expr(&args[1]);
+            index_code = std::mem::replace(&mut self.output, old_output);
+
+            let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type.and_then(|t| {
+                if let Type::Generic { params, .. } = t
+                    && params.len() == 1
+                    && let Type::Ref { inner, .. } = &params[0]
+                {
+                    Some(inner.as_ref())
+                } else {
+                    None
+                }
+            }));
+            let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
+
+            let mut code = String::new();
+            code.push_str("({ ");
+            code.push_str(&option_name);
+            code.push_str(" _ion_get_ref; ion_vec_t* _ion_v = (ion_vec_t*)(");
+            code.push_str(&deref_vec);
+            code.push_str("); int _ion_i = ");
+            code.push_str(&index_code);
+            code.push_str("; if (_ion_v && _ion_i >= 0 && (size_t)_ion_i < _ion_v->len) { _ion_get_ref.tag = 0; _ion_get_ref.data.variant_0.arg0 = (");
+            code.push_str(&ref_c_type);
+            code.push_str(")((char*)_ion_v->data + _ion_i * sizeof(");
+            code.push_str(&elem_c_type);
+            code.push_str(")); } else { _ion_get_ref.tag = 1; } _ion_get_ref; })");
+            return Some(code);
+        }
+
         // Vec::set<T>(vec: &mut Vec<T>, index: int, value: T) -> int
         if callee == "Vec::set" && args.len() == 3 {
             let mut code = String::new();
@@ -333,19 +394,31 @@ impl Codegen {
         // String::len(s: &String) -> int
         if callee == "String::len" && args.len() == 1 {
             let mut code = String::new();
-            let mut arg_code = String::new();
-            let old_output = std::mem::replace(&mut self.output, arg_code);
-            self.generate_expr(&args[0]);
-            arg_code = std::mem::replace(&mut self.output, old_output);
-            // arg_code is like "&s" where s is ion_string_t*, so &s is ion_string_t**
-            // We need to dereference it: *(&s) = s
-            // Remove the leading & if present
-            let deref_arg = arg_code.strip_prefix('&').unwrap_or(&arg_code);
-            code.push_str("((");
-            code.push_str(deref_arg);
-            code.push_str(") ? (int)((");
-            code.push_str(deref_arg);
-            code.push_str(")->len) : 0)");
+            let needs_deref = self
+                .infer_irexpr_type(&args[0])
+                .is_some_and(|ty| matches!(ty, Type::Ref { inner, .. } if matches!(*inner, Type::String)));
+            if needs_deref {
+                code.push_str("((");
+                let mut arg_code = String::new();
+                let old_output = std::mem::replace(&mut self.output, arg_code);
+                self.generate_expr(&args[0]);
+                arg_code = std::mem::replace(&mut self.output, old_output);
+                code.push_str(&arg_code);
+                code.push_str(") ? (int)((*");
+                code.push_str(&arg_code);
+                code.push_str(")->len) : 0)");
+            } else {
+                let mut arg_code = String::new();
+                let old_output = std::mem::replace(&mut self.output, arg_code);
+                self.generate_expr(&args[0]);
+                arg_code = std::mem::replace(&mut self.output, old_output);
+                let deref_arg = arg_code.strip_prefix('&').unwrap_or(&arg_code);
+                code.push_str("((");
+                code.push_str(deref_arg);
+                code.push_str(") ? (int)((");
+                code.push_str(deref_arg);
+                code.push_str(")->len) : 0)");
+            }
             return Some(code);
         }
 

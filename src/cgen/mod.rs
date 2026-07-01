@@ -1305,6 +1305,19 @@ impl Codegen {
         }
     }
 
+    fn emit_binop_operand(&mut self, expr: &IREexpr) {
+        let needs_deref = self
+            .infer_irexpr_type(expr)
+            .is_some_and(|ty| matches!(ty, Type::Ref { inner, .. } if matches!(*inner, Type::Int | Type::Bool | Type::F32 | Type::F64 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::UInt)));
+        if needs_deref {
+            self.write("(*");
+            self.generate_expr(expr);
+            self.write(")");
+        } else {
+            self.generate_expr(expr);
+        }
+    }
+
     fn generate_string_equality(
         &mut self,
         op: BinOp,
@@ -2232,7 +2245,7 @@ impl Codegen {
                                     || callee.starts_with("ion_vec_pop")
                                     || callee.starts_with("ion_vec_get")
                                     || (return_type.is_some()
-                                        && matches!(return_type.as_ref().unwrap(), Type::Generic { name: n, .. } if n == "Option"));
+                                        && matches!(return_type.as_ref().unwrap(), Type::Generic { name: n, params } if n == "Option" && params.len() == 1 && !matches!(&params[0], Type::Ref { .. })));
 
                                 if needs_cast {
                                     let mono_name = mangle_type_name("Option", params);
@@ -2500,9 +2513,9 @@ impl Codegen {
                     self.generate_string_equality(*op, left, right, true);
                 } else {
                     self.write("(");
-                    self.generate_expr(left);
+                    self.emit_binop_operand(left);
                     self.write(&format!(" {} ", self.op_to_c(*op)));
-                    self.generate_expr(right);
+                    self.emit_binop_operand(right);
                     self.write(")");
                 }
             }
@@ -2661,6 +2674,20 @@ impl Codegen {
                     let should_use_pointer =
                         if let Some(param_ty) = self.current_function_params.get(var_name) {
                             matches!(param_ty, Type::String)
+                        } else if let Some(ty) = self.lookup_var_type(var_name) {
+                            matches!(
+                                ty,
+                                Type::Ref {
+                                    inner,
+                                    ..
+                                } if matches!(
+                                    *inner,
+                                    Type::Struct(_)
+                                        | Type::Generic { .. }
+                                        | Type::Tuple { .. }
+                                        | Type::String
+                                )
+                            )
                         } else {
                             *is_pointer
                         };
@@ -2691,8 +2718,22 @@ impl Codegen {
                         }
                     }
                 } else {
+                    let use_arrow = if let Some(ty) = self.infer_irexpr_type(base) {
+                        matches!(
+                            ty,
+                            Type::Ref {
+                                inner,
+                                ..
+                            } if matches!(
+                                *inner,
+                                Type::Struct(_) | Type::Generic { .. } | Type::Tuple { .. }
+                            )
+                        )
+                    } else {
+                        *is_pointer
+                    };
                     self.generate_expr(base);
-                    if *is_pointer {
+                    if use_arrow || *is_pointer {
                         self.write("->");
                     } else {
                         self.write(".");
@@ -3514,7 +3555,7 @@ impl Codegen {
                 || callee == "METHOD::pop"
                 || callee == "METHOD::get";
 
-            if is_vec_pop_or_get {
+            if is_vec_pop_or_get || callee == "Vec::get_ref" {
                 if let Some(Type::Generic { name, params }) = return_type
                     && name == "Option"
                     && params.len() == 1
@@ -3579,21 +3620,23 @@ impl Codegen {
             ..
         } = expr
         {
-            let is_vec_pop_or_get = callee == "Vec::pop"
+            let is_vec_heap_option = callee == "Vec::pop"
                 || callee == "Vec::get"
                 || callee == "METHOD::pop"
                 || callee == "METHOD::get"
                 || callee.starts_with("ion_vec_pop")
                 || callee.starts_with("ion_vec_get");
 
-            // Also check if return type is Option<T> - runtime functions return void* that need casting
-            let returns_option = if let Some(Type::Generic { name, .. }) = return_type {
+            // Stack-local Option<&T> from Vec::get_ref is assigned directly.
+            let returns_heap_option = if let Some(Type::Generic { name, params }) = return_type {
                 name == "Option"
+                    && params.len() == 1
+                    && !matches!(params[0], Type::Ref { .. })
             } else {
                 false
             };
 
-            is_vec_pop_or_get || returns_option
+            is_vec_heap_option || returns_heap_option
         } else {
             false
         };
@@ -3839,23 +3882,43 @@ impl Codegen {
                                 // Extract payload into binding variable
                                 let payload_field = format!("arg{i}");
                                 self.write_indent();
-                                self.write(&format!(
-                                    "{} {} = {}.data.variant_{}.{};",
-                                    self.type_to_c(&concrete_payload_ty),
+                                if let Type::Ref { inner, .. } = &concrete_payload_ty {
+                                    self.write(&format!(
+                                        "{} {} = *{}.data.variant_{}.{};",
+                                        self.type_to_c(inner),
+                                        name,
+                                        match_var_name,
+                                        variant_idx,
+                                        payload_field
+                                    ));
+                                    self.writeln("");
+                                    self.scope_register_binding(name, inner);
+                                } else {
+                                    self.write(&format!(
+                                        "{} {} = {}.data.variant_{}.{};",
+                                        self.type_to_c(&concrete_payload_ty),
+                                        name,
+                                        match_var_name,
+                                        variant_idx,
+                                        payload_field
+                                    ));
+                                    self.writeln("");
+                                    self.emit_match_scrutinee_payload_moved_out(
+                                        match_var_name,
+                                        variant_idx,
+                                        &payload_field,
+                                        &concrete_payload_ty,
+                                    );
+                                    self.scope_register_binding(name, &concrete_payload_ty);
+                                }
+                                if Self::should_silence_unused_binding(
                                     name,
-                                    match_var_name,
-                                    variant_idx,
-                                    payload_field
-                                ));
-                                self.writeln("");
-                                self.emit_match_scrutinee_payload_moved_out(
-                                    match_var_name,
-                                    variant_idx,
-                                    &payload_field,
-                                    &concrete_payload_ty,
-                                );
-                                self.scope_register_binding(name, &concrete_payload_ty);
-                                if Self::should_silence_unused_binding(name, &concrete_payload_ty) {
+                                    if let Type::Ref { inner, .. } = &concrete_payload_ty {
+                                        inner
+                                    } else {
+                                        &concrete_payload_ty
+                                    },
+                                ) {
                                     self.emit_silence_unused_binding(name);
                                 }
                             }
@@ -5029,12 +5092,7 @@ fn collect_generic_instantiations(
 
 fn type_params_are_concrete(params: &[Type]) -> bool {
     params.iter().all(|param| match param {
-        Type::Struct(name) | Type::Enum(name) => {
-            matches!(
-                name.as_str(),
-                "Box" | "Vec" | "Option" | "String" | "Sender" | "Receiver"
-            )
-        }
+        Type::Struct(_) | Type::Enum(_) => true,
         Type::Generic { params: nested, .. } => type_params_are_concrete(nested),
         Type::Ref { inner, .. }
         | Type::Box { inner }
@@ -5216,12 +5274,13 @@ fn collect_generic_from_expr(
                 ..
             } = expr.as_ref()
             {
-                let is_vec_pop_or_get = callee == "Vec::pop"
+                let is_vec_option_call = callee == "Vec::pop"
                     || callee == "Vec::get"
+                    || callee == "Vec::get_ref"
                     || callee == "METHOD::pop"
                     || callee == "METHOD::get";
 
-                if is_vec_pop_or_get {
+                if is_vec_option_call {
                     // First try to get Option type from return_type if available
                     if let Some(Type::Generic { name, params }) = return_type
                         && name == "Option"

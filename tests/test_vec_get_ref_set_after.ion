@@ -1,0 +1,31 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 10);
+    match Vec::get_ref(&v, 0) {
+        Option::Some(x) => {
+            if x != 10 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    Vec::set(&mut v, 0, 99);
+    match Vec::get_ref(&v, 0) {
+        Option::Some(x) => {
+            if x != 99 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    };
+    return 0;
+}

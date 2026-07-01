@@ -27,6 +27,7 @@ fn mangle_type_component(ty: &Type) -> String {
         Type::Generic { name, params } if name == "Box" && params.len() == 1 => {
             format!("Box_{}", mangle_type_component(&params[0]))
         }
+        Type::Ref { inner, .. } => format!("ref_{}", mangle_type_component(inner)),
         Type::Generic { name, params } if params.is_empty() => name.clone(),
         Type::Generic { name, params } => mangle_type_name(name, params),
         _ => type_to_c_impl(ty)

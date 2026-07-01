@@ -1,0 +1,54 @@
+// Read-only scan via Vec::get_ref; vector length and slots stay intact.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Product {
+    id: int;
+    price_cents: int;
+    active: int;
+}
+
+fn main() -> int {
+    let mut products: Vec<Product> = Vec::new();
+    let row: Product = Product {
+        id: 1,
+        price_cents: 100,
+        active: 1,
+    };
+    Vec::push(&mut products, row);
+    let row2: Product = Product {
+        id: 2,
+        price_cents: 200,
+        active: 0,
+    };
+    Vec::push(&mut products, row2);
+    let len: int = Vec::len(&products);
+    let mut count: int = 0;
+    let mut sum: int = 0;
+    let mut i: int = 0;
+    while i < len {
+        match Vec::get_ref(&products, i) {
+            Option::Some(p) => {
+                if p.active == 1 {
+                    count = count + 1;
+                    sum = sum + p.price_cents;
+                } else {
+                }
+            }
+            Option::None => {}
+        };
+        i = i + 1;
+    }
+    if count != 1 {
+        return 1;
+    }
+    if sum != 100 {
+        return 2;
+    }
+    if Vec::len(&products) != 2 {
+        return 3;
+    }
+    return 0;
+}

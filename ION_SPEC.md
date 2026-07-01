@@ -494,7 +494,7 @@ Additional built-in generic types:
 
 - `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`)
 - `Sender<T>` and `Receiver<T>` – move-only handles for the two ends of a bounded MPSC channel
-- `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::set()`)
+- `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::get_ref()`, `Vec::set()`)
 - `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
 - `[T; N]` – fixed-size array of `N` elements of type `T`
 - `[]T` – dynamically sized slice (fat pointer) of type `T`
@@ -1011,6 +1011,7 @@ impl<T> Vec<T> {
     fn len(self: &Vec<T>) -> int;
     fn capacity(self: &Vec<T>) -> int;
     fn get(self: &Vec<T>, index: int) -> Option<T>;
+    fn get_ref(self: &Vec<T>, index: int) -> Option<&T>;
     fn set(self: &mut Vec<T>, index: int, value: T);
 }
 ```
@@ -1019,10 +1020,11 @@ Note that:
 
 - `Vec<T>` is `Send` if `T: Send`.
 - `Vec::new()` and `Vec::with_capacity()` infer `T` from a `let` type annotation when present (e.g. `let v: Vec<i32> = Vec::new()`).
-- `Vec::get()` and `Vec::pop()` return `Option<T>` to handle out-of-bounds or empty cases. Both **move** the element out of the vector; a read-only scan over an owned `Vec<T>` must copy fields and `Vec::set()` a rebuilt struct literal to put the value back (nested `Vec` fields still move on put-back).
-- `Vec::set()` requires a mutable reference and returns an error code (0 for success, non-zero for failure).
+- `Vec::get()` and `Vec::pop()` return `Option<T>` to handle out-of-bounds or empty cases. Both **move** the element out of the vector. To preserve vector length after a read-only scan, either use `Vec::get_ref()` (below) or copy fields and `Vec::set()` a rebuilt struct literal to put the value back (nested `Vec` fields still move on put-back).
+- `Vec::get_ref()` returns `Option<&T>`: a **local, stack-only borrow** of an in-place element. It does not move or hollow the slot. The result is only valid as a short-lived binding within the current function (for example in a `match` arm). It cannot be returned, stored in structs or enums, sent on channels, or cross `spawn`. While an `&T` from `get_ref` is active, the root owner of the vector (the binding behind `&Vec<T>`) is shared-borrowed: `&mut Vec<T>` on that owner, `Vec::set`, `Vec::push`, and `Vec::pop` on the same vector are rejected until the borrow ends. Out-of-range or negative indices yield `Option::None`. Nested inspection (`order.lines` then `get_ref`) follows the same root-owner borrow rules as field paths (Section 5.3).
+- `Vec::set()` requires a mutable reference and returns an error code (0 for success, non-zero for failure). After shared borrows from `get_ref` end, `Vec::set` on the same index is allowed.
 
-More ergonomic indexed access APIs (e.g., returning "maybe a reference") are intentionally deferred.  Ion favors an **index/handle style** for long-lived references into collections: helper functions typically return indices or keys rather than borrowed references, and callers re-index into the collection within their own function bodies.
+For cross-function or long-lived access, Ion still favors an **index/handle style**: helpers return indices or keys and callers re-index within their own function bodies.
 
 #### 8.3 `String`
 
@@ -1253,7 +1255,7 @@ stronger contract.
 - No trait bounds on generics
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - `if`/`else` merge: ownership after an `if` is merged from branches that can fall through to the following code. A move in a branch that always `return`s, `break`s, or `continue`s does not block use after the `if`. If two fall-through paths disagree (one moved, one valid), it is still an error.
-- `while`/`for` loops: a non-copy variable moved anywhere in the loop body is an error (repeated iteration would need the binding again); copy types and borrows are unchanged. In `while` loops over `Vec::get`, consume each element once (for example via a helper taking `&mut Vec<T>`) instead of reassigning a loop-carried `Vec` binding.
+- `while`/`for` loops: a non-copy variable moved anywhere in the loop body is an error (repeated iteration would need the binding again); copy types and borrows are unchanged. For read-only scans over an owned `Vec<T>`, prefer `Vec::get_ref` (Section 8.2) or index/handle helpers; `Vec::get` move-out still requires consume-once or put-back per iteration.
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (signature hover only)
 - LSP go-to-definition for type names in type annotations (no source spans on `Type` AST nodes)
@@ -1285,6 +1287,8 @@ Because Ion does not allow returning references from functions, helpers that wou
 
 - An **index** (e.g., `int`) into a collection, or
 - A **key/handle** type that wraps an index or opaque identifier.
+
+Within a single function, read-only inspection of `Vec<T>` elements can use `Vec::get_ref` (Section 8.2), which yields a local `Option<&T>` without move-out.
 
 Example:
 

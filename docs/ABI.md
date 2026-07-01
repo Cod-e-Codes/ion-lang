@@ -38,7 +38,7 @@ backend monomorphizes element-specific helpers where needed.
 
 Stable beta expectations:
 
-- `Vec::new`, `Vec::push`, `Vec::pop`, `Vec::get`, `Vec::set`, `Vec::len`, and
+- `Vec::new`, `Vec::push`, `Vec::pop`, `Vec::get`, `Vec::get_ref`, `Vec::set`, `Vec::len`, and
   `Vec::capacity` remain available through the stdlib/builtin surface.
 - Dropping `Vec<T>` drops owned elements when `T` needs destruction.
 - Bounds-sensitive operations either return `Option<T>` where documented or
@@ -48,10 +48,17 @@ Stable beta expectations:
   values (tag plus payload at `data.variant_0.arg0`). `match` on `Vec::get` /
   `Vec::pop` resolves `Option<T>` from the call's return type or the vector
   argument's element type (not the first `Vec` in the program).
+- `Vec::get_ref` returns a **stack-local** `Option<&T>`: codegen fills tag and a
+  pointer into the vector buffer (or `None` when out of bounds). No runtime heap
+  `Option` and no `ion_option_from_raw`. Monomorphized names use the `ref_`
+  prefix (for example `Option_ref_int`, `Option_ref_Product`). `match` on
+  `Option::Some` binds by dereferencing the payload (`*arg0`) for use in the arm.
 - Monomorphized container typedefs use Ion type names (`Vec_String`,
   `Option_Customer`), not C runtime typedefs (`ion_string_t`, etc.).
 - `&mut Vec<T>` parameters codegen as `Vec_T**`; builtins dereference once when
   passing the receiver to `ion_vec_push`, `ion_vec_get`, and related helpers.
+  `Vec::get_ref` uses the same `ion_vec_t*` receiver but does not call
+  `ion_vec_get`; it bounds-checks and takes the address of the slot in generated C.
 
 ## `Box<T>`
 

@@ -1,0 +1,24 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut names: Vec<String> = Vec::new();
+    let s: String = "hi";
+    Vec::push(&mut names, s);
+    match Vec::get_ref(&names, 0) {
+        Option::Some(r) => {
+            if String::len(r) != 2 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    if Vec::len(&names) != 1 {
+        return 3;
+    }
+    return 0;
+}

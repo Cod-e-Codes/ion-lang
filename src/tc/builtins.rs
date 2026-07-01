@@ -256,6 +256,57 @@ impl TypeChecker {
             });
         }
 
+        // Vec::get_ref<T>(vec: &Vec<T>, index: int) -> Option<&T>
+        if callee == "Vec::get_ref" {
+            if call_expr.args.len() != 2 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "2 arguments".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let index_ty = self.check_expr(&call_expr.args[1])?;
+            if !self.is_integer_type(&index_ty) {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "integer type".to_string(),
+                    got: type_to_string(&index_ty),
+                    span: call_expr.args[1].span(),
+                });
+            }
+
+            let elem_type = self
+                .vec_elem_type_from_receiver(&call_expr.args[0])
+                .or_else(|| {
+                    let vec_ty = self.check_expr(&call_expr.args[0]).ok()?;
+                    if let Type::Ref {
+                        inner,
+                        mutable: false,
+                    } = vec_ty
+                        && let Type::Vec { elem_type } = *inner
+                    {
+                        return Some(*elem_type);
+                    }
+                    None
+                });
+
+            if let Some(elem_type) = elem_type {
+                let resolved_elem = self.resolve_type_name(&elem_type)?;
+                return Ok(Some(Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![Type::Ref {
+                        inner: Box::new(resolved_elem),
+                        mutable: false,
+                    }],
+                }));
+            }
+            let vec_ty = self.check_expr(&call_expr.args[0])?;
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "&Vec<T>".to_string(),
+                got: type_to_string(&vec_ty),
+                span: call_expr.args[0].span(),
+            });
+        }
+
         // Vec::set<T>(vec: &mut Vec<T>, index: int, value: T) -> int
         if callee == "Vec::set" {
             if call_expr.args.len() != 3 {
@@ -429,6 +480,43 @@ impl TypeChecker {
 
         // Not a built-in function
         Ok(None)
+    }
+
+    /// Root owner binding for `Vec::get_ref(&owner, index)` (or `&owner.field`).
+    pub(crate) fn vec_owner_from_get_ref_receiver(
+        &self,
+        receiver: &Expr,
+    ) -> Option<(String, Span)> {
+        if let Expr::Ref(r) = receiver {
+            return self.borrow_owner_from_expr(&r.inner);
+        }
+        None
+    }
+
+    pub(crate) fn is_get_ref_call(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::Call(c) if c.callee == "Vec::get_ref" && c.args.len() == 2
+        )
+    }
+
+    /// Register a shared borrow on the vector owner while `Option<&T>` from `get_ref` is live.
+    pub(crate) fn register_get_ref_borrow_from_receiver(
+        &mut self,
+        receiver: &Expr,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        if let Some((owner, owner_span)) = self.vec_owner_from_get_ref_receiver(receiver) {
+            self.register_borrow(&owner, false, owner_span)?;
+        } else {
+            let _ = self.check_expr(receiver)?;
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "&Vec<T>".to_string(),
+                got: "expression with a local owner".to_string(),
+                span,
+            });
+        }
+        Ok(())
     }
 
     /// Element type for `&vec` when `vec` is a local binding (for-loop temps keep full `Vec<T>`).

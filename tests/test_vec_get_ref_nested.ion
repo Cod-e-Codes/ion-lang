@@ -1,0 +1,34 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Line {
+    sku: int;
+    qty: int;
+}
+
+struct Order {
+    lines: Vec<Line>;
+}
+
+fn main() -> int {
+    let mut lines: Vec<Line> = Vec::new();
+    let mut order: Order = Order { lines: lines };
+    let line: Line = Line { sku: 42, qty: 3 };
+    Vec::push(&mut order.lines, line);
+    match Vec::get_ref(&order.lines, 0) {
+        Option::Some(l) => {
+            if l.sku != 42 {
+                return 1;
+            }
+            if l.qty != 3 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+    return 0;
+}
