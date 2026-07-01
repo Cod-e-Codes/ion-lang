@@ -162,17 +162,29 @@ impl LspSession {
 
 fn ion_lsp_binary() -> PathBuf {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_ion-lsp") {
-        return PathBuf::from(path);
+        let path = PathBuf::from(&path);
+        if path.exists() {
+            return path;
+        }
     }
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join(profile)
-        .join(format!("ion-lsp{}", std::env::consts::EXE_SUFFIX))
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let target_dir = std::env::var("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| manifest_dir.join("target"));
+    let exe = format!("ion-lsp{}", std::env::consts::EXE_SUFFIX);
+
+    for profile in ["debug", "release"] {
+        let path = target_dir.join(profile).join(&exe);
+        if path.exists() {
+            return path;
+        }
+    }
+
+    panic!(
+        "ion-lsp binary not found under {}; run `cargo build --bin ion-lsp`",
+        target_dir.display()
+    );
 }
 
 fn read_lsp_message<R: BufRead>(reader: &mut R) -> std::io::Result<Option<Value>> {
