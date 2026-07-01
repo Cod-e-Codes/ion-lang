@@ -1019,7 +1019,7 @@ Note that:
 
 - `Vec<T>` is `Send` if `T: Send`.
 - `Vec::new()` and `Vec::with_capacity()` infer `T` from a `let` type annotation when present (e.g. `let v: Vec<i32> = Vec::new()`).
-- `Vec::get()` and `Vec::pop()` return `Option<T>` to handle out-of-bounds or empty cases.
+- `Vec::get()` and `Vec::pop()` return `Option<T>` to handle out-of-bounds or empty cases. Both **move** the element out of the vector; a read-only scan over an owned `Vec<T>` must copy fields and `Vec::set()` a rebuilt struct literal to put the value back (nested `Vec` fields still move on put-back).
 - `Vec::set()` requires a mutable reference and returns an error code (0 for success, non-zero for failure).
 
 More ergonomic indexed access APIs (e.g., returning "maybe a reference") are intentionally deferred.  Ion favors an **index/handle style** for long-lived references into collections: helper functions typically return indices or keys rather than borrowed references, and callers re-index into the collection within their own function bodies.

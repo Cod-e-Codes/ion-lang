@@ -1,0 +1,55 @@
+// Put-back scan: Vec::get moves elements out; copy scalars and Vec::set to preserve the vec.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Product {
+    id: int;
+    price_cents: int;
+    active: int;
+}
+
+fn main() -> int {
+    let mut products: Vec<Product> = Vec::new();
+    let row: Product = Product {
+        id: 1,
+        price_cents: 100,
+        active: 1,
+    };
+    Vec::push(&mut products, row);
+    let len: int = Vec::len(&products);
+    let mut count: int = 0;
+    let mut i: int = 0;
+    while i < len {
+        match Vec::get(&products, i) {
+            Option::Some(p) => {
+                let pid: int = p.id;
+                let price: int = p.price_cents;
+                let active: int = p.active;
+                if active == 1 {
+                    count = count + 1;
+                } else {
+                }
+                Vec::set(
+                    &mut products,
+                    i,
+                    Product {
+                        id: pid,
+                        price_cents: price,
+                        active: active,
+                    },
+                );
+            }
+            Option::None => {}
+        };
+        i = i + 1;
+    }
+    if count != 1 {
+        return 1;
+    }
+    if Vec::len(&products) != 1 {
+        return 2;
+    }
+    return 0;
+}

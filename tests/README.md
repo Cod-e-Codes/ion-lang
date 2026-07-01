@@ -122,6 +122,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_struct.ion` - `Vec` with struct elements, annotated `Vec::new`, and `for` iteration
 - `test_vec_get_struct.ion` - `Vec::get` with struct elements containing `String`
 - `test_vec_get_multi_option.ion` - `match Vec::get` picks `Option<T>` per vector element type
+- `test_vec_get_putback.ion` - put-back scan after `Vec::get` move-out preserves vector length
 - `test_vec_string_mangle.ion` - `Vec<String>` monomorphizes as `Vec_String` in generated C
 - `test_vec_search_index_ok.ion` - `find_index` returns `int`; caller uses `Vec::get` (exit 84)
 - `test_vec_push_mut_param.ion` - `Vec::push` through `&mut Vec<T>` parameter
