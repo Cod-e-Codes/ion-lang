@@ -47,7 +47,7 @@ s.push_str("hi");
 let lit: String = "hello";
 ```
 
-`Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). `Vec::set(&mut v, index, value)` returns `int` (0 = ok).
+`Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). In `match Option::Some(x)`, `x` is `&T`: copy types bind by value; structs with owned fields bind as a pointer so nested `Vec` fields are not dropped. `Vec::set(&mut v, index, value)` returns `int` (0 = ok).
 
 ## Box
 

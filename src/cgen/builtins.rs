@@ -237,7 +237,18 @@ impl Codegen {
 
         // Vec::get_ref<T>(vec: &Vec<T>, index: int) -> Option<&T> (stack-local, no move-out)
         if callee == "Vec::get_ref" && args.len() == 2 {
-            let option_name = return_type
+            let effective_return_type = return_type.cloned().or_else(|| {
+                self.vec_elem_type_from_arg(&args[0])
+                    .map(|elem| Type::Generic {
+                        name: "Option".to_string(),
+                        params: vec![Type::Ref {
+                            inner: Box::new(elem),
+                            mutable: false,
+                        }],
+                    })
+            });
+            let option_name = effective_return_type
+                .as_ref()
                 .map(|t| {
                     mangle_type_name(
                         "Option",
@@ -248,7 +259,8 @@ impl Codegen {
                     )
                 })
                 .unwrap_or_else(|| "Option_int_".to_string());
-            let ref_c_type = return_type
+            let ref_c_type = effective_return_type
+                .as_ref()
                 .and_then(|t| {
                     if let Type::Generic { params, .. } = t
                         && params.len() == 1
@@ -276,7 +288,7 @@ impl Codegen {
 
             let elem_c_type = self.resolve_vec_elem_c_type(
                 &args[0],
-                return_type.and_then(|t| {
+                effective_return_type.as_ref().and_then(|t| {
                     if let Type::Generic { params, .. } = t
                         && params.len() == 1
                         && let Type::Ref { inner, .. } = &params[0]

@@ -1,0 +1,66 @@
+// Second pass over Vec<struct-with-nested-Vec> via get_ref must not corrupt heap.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Line {
+    price_cents: int;
+    qty: int;
+}
+
+struct Order {
+    customer_id: int;
+    lines: Vec<Line>;
+}
+
+fn revenue_for_order(orders: &Vec<Order>, customer_id: int) -> int {
+    let len: int = Vec::len(orders);
+    let mut sum: int = 0;
+    let mut i: int = 0;
+    while i < len {
+        match Vec::get_ref(orders, i) {
+            Option::Some(order) => {
+                if order.customer_id == customer_id {
+                    let line_len: int = Vec::len(&order.lines);
+                    let mut j: int = 0;
+                    while j < line_len {
+                        match Vec::get_ref(&order.lines, j) {
+                            Option::Some(line) => {
+                                sum = sum + line.price_cents * line.qty;
+                            }
+                            Option::None => {}
+                        };
+                        j = j + 1;
+                    }
+                } else {
+                }
+            }
+            Option::None => {}
+        };
+        i = i + 1;
+    }
+    return sum;
+}
+
+fn main() -> int {
+    let mut orders: Vec<Order> = Vec::new();
+    let mut lines: Vec<Line> = Vec::new();
+    let line: Line = Line { price_cents: 100, qty: 2 };
+    Vec::push(&mut lines, line);
+    let order: Order = Order { customer_id: 1, lines: lines };
+    Vec::push(&mut orders, order);
+
+    let first: int = revenue_for_order(&orders, 1);
+    if first != 200 {
+        return 1;
+    }
+    let second: int = revenue_for_order(&orders, 1);
+    if second != 200 {
+        return 2;
+    }
+    if Vec::len(&orders) != 1 {
+        return 3;
+    }
+    return 0;
+}

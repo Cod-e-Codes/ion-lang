@@ -51,8 +51,9 @@ Stable beta expectations:
 - `Vec::get_ref` returns a **stack-local** `Option<&T>`: codegen fills tag and a
   pointer into the vector buffer (or `None` when out of bounds). No runtime heap
   `Option` and no `ion_option_from_raw`. Monomorphized names use the `ref_`
-  prefix (for example `Option_ref_int`, `Option_ref_Product`). `match` on
-  `Option::Some` binds by dereferencing the payload (`*arg0`) for use in the arm.
+  prefix (for example `Option_ref_int`, `Option_ref_Product`). Match arms on
+  `Option::Some(x)` bind drop-owning `T` as `T*`; copy types bind by value from
+  `*arg0`. Scope cleanup must not drop nested owned fields through the binding.
 - Monomorphized container typedefs use Ion type names (`Vec_String`,
   `Option_Customer`), not C runtime typedefs (`ion_string_t`, etc.).
 - `&mut Vec<T>` parameters codegen as `Vec_T**`; builtins dereference once when

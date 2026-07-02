@@ -1132,7 +1132,11 @@ impl Codegen {
                 } else {
                     self.infer_irexpr_type(base)?
                 };
-                let (decl, substitutions) = self.struct_decl_for_type(&base_ty)?;
+                let struct_ty = match &base_ty {
+                    Type::Ref { inner, .. } => inner.as_ref(),
+                    other => other,
+                };
+                let (decl, substitutions) = self.struct_decl_for_type(struct_ty)?;
                 let field_decl = decl.fields.iter().find(|f| f.name == *field)?;
                 Some(Self::substitute_field_types(&field_decl.ty, &substitutions))
             }
@@ -3566,6 +3570,14 @@ impl Codegen {
                 if let Some(first_arg) = args.first()
                     && let Some(elem_type) = self.vec_elem_type_from_arg(first_arg)
                 {
+                    if callee == "Vec::get_ref" {
+                        let ref_elem = Type::Ref {
+                            inner: Box::new(elem_type.clone()),
+                            mutable: false,
+                        };
+                        let mono_name = mangle_type_name("Option", std::slice::from_ref(&ref_elem));
+                        return (mono_name, vec![ref_elem]);
+                    }
                     let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem_type));
                     return (mono_name, vec![elem_type]);
                 }
@@ -3881,16 +3893,31 @@ impl Codegen {
                                 let payload_field = format!("arg{i}");
                                 self.write_indent();
                                 if let Type::Ref { inner, .. } = &concrete_payload_ty {
-                                    self.write(&format!(
-                                        "{} {} = *{}.data.variant_{}.{};",
-                                        self.type_to_c(inner),
-                                        name,
-                                        match_var_name,
-                                        variant_idx,
-                                        payload_field
-                                    ));
-                                    self.writeln("");
-                                    self.scope_register_binding(name, inner);
+                                    // Vec::get_ref yields Option<&T>. Copy primitives in-place; borrow
+                                    // structs with owned fields as T* so nested Vec fields are not dropped.
+                                    if self.type_needs_drop(inner) {
+                                        self.write(&format!(
+                                            "{} {} = {}.data.variant_{}.{};",
+                                            self.type_to_c(&concrete_payload_ty),
+                                            name,
+                                            match_var_name,
+                                            variant_idx,
+                                            payload_field
+                                        ));
+                                        self.writeln("");
+                                        self.scope_register_binding(name, &concrete_payload_ty);
+                                    } else {
+                                        self.write(&format!(
+                                            "{} {} = *{}.data.variant_{}.{};",
+                                            self.type_to_c(inner),
+                                            name,
+                                            match_var_name,
+                                            variant_idx,
+                                            payload_field
+                                        ));
+                                        self.writeln("");
+                                        self.scope_register_binding(name, inner);
+                                    }
                                 } else {
                                     self.write(&format!(
                                         "{} {} = {}.data.variant_{}.{};",
@@ -5263,7 +5290,7 @@ fn collect_generic_from_expr(
                 collect_generic_from_expr(arg, instantiations);
             }
         }
-        IREexpr::Match { expr, .. } => {
+        IREexpr::Match { expr, arms, .. } => {
             collect_generic_from_expr(expr, instantiations);
             // Also collect Option types from Vec::pop/Vec::get calls in match expressions
             if let IREexpr::Call {
@@ -5288,6 +5315,28 @@ fn collect_generic_from_expr(
                         instantiations
                             .entry(option_key)
                             .or_insert_with(|| ("Option".to_string(), params.clone()));
+                    } else if callee == "Vec::get_ref" {
+                        if let Some(elem_type) =
+                            instantiations
+                                .iter()
+                                .find_map(|(_mono_name, (base, params))| {
+                                    if base == "Vec" && params.len() == 1 {
+                                        Some(params[0].clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                        {
+                            let ref_elem = Type::Ref {
+                                inner: Box::new(elem_type.clone()),
+                                mutable: false,
+                            };
+                            let option_key =
+                                mangle_type_name("Option", std::slice::from_ref(&ref_elem));
+                            instantiations
+                                .entry(option_key)
+                                .or_insert_with(|| ("Option".to_string(), vec![ref_elem]));
+                        }
                     } else {
                         // Otherwise, extract element type from Vec<T> in instantiations
                         if let Some(elem_type) =
@@ -5309,6 +5358,11 @@ fn collect_generic_from_expr(
                                 .or_insert_with(|| ("Option".to_string(), vec![elem_type]));
                         }
                     }
+                }
+            }
+            for arm in arms {
+                for stmt in &arm.body.statements {
+                    collect_generic_from_stmt(stmt, instantiations);
                 }
             }
         }
@@ -5926,6 +5980,90 @@ fn main() -> int {
         assert!(
             c.contains("tuple_Vec_Item_int"),
             "expected Vec tuple mangling in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn get_ref_match_arm_binds_borrow_without_dropping_nested_vec() {
+        let src = r#"enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Line {
+    price_cents: int;
+    qty: int;
+}
+
+struct Order {
+    customer_id: int;
+    lines: Vec<Line>;
+}
+
+fn revenue(orders: &Vec<Order>, customer_id: int) -> int {
+    let len: int = Vec::len(orders);
+    let mut sum: int = 0;
+    let mut i: int = 0;
+    while i < len {
+        match Vec::get_ref(orders, i) {
+            Option::Some(order) => {
+                if order.customer_id == customer_id {
+                    let line_len: int = Vec::len(&order.lines);
+                    let mut j: int = 0;
+                    while j < line_len {
+                        match Vec::get_ref(&order.lines, j) {
+                            Option::Some(line) => {
+                                sum = sum + line.price_cents * line.qty;
+                            }
+                            Option::None => {}
+                        };
+                        j = j + 1;
+                    }
+                } else {
+                }
+            }
+            Option::None => {}
+        };
+        i = i + 1;
+    }
+    return sum;
+}
+
+fn main() -> int {
+    let mut orders: Vec<Order> = Vec::new();
+    let mut lines: Vec<Line> = Vec::new();
+    let line: Line = Line { price_cents: 100, qty: 2 };
+    Vec::push(&mut lines, line);
+    let order: Order = Order { customer_id: 1, lines: lines };
+    Vec::push(&mut orders, order);
+    let first: int = revenue(&orders, 1);
+    let second: int = revenue(&orders, 1);
+    if first != 200 || second != 200 {
+        return 1;
+    }
+    return 0;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("Order* order = match_val_"),
+            "expected get_ref arm to bind Order* borrow in:\n{c}"
+        );
+        assert!(
+            !c.contains("Order order = *match_val_"),
+            "expected no by-value copy from get_ref borrow in:\n{c}"
+        );
+        let revenue_fn = c
+            .split("int revenue(")
+            .nth(1)
+            .and_then(|tail| tail.split("int main(").next())
+            .unwrap_or("");
+        assert!(
+            !revenue_fn.contains("ion_vec_free((ion_vec_t*)(order.lines))"),
+            "expected no nested Vec drop inside get_ref scan loop in:\n{c}"
         );
     }
 

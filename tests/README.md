@@ -128,6 +128,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_get_ref_set_after.ion` - `Vec::set` after `get_ref` borrow ends
 - `test_vec_get_ref_string.ion` - `Vec::get_ref` with `String` elements
 - `test_vec_get_ref_nested.ion` - `get_ref` on nested `Vec` in a struct field
+- `test_vec_get_ref_scan_nested_vec.ion` - repeated `get_ref` scan over `Vec` of structs with nested `Vec` fields (no heap corruption)
 - `test_vec_string_mangle.ion` - `Vec<String>` monomorphizes as `Vec_String` in generated C
 - `test_vec_search_index_ok.ion` - `find_index` returns `int`; caller uses `Vec::get` (exit 84)
 - `test_vec_push_mut_param.ion` - `Vec::push` through `&mut Vec<T>` parameter

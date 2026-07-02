@@ -231,7 +231,11 @@ impl LoweringContext {
     }
 
     fn field_type(&self, base_ty: &Type, field: &str) -> Option<Type> {
-        let struct_name = Self::struct_name_from_type(base_ty)?;
+        let struct_ty = match base_ty {
+            Type::Ref { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        let struct_name = Self::struct_name_from_type(struct_ty)?;
         let decl = self.struct_decls.get(struct_name)?;
         decl.fields
             .iter()
@@ -271,6 +275,47 @@ impl LoweringContext {
     fn record_binding(&mut self, name: &str, ty: &Type) {
         self.var_types.insert(name.to_string(), ty.clone());
     }
+}
+
+fn record_match_arm_bindings(pattern: &Pattern, scrutinee_ty: &Type, ctx: &mut LoweringContext) {
+    match pattern {
+        Pattern::Binding { name, .. } => {
+            ctx.record_binding(name, scrutinee_ty);
+        }
+        Pattern::Wildcard { .. } => {}
+        Pattern::Variant {
+            variant,
+            sub_patterns,
+            named_fields,
+            ..
+        } => {
+            if let Type::Generic { name, params } = scrutinee_ty
+                && name == "Option"
+                && variant == "Some"
+                && let Some(payload_ty) = params.first()
+            {
+                if let Some(sub) = sub_patterns.first() {
+                    record_match_arm_bindings(sub, payload_ty, ctx);
+                }
+                if let Some(named) = named_fields {
+                    for (_, sub) in named {
+                        record_match_arm_bindings(sub, payload_ty, ctx);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn match_scrutinee_type(expr: &Expr, ctx: &LoweringContext) -> Option<Type> {
+    if let Expr::Call(call) = expr {
+        return builtin_option_vec_return(&call.callee, &call.args, ctx).or_else(|| {
+            ctx.function_returns
+                .get(&call.callee)
+                .and_then(|ret| ret.clone())
+        });
+    }
+    ctx.resolve_expr_type(expr)
 }
 
 fn pattern_to_ir(pattern: &Pattern) -> IRPattern {
@@ -954,6 +999,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             }),
         },
         Expr::Match(match_expr) => {
+            let scrutinee_ty = match_scrutinee_type(&match_expr.expr, ctx);
             let arms = match_expr
                 .arms
                 .iter()
@@ -967,6 +1013,9 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                         fn_literal_counter: ctx.fn_literal_counter.clone(),
                         function_returns: ctx.function_returns.clone(),
                     };
+                    if let Some(ref ty) = scrutinee_ty {
+                        record_match_arm_bindings(&arm.pattern, ty, &mut arm_ctx);
+                    }
                     for stmt in &arm.body.statements {
                         IRBuilder::lower_stmt(stmt, &mut body_stmts, &mut arm_defers, &mut arm_ctx);
                     }
