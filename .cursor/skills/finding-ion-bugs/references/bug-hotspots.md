@@ -20,6 +20,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 - **Match scrutinee move-out**: pattern payload bindings null `match_val_N.data.variant_*` fields when ownership transfers (`statement_match_payload_move_neutralizes_scrutinee`); whole-enum binding arms clear active variant payloads via `emit_match_scrutinee_whole_enum_moved_out` (`whole_enum_binding_neutralizes_scrutinee_payloads`). IR infers `enum_type` from the scrutinee when arms use binding/wildcard only (`infer_match_enum_name`).
 - **Return unwind**: all function exits use `emit_function_return` (`ret_val`, `scope_emit_return_unwind`, `goto epilogue`), including diverging `return` inside rvalue `match` arms (`rvalue_match_divergent_return_unwinds_owned`). Value-producing rvalue arms still assign and `break` from the `switch`.
 - `Box`, `Vec`, `String` layout vs `runtime/ion_runtime.h`
+- **`String::len`**: null-check the `String*` value, not `&local` (`-Waddress` under CI `-Werror`)
 - Single-file merge (`merge_modules`) vs `--mode multi` divergences
 - `extern "C"` calls only inside `unsafe` blocks in source; cgen must not strip guards
 

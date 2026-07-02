@@ -402,9 +402,12 @@ impl Codegen {
         // String::len(s: &String) -> int
         if callee == "String::len" && args.len() == 1 {
             let mut code = String::new();
-            let needs_deref = self.infer_irexpr_type(&args[0]).is_some_and(
-                |ty| matches!(ty, Type::Ref { inner, .. } if matches!(*inner, Type::String)),
-            );
+            // Only bare Ref{String} vars (e.g. get_ref bindings) need (*r)->len.
+            // AddressOf (&local) must not use needs_deref: (&s) is always true under -Waddress.
+            let needs_deref = matches!(&args[0], IREexpr::Var(_))
+                && self.infer_irexpr_type(&args[0]).is_some_and(
+                    |ty| matches!(ty, Type::Ref { inner, .. } if matches!(*inner, Type::String)),
+                );
             if needs_deref {
                 code.push_str("((");
                 let mut arg_code = String::new();
