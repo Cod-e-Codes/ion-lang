@@ -1325,6 +1325,20 @@ fn infer_type_from_call(callee: &str, args: &[Expr]) -> Option<Type> {
 }
 
 /// Monomorphize generic functions at each call site and drop unresolved templates.
+fn fn_type_from_ir_function(func: &IRFunction) -> Type {
+    Type::Fn {
+        params: func.params.iter().map(|p| p.ty.clone()).collect(),
+        return_type: Box::new(func.return_type.clone().unwrap_or(Type::Void)),
+    }
+}
+
+fn build_function_fn_types(functions: &[IRFunction]) -> HashMap<String, Type> {
+    functions
+        .iter()
+        .map(|f| (f.name.clone(), fn_type_from_ir_function(f)))
+        .collect()
+}
+
 fn monomorphize_generic_functions(program: &mut IRProgram) {
     let generic_defs: HashMap<String, IRFunction> = program
         .functions
@@ -1337,6 +1351,7 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
         return;
     }
 
+    let function_fn_types = build_function_fn_types(&program.functions);
     let mut instantiations: HashMap<String, (IRFunction, HashMap<String, Type>)> = HashMap::new();
 
     for func in &mut program.functions {
@@ -1348,6 +1363,7 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
             rewrite_generic_calls_in_block(
                 block,
                 &generic_defs,
+                &function_fn_types,
                 &mut var_types,
                 &mut instantiations,
             );
@@ -1372,39 +1388,66 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
 fn rewrite_generic_calls_in_block(
     block: &mut IRBlock,
     generic_defs: &HashMap<String, IRFunction>,
+    function_fn_types: &HashMap<String, Type>,
     var_types: &mut HashMap<String, Type>,
     instantiations: &mut HashMap<String, (IRFunction, HashMap<String, Type>)>,
 ) {
     for defer_expr in &mut block.defers {
-        rewrite_generic_calls_in_expr(defer_expr, generic_defs, var_types, instantiations);
+        rewrite_generic_calls_in_expr(
+            defer_expr,
+            generic_defs,
+            function_fn_types,
+            var_types,
+            instantiations,
+        );
     }
     for stmt in &mut block.statements {
         match stmt {
             IRStmt::Let(let_stmt) => {
                 if let Some(ref mut init) = let_stmt.init {
-                    rewrite_generic_calls_in_expr(init, generic_defs, var_types, instantiations);
+                    rewrite_generic_calls_in_expr(
+                        init,
+                        generic_defs,
+                        function_fn_types,
+                        var_types,
+                        instantiations,
+                    );
                 }
                 var_types.insert(let_stmt.name.clone(), let_stmt.ty.clone());
             }
             IRStmt::Return(ret) => {
                 if let Some(ref mut value) = ret.value {
-                    rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
+                    rewrite_generic_calls_in_expr(
+                        value,
+                        generic_defs,
+                        function_fn_types,
+                        var_types,
+                        instantiations,
+                    );
                 }
             }
             IRStmt::Break | IRStmt::Continue => {}
             IRStmt::Expr(expr) => {
-                rewrite_generic_calls_in_expr(expr, generic_defs, var_types, instantiations);
+                rewrite_generic_calls_in_expr(
+                    expr,
+                    generic_defs,
+                    function_fn_types,
+                    var_types,
+                    instantiations,
+                );
             }
             IRStmt::If(ir_if) => {
                 rewrite_generic_calls_in_expr(
                     &mut ir_if.cond,
                     generic_defs,
+                    function_fn_types,
                     var_types,
                     instantiations,
                 );
                 rewrite_generic_calls_in_block(
                     &mut ir_if.then_block,
                     generic_defs,
+                    function_fn_types,
                     var_types,
                     instantiations,
                 );
@@ -1412,6 +1455,7 @@ fn rewrite_generic_calls_in_block(
                     rewrite_generic_calls_in_block(
                         else_block,
                         generic_defs,
+                        function_fn_types,
                         var_types,
                         instantiations,
                     );
@@ -1421,29 +1465,44 @@ fn rewrite_generic_calls_in_block(
                 rewrite_generic_calls_in_expr(
                     &mut ir_while.cond,
                     generic_defs,
+                    function_fn_types,
                     var_types,
                     instantiations,
                 );
                 rewrite_generic_calls_in_block(
                     &mut ir_while.body,
                     generic_defs,
+                    function_fn_types,
                     var_types,
                     instantiations,
                 );
                 if let Some(ref mut step) = ir_while.step {
-                    rewrite_generic_calls_in_block(step, generic_defs, var_types, instantiations);
+                    rewrite_generic_calls_in_block(
+                        step,
+                        generic_defs,
+                        function_fn_types,
+                        var_types,
+                        instantiations,
+                    );
                 }
             }
             IRStmt::UnsafeBlock(unsafe_block) => {
                 rewrite_generic_calls_in_block(
                     &mut unsafe_block.body,
                     generic_defs,
+                    function_fn_types,
                     var_types,
                     instantiations,
                 );
             }
             IRStmt::Defer(expr) => {
-                rewrite_generic_calls_in_expr(expr, generic_defs, var_types, instantiations);
+                rewrite_generic_calls_in_expr(
+                    expr,
+                    generic_defs,
+                    function_fn_types,
+                    var_types,
+                    instantiations,
+                );
             }
             IRStmt::Spawn(spawn) => {
                 let mut spawn_vars = var_types.clone();
@@ -1453,6 +1512,7 @@ fn rewrite_generic_calls_in_block(
                 rewrite_generic_calls_in_block(
                     &mut spawn.body,
                     generic_defs,
+                    function_fn_types,
                     &mut spawn_vars,
                     instantiations,
                 );
@@ -1464,6 +1524,7 @@ fn rewrite_generic_calls_in_block(
 fn rewrite_generic_calls_in_expr(
     expr: &mut IREexpr,
     generic_defs: &HashMap<String, IRFunction>,
+    function_fn_types: &HashMap<String, Type>,
     var_types: &HashMap<String, Type>,
     instantiations: &mut HashMap<String, (IRFunction, HashMap<String, Type>)>,
 ) {
@@ -1475,13 +1536,19 @@ fn rewrite_generic_calls_in_expr(
             ..
         } => {
             for arg in args.iter_mut() {
-                rewrite_generic_calls_in_expr(arg, generic_defs, var_types, instantiations);
+                rewrite_generic_calls_in_expr(
+                    arg,
+                    generic_defs,
+                    function_fn_types,
+                    var_types,
+                    instantiations,
+                );
             }
             if let Some(template) = generic_defs.get(callee.as_str())
                 && !args.is_empty()
                 && !template.params.is_empty()
                 && let (Some(arg_ty), Some(param_ty)) = (
-                    infer_ir_expr_type(&args[0], var_types),
+                    infer_ir_expr_type(&args[0], function_fn_types, var_types),
                     template.params.first().map(|p| p.ty.clone()),
                 )
             {
@@ -1499,59 +1566,133 @@ fn rewrite_generic_calls_in_expr(
             }
         }
         IREexpr::AddressOf { inner, .. } => {
-            rewrite_generic_calls_in_expr(inner, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                inner,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::BinOp { left, right, .. } => {
-            rewrite_generic_calls_in_expr(left, generic_defs, var_types, instantiations);
-            rewrite_generic_calls_in_expr(right, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                left,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
+            rewrite_generic_calls_in_expr(
+                right,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::UnOp { operand, .. } => {
-            rewrite_generic_calls_in_expr(operand, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                operand,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::Send { channel, value, .. } => {
-            rewrite_generic_calls_in_expr(channel, generic_defs, var_types, instantiations);
-            rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                channel,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
+            rewrite_generic_calls_in_expr(
+                value,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::Recv { channel, .. } => {
-            rewrite_generic_calls_in_expr(channel, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                channel,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::StructLit { fields, .. } => {
             for field in fields {
                 rewrite_generic_calls_in_expr(
                     &mut field.value,
                     generic_defs,
+                    function_fn_types,
                     var_types,
                     instantiations,
                 );
             }
         }
         IREexpr::FieldAccess { base, .. } => {
-            rewrite_generic_calls_in_expr(base, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                base,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::EnumLit {
             args, named_fields, ..
         } => {
             for arg in args {
-                rewrite_generic_calls_in_expr(arg, generic_defs, var_types, instantiations);
+                rewrite_generic_calls_in_expr(
+                    arg,
+                    generic_defs,
+                    function_fn_types,
+                    var_types,
+                    instantiations,
+                );
             }
             if let Some(fields) = named_fields {
                 for (_, value) in fields {
-                    rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
+                    rewrite_generic_calls_in_expr(
+                        value,
+                        generic_defs,
+                        function_fn_types,
+                        var_types,
+                        instantiations,
+                    );
                 }
             }
         }
         IREexpr::Match {
             expr: inner, arms, ..
         } => {
-            rewrite_generic_calls_in_expr(inner, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                inner,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
             for arm in arms {
                 if let Some(ref mut guard) = arm.guard {
-                    rewrite_generic_calls_in_expr(guard, generic_defs, var_types, instantiations);
+                    rewrite_generic_calls_in_expr(
+                        guard,
+                        generic_defs,
+                        function_fn_types,
+                        var_types,
+                        instantiations,
+                    );
                 }
                 let mut arm_vars = var_types.clone();
                 rewrite_generic_calls_in_block(
                     &mut arm.body,
                     generic_defs,
+                    function_fn_types,
                     &mut arm_vars,
                     instantiations,
                 );
@@ -1559,45 +1700,118 @@ fn rewrite_generic_calls_in_expr(
         }
         IREexpr::TupleLit { elements, .. } => {
             for element in elements {
-                rewrite_generic_calls_in_expr(element, generic_defs, var_types, instantiations);
+                rewrite_generic_calls_in_expr(
+                    element,
+                    generic_defs,
+                    function_fn_types,
+                    var_types,
+                    instantiations,
+                );
             }
         }
         IREexpr::ArrayLiteral { elements, repeat } => {
             for element in elements {
-                rewrite_generic_calls_in_expr(element, generic_defs, var_types, instantiations);
+                rewrite_generic_calls_in_expr(
+                    element,
+                    generic_defs,
+                    function_fn_types,
+                    var_types,
+                    instantiations,
+                );
             }
             if let Some((value, _)) = repeat {
-                rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
+                rewrite_generic_calls_in_expr(
+                    value,
+                    generic_defs,
+                    function_fn_types,
+                    var_types,
+                    instantiations,
+                );
             }
         }
         IREexpr::Index { target, index, .. } => {
-            rewrite_generic_calls_in_expr(target, generic_defs, var_types, instantiations);
-            rewrite_generic_calls_in_expr(index, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                target,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
+            rewrite_generic_calls_in_expr(
+                index,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::Assign { value, .. } => {
-            rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                value,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::AssignIndex {
             target,
             index,
             value,
         } => {
-            rewrite_generic_calls_in_expr(target, generic_defs, var_types, instantiations);
-            rewrite_generic_calls_in_expr(index, generic_defs, var_types, instantiations);
-            rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                target,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
+            rewrite_generic_calls_in_expr(
+                index,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
+            rewrite_generic_calls_in_expr(
+                value,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::AssignField { target, value } => {
-            rewrite_generic_calls_in_expr(target, generic_defs, var_types, instantiations);
-            rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                target,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
+            rewrite_generic_calls_in_expr(
+                value,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::Cast { expr: inner, .. } => {
-            rewrite_generic_calls_in_expr(inner, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(
+                inner,
+                generic_defs,
+                function_fn_types,
+                var_types,
+                instantiations,
+            );
         }
         IREexpr::FnLiteral(lit) => {
             let mut lit_vars = var_types.clone();
             rewrite_generic_calls_in_block(
                 &mut lit.body,
                 generic_defs,
+                function_fn_types,
                 &mut lit_vars,
                 instantiations,
             );
@@ -1611,9 +1825,16 @@ fn rewrite_generic_calls_in_expr(
     }
 }
 
-fn infer_ir_expr_type(expr: &IREexpr, var_types: &HashMap<String, Type>) -> Option<Type> {
+fn infer_ir_expr_type(
+    expr: &IREexpr,
+    function_fn_types: &HashMap<String, Type>,
+    var_types: &HashMap<String, Type>,
+) -> Option<Type> {
     match expr {
-        IREexpr::Var(name) => var_types.get(name).cloned(),
+        IREexpr::Var(name) => var_types
+            .get(name)
+            .cloned()
+            .or_else(|| function_fn_types.get(name).cloned()),
         IREexpr::Lit(_) => Some(Type::Int),
         IREexpr::IntLimit { ty, .. } => Some(ty.clone()),
         IREexpr::BoolLiteral(_) => Some(Type::Bool),
@@ -1623,6 +1844,13 @@ fn infer_ir_expr_type(expr: &IREexpr, var_types: &HashMap<String, Type>) -> Opti
             return_type: Some(ty),
             ..
         } => Some(ty.clone()),
+        IREexpr::FnLiteral(lit) => Some(Type::Fn {
+            params: lit.params.iter().map(|p| p.ty.clone()).collect(),
+            return_type: Box::new(lit.return_type.clone().unwrap_or(Type::Void)),
+        }),
+        IREexpr::TupleLit { elem_types, .. } if !elem_types.is_empty() => Some(Type::Tuple {
+            elements: elem_types.clone(),
+        }),
         _ => None,
     }
 }
@@ -1650,6 +1878,11 @@ fn infer_generic_substitutions(
         }
         (Type::Struct(param_name), actual_ty) if fn_generics.contains(param_name) => {
             subs.insert(param_name.clone(), actual_ty.clone());
+        }
+        (Type::Generic { name, params }, actual_ty)
+            if params.is_empty() && fn_generics.contains(name) =>
+        {
+            subs.insert(name.clone(), actual_ty.clone());
         }
         _ => {}
     }

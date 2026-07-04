@@ -1,0 +1,5 @@
+name = "trait_bounds"
+main = "trait_bounds.ion"
+output = "trait_bounds"
+mode = "single"
+out_dir = "target"

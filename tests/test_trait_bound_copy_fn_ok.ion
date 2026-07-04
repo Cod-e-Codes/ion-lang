@@ -1,0 +1,13 @@
+// Copy-bound generic called with a function identifier (not a typed local).
+fn identity<T: Copy>(value: T) -> T {
+    return value;
+}
+
+fn add_one(x: int) -> int {
+    return x + 1;
+}
+
+fn main() -> int {
+    let g: fn(int) -> int = identity(add_one);
+    return g(10);
+}

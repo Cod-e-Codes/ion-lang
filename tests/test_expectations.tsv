@@ -213,6 +213,7 @@ test_match_break_in_loop.ion	run	3
 test_str_from_literal.ion	run	71
 test_trait_bound_send_ok.ion	run	42
 test_trait_bound_copy_ok.ion	run	7
+test_trait_bound_copy_fn_ok.ion	run	11
 test_trait_bound_eq_ok.ion	run	61
 test_trait_bound_eq_fn_ok.ion	run	99
 test_trait_bound_send_error.ion	error		TraitBoundNotSatisfied

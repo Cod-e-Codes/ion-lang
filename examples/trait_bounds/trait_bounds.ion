@@ -1,0 +1,50 @@
+// Built-in trait bounds on generic parameters: Copy, Eq, Send.
+// Bounds are checked at monomorphization; each helper is instantiated with a concrete type.
+
+fn identity<T: Copy>(value: T) -> T {
+    return value;
+}
+
+fn values_equal<T: Eq>(a: T, b: T) -> bool {
+    return a == b;
+}
+
+fn hold_send<T: Send>(value: T) -> int {
+    let _held: T = value;
+    return 1;
+}
+
+fn add_one(x: int) -> int {
+    return x + 1;
+}
+
+fn main() -> int {
+    // Copy: int satisfies Copy at instantiation.
+    let n: int = identity(21);
+    if n != 21 {
+        return 1;
+    }
+
+    // Copy: function pointers satisfy Copy; identity(add_one) must monomorphize.
+    let h: fn(int) -> int = identity(add_one);
+    if h(4) != 5 {
+        return 5;
+    }
+
+    // Eq: primitives and function pointers support ==.
+    if !values_equal(10, 10) {
+        return 2;
+    }
+    let f: fn(int) -> int = add_one;
+    let g: fn(int) -> int = add_one;
+    if !values_equal(f, g) {
+        return 3;
+    }
+
+    // Send: int is safe to pass into a Send-bounded generic.
+    if hold_send(n) != 1 {
+        return 4;
+    }
+
+    return 0;
+}
