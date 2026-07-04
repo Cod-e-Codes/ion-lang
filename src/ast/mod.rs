@@ -146,6 +146,8 @@ pub enum Type {
         elem_type: Box<Type>,
     },
     String,
+    /// Unsized UTF-8 slice (`str`); only valid behind `&str` (Section 8.3).
+    Str,
     Array {
         inner: Box<Type>,
         size: usize,

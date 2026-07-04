@@ -80,7 +80,7 @@ fn vec_example() -> int {
         return 1;
     }
 
-    match numbers.get(0) {
+    match numbers.get_ref(0) {
         Option::Some(value) => {
             if value != 10 {
                 return 2;
@@ -373,7 +373,7 @@ fn complex_example() -> int {
         return 1;
     }
 
-    match numbers.get(0) {
+    match numbers.get_ref(0) {
         Option::Some(value) => {
             if value != 1 {
                 return 2;
@@ -384,7 +384,7 @@ fn complex_example() -> int {
         }
     };
 
-    match numbers.get(1) {
+    match numbers.get_ref(1) {
         Option::Some(value) => {
             if value != 3 {
                 return 4;
@@ -403,6 +403,70 @@ fn complex_example() -> int {
         return 6;
     }
 
+    return 0;
+}
+
+// ============================================
+// 15. BYTECODE VM - get_ref dispatch, field mutation, method calls
+// ============================================
+
+enum Op { Push { val: int }; Add; Halt; }
+
+struct BytecodeVM {
+    ip: int;
+    stack: Vec<int>;
+    code: Vec<Op>;
+}
+
+fn run_bytecode(vm: &mut BytecodeVM) -> int {
+    loop {
+        match vm.code.get_ref(vm.ip) {
+            Option::Some(op) => {
+                match op {
+                    Op::Push { val: v } => {
+                        vm.stack.push(v);
+                        vm.ip += 1;
+                    }
+                    Op::Add => {
+                        let b = match vm.stack.pop() {
+                            Option::Some(v) => { v; }
+                            Option::None => { return 0; }
+                        };
+                        let a = match vm.stack.pop() {
+                            Option::Some(v) => { v; }
+                            Option::None => { return 0; }
+                        };
+                        vm.stack.push(a + b);
+                        vm.ip += 1;
+                    }
+                    Op::Halt => { break; }
+                };
+            }
+            Option::None => { break; }
+        };
+    }
+    return 0;
+}
+
+fn bytecode_vm_example() -> int {
+    let mut vm: BytecodeVM = BytecodeVM {
+        ip: 0,
+        stack: Vec::new(),
+        code: Vec::new(),
+    };
+    vm.code.push(Op::Push { val: 10 });
+    vm.code.push(Op::Push { val: 32 });
+    vm.code.push(Op::Add);
+    vm.code.push(Op::Halt);
+    run_bytecode(&mut vm);
+    match vm.stack.pop() {
+        Option::Some(n) => {
+            if n != 42 {
+                return 1;
+            }
+        }
+        Option::None => { return 2; }
+    };
     return 0;
 }
 
@@ -460,6 +524,10 @@ fn main() -> int {
 
     if complex_example() != 0 {
         return 11;
+    }
+
+    if bytecode_vm_example() != 0 {
+        return 12;
     }
 
     return 0;

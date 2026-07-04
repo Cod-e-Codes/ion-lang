@@ -86,7 +86,7 @@ fn dispatch_peer(peer_fd: int) {
 }
 
 fn send_string_bytes(fd: int, text: String) {
-    let nbytes: int = String::len(&text);
+    let nbytes: int = text.len();
     unsafe {
         let _sent: int = send_sys(&fd, text.data, nbytes, 0);
     }
@@ -103,7 +103,7 @@ fn handle_client(client_fd: int) -> int {
         }
 
         let body: String = http_body();
-        let body_len: int = String::len(&body);
+        let body_len: int = body.len();
         let digits: String = fmt::int_to_string(body_len);
 
         let _sent1: int = send_sys(&client_fd, "HTTP/1.1 200 OK\r\n", 17, 0);

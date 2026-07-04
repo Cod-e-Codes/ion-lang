@@ -103,7 +103,7 @@ fn parse_int(s: String) -> ParseId {
 }
 
 fn print_label(label: String) -> String {
-    let nbytes: int = String::len(&label);
+    let nbytes: int = label.len();
     unsafe {
         io::print_str(label.data, nbytes);
     }
@@ -125,7 +125,7 @@ fn print_todo_line(id: int, label: String, done: bool) -> String {
 fn show(items: Vec<Todo>) -> Vec<Todo> {
     let mut rebuilt: Vec<Todo> = Vec::new();
 
-    if Vec::len(&items) == 0 {
+    if items.len() == 0 {
         io::println(String::from("(empty)"));
         return items;
     }
@@ -137,8 +137,7 @@ fn show(items: Vec<Todo>) -> Vec<Todo> {
 
         let printed_label: String = print_todo_line(id, label, done);
 
-        Vec::push(
-            &mut rebuilt,
+        rebuilt.push(
             Todo {
                 id: id,
                 label: printed_label,
@@ -163,8 +162,7 @@ fn complete_todo(items: Vec<Todo>, id: int) -> Vec<Todo> {
             new_done = true;
         }
 
-        Vec::push(
-            &mut out,
+        out.push(
             Todo {
                 id: tid,
                 label: tlabel,
@@ -178,7 +176,7 @@ fn complete_todo(items: Vec<Todo>, id: int) -> Vec<Todo> {
 
 fn keep_todo(out: &mut Vec<Todo>, todo: Todo, keep: bool) {
     if keep {
-        Vec::push(out, todo);
+        out.push(todo);
     } else {
         let _gone: Todo = todo;
     }
@@ -203,8 +201,7 @@ fn remove_todo(items: Vec<Todo>, id: int) -> Vec<Todo> {
 
 fn add_todo(state: AppState, label: String) -> AppState {
     let mut items: Vec<Todo> = state.items;
-    Vec::push(
-        &mut items,
+    items.push(
         Todo {
             id: state.next_id,
             label: label,
@@ -229,7 +226,7 @@ fn print_help() {
 
 fn handle_add(items: Vec<Todo>, next_id: int, arg: String) -> AppState {
     let label: String = trim_left(arg);
-    if String::len(&label) == 0 {
+    if label.len() == 0 {
         io::println(String::from("usage: add <label>"));
         return AppState {
             items: items,
@@ -330,7 +327,7 @@ fn repl(state: AppState) -> int {
     let line: String = read_line();
     let trimmed: String = trim_line(line);
 
-    if String::len(&trimmed) == 0 {
+    if trimmed.len() == 0 {
         return repl(state);
     }
 

@@ -47,7 +47,24 @@ s.push_str("hi");
 let lit: String = "hello";
 ```
 
-`Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). In `match Option::Some(x)`, `x` is `&T`: copy types bind by value; structs with owned fields bind as a pointer so nested `Vec` fields are not dropped. `Vec::set(&mut v, index, value)` returns `int` (0 = ok).
+`Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). In `match Option::Some(x)`, `x` is `&T`: copy types bind by value; structs and enums with non-copy fields bind as a pointer. Inner `match x` on `&Enum` dispatches variants without deref. `Vec::set(&mut v, index, value)` returns `int` (0 = ok). Method syntax (`v.push(x)`, `v.get_ref(i)`) desugars to `Vec::` builtins with correct receiver borrows.
+
+## Struct field mutation
+
+```ion
+struct VM { ip: int; stack: Vec<int>; }
+
+fn step(vm: &mut VM) {
+    vm.stack.push(1);
+    vm.ip += 1;
+}
+```
+
+Field paths are valid assignment targets on owned structs and `&mut` parameters.
+
+## VM dispatch loop
+
+See [tests/test_vm_execute.ion](../../../../tests/test_vm_execute.ion): `match vm.code.get_ref(vm.ip)` then inner `match op` on `&Op`, field updates, and `break` inside `match` within `loop`.
 
 ## Box
 
@@ -68,10 +85,6 @@ let elem: int = arr[0];  // bounds checked unless unsafe
 ## Borrowing (same function only)
 
 ```ion
-fn bump(x: &mut int) {
-    *x = *x + 1;
-}
-
 fn read_len(v: &Vec<int>) -> int {
     return v.len();
 }

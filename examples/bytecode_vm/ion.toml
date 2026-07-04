@@ -1,0 +1,5 @@
+name = "bytecode_vm"
+main = "bytecode_vm.ion"
+output = "bytecode_vm"
+mode = "single"
+out_dir = "target"

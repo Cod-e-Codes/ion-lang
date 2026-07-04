@@ -184,7 +184,7 @@ Ion uses the following operators:
 - Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - Logical: `&&`, `||`, `!`
 - Bitwise: `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
-- Assignment: `=`, `+=` (compound assignment desugars to `x = x + e` for supported `+` types)
+- Assignment: `=`, `+=` (compound assignment desugars to `x = x + e` for supported `+` types). Assignment targets may be locals, index expressions, or field paths on owned structs or `&mut Struct` receivers (for example `vm.ip += 1`).
 - Type casting: `as` keyword for explicit type conversions
 - Field access: `.`
 - Address-of / borrow: `&` (borrow shared) and `&mut` (borrow exclusive)
@@ -1021,7 +1021,7 @@ Note that:
 - `Vec<T>` is `Send` if `T: Send`.
 - `Vec::new()` and `Vec::with_capacity()` infer `T` from a `let` type annotation when present (e.g. `let v: Vec<i32> = Vec::new()`).
 - `Vec::get()` and `Vec::pop()` return `Option<T>` to handle out-of-bounds or empty cases. Both **move** the element out of the vector. To preserve vector length after a read-only scan, either use `Vec::get_ref()` (below) or copy fields and `Vec::set()` a rebuilt struct literal to put the value back (nested `Vec` fields still move on put-back).
-- `Vec::get_ref()` returns `Option<&T>`: a **local, stack-only borrow** of an in-place element. It does not move or hollow the slot. The result is only valid as a short-lived binding within the current function (for example in a `match` arm). Match arms bind the element as `&T`; codegen uses `T*` for types with owned fields and copies by value for copy types, so repeated scans over `Vec<struct-with-nested-Vec>` do not double-free nested fields. It cannot be returned, stored in structs or enums, sent on channels, or cross `spawn`. While an `&T` from `get_ref` is active, the root owner of the vector (the binding behind `&Vec<T>`) is shared-borrowed: `&mut Vec<T>` on that owner, `Vec::set`, `Vec::push`, and `Vec::pop` on the same vector are rejected until the borrow ends. Out-of-range or negative indices yield `Option::None`. Nested inspection (`order.lines` then `get_ref`) follows the same root-owner borrow rules as field paths (Section 5.3).
+- `Vec::get_ref()` returns `Option<&T>`: a **local, stack-only borrow** of an in-place element. It does not move or hollow the slot. The result is only valid as a short-lived binding within the current function (for example in a `match` arm). Match arms bind the element as `&T`; for enum elements, an inner `match` on that binding dispatches variants directly (no unary `*` deref). Copy fields in struct or enum variant patterns bind as `T`; non-copy fields bind as `&T`. Codegen uses `T*` for types with owned fields and copies by value for copy types, so repeated scans over `Vec<struct-with-nested-Vec>` do not double-free nested fields. It cannot be returned, stored in structs or enums, sent on channels, or cross `spawn`. While an `&T` from `get_ref` is active, the root owner of the vector (the binding behind `&Vec<T>`) is shared-borrowed: `&mut Vec<T>` on that owner, `Vec::set`, `Vec::push`, and `Vec::pop` on the same vector are rejected until the borrow ends. Out-of-range or negative indices yield `Option::None`. Nested inspection (`order.lines` then `get_ref`) follows the same root-owner borrow rules as field paths (Section 5.3). Field paths through `&Struct` that are already references (for example `order.lines` when `order: &Order`) are passed to `Vec` methods without an extra `&`.
 - `Vec::set()` requires a mutable reference and returns an error code (0 for success, non-zero for failure). After shared borrows from `get_ref` end, `Vec::set` on the same index is allowed.
 
 For cross-function or long-lived access, Ion still favors an **index/handle style**: helpers return indices or keys and callers re-index within their own function bodies.
@@ -1055,7 +1055,8 @@ Note that:
 - `String::push_byte()` appends a single byte to an existing `String`.
 - `==` and `!=` compare UTF-8 byte content (value equality), not pointer identity.
 
-`&str` is always a **borrowed view** into existing UTF-8 data; it cannot be returned or stored in long-lived structures in ways that would violate the no-escape rule. The standard library intentionally avoids APIs that would expose `&str` values across function boundaries in ways that require complex lifetime reasoning (e.g., `String::as_str` methods that return borrowed views).
+- `String::from` and stdlib APIs accepting `&str` also accept string literals and `&String` at call sites.
+- `&str` is always a **borrowed view** into existing UTF-8 data; it cannot be returned or stored in long-lived structures in ways that would violate the no-escape rule. The standard library intentionally avoids APIs that would expose `&str` values across function boundaries in ways that require complex lifetime reasoning (e.g., `String::as_str` methods that return borrowed views).
 
 #### 8.4 Channels
 

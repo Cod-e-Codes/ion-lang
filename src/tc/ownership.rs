@@ -229,9 +229,19 @@ impl TypeChecker {
                 Ok(())
             }
             Expr::Match(match_expr) => {
-                // Check moves in match expression
-                self.check_expr_for_moves(&match_expr.expr)?;
-                // Match arms don't move the matched value, they just pattern match
+                // Match scrutinee is consumed per-arm, not moved at entry (see ION_SPEC §5.2).
+                match match_expr.expr.as_ref() {
+                    Expr::Call(call_expr) => {
+                        for arg in &call_expr.args {
+                            self.check_expr_for_moves(arg)?;
+                        }
+                    }
+                    Expr::FieldAccess(acc) => {
+                        self.check_expr(&acc.base)?;
+                    }
+                    Expr::Var(_) | Expr::Ref(_) | Expr::Index(_) => {}
+                    _ => self.check_expr_for_moves(&match_expr.expr)?,
+                }
                 Ok(())
             }
             Expr::Call(call_expr) => {

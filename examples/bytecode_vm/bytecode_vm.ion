@@ -1,0 +1,62 @@
+// Stack bytecode VM: idiomatic Ion patterns for interpreter-style loops.
+//
+// - Vec<Op> with method calls on struct fields (vm.code.push, vm.code.get_ref)
+// - match on &Op from get_ref (no unary * deref)
+// - struct field assignment and += on &mut VM
+// - break inside match within loop
+
+enum Op { Push { val: int }; Add; Halt; }
+
+struct VM {
+    ip: int;
+    stack: Vec<int>;
+    code: Vec<Op>;
+}
+
+fn execute(vm: &mut VM) -> int {
+    loop {
+        match vm.code.get_ref(vm.ip) {
+            Option::Some(op) => {
+                match op {
+                    Op::Push { val: v } => {
+                        vm.stack.push(v);
+                        vm.ip += 1;
+                    }
+                    Op::Add => {
+                        let b = match vm.stack.pop() {
+                            Option::Some(v) => { v; }
+                            Option::None => { return 0; }
+                        };
+                        let a = match vm.stack.pop() {
+                            Option::Some(v) => { v; }
+                            Option::None => { return 0; }
+                        };
+                        vm.stack.push(a + b);
+                        vm.ip += 1;
+                    }
+                    Op::Halt => { break; }
+                };
+            }
+            Option::None => { break; }
+        };
+    }
+    return 0;
+}
+
+fn main() -> int {
+    let mut vm: VM = VM {
+        ip: 0,
+        stack: Vec::new(),
+        code: Vec::new(),
+    };
+    // Program: push 10, push 32, add -> 42, halt
+    vm.code.push(Op::Push { val: 10 });
+    vm.code.push(Op::Push { val: 32 });
+    vm.code.push(Op::Add);
+    vm.code.push(Op::Halt);
+    execute(&mut vm);
+    match vm.stack.pop() {
+        Option::Some(n) => { return n; }
+        Option::None => { return 1; }
+    };
+}

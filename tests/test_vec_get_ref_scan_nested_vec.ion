@@ -22,10 +22,10 @@ fn revenue_for_order(orders: &Vec<Order>, customer_id: int) -> int {
         match Vec::get_ref(orders, i) {
             Option::Some(order) => {
                 if order.customer_id == customer_id {
-                    let line_len: int = Vec::len(&order.lines);
+                    let line_len: int = Vec::len(order.lines);
                     let mut j: int = 0;
                     while j < line_len {
-                        match Vec::get_ref(&order.lines, j) {
+                        match Vec::get_ref(order.lines, j) {
                             Option::Some(line) => {
                                 sum = sum + line.price_cents * line.qty;
                             }

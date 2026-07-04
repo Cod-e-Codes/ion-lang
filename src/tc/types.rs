@@ -125,6 +125,7 @@ pub(crate) fn types_equal(a: &Type, b: &Type) -> bool {
         (Type::Enum(a_name), Type::Generic { name: b_name, .. }) => a_name == b_name,
         (Type::Generic { name: a_name, .. }, Type::Enum(b_name)) => a_name == b_name,
         (Type::String, Type::String) => true,
+        (Type::Str, Type::Str) => true,
         (Type::Box { inner: a_inner }, Type::Box { inner: b_inner }) => {
             types_equal(a_inner, b_inner)
         }
@@ -233,6 +234,7 @@ pub fn type_to_string(ty: &Type) -> String {
         Type::Box { inner } => format!("Box<{}>", type_to_string(inner)),
         Type::Vec { elem_type } => format!("Vec<{}>", type_to_string(elem_type)),
         Type::String => "String".to_string(),
+        Type::Str => "str".to_string(),
         Type::Array { inner, size } => format!("[{}; {}]", type_to_string(inner), size),
         Type::Slice { inner } => format!("[]{}", type_to_string(inner)),
         Type::Sender { elem_type } => format!("Sender<{}>", type_to_string(elem_type)),

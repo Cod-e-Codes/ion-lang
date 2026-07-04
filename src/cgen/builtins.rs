@@ -159,7 +159,10 @@ impl Codegen {
 
             let value_is_lvalue = matches!(
                 args[1],
-                IREexpr::StructLit { .. } | IREexpr::Var(_) | IREexpr::FieldAccess { .. }
+                IREexpr::StructLit { .. }
+                    | IREexpr::EnumLit { .. }
+                    | IREexpr::Var(_)
+                    | IREexpr::FieldAccess { .. }
             );
             if value_is_lvalue {
                 code.push_str("ion_vec_push((ion_vec_t*)(");
@@ -339,7 +342,10 @@ impl Codegen {
 
             let value_is_lvalue = matches!(
                 args[2],
-                IREexpr::StructLit { .. } | IREexpr::Var(_) | IREexpr::FieldAccess { .. }
+                IREexpr::StructLit { .. }
+                    | IREexpr::EnumLit { .. }
+                    | IREexpr::Var(_)
+                    | IREexpr::FieldAccess { .. }
             );
             if value_is_lvalue {
                 code.push_str("ion_vec_set((ion_vec_t*)(");
@@ -392,8 +398,19 @@ impl Codegen {
             self.generate_expr(&args[0]);
             arg_code = std::mem::replace(&mut self.output, old_output);
 
+            let arg_ty = self.infer_irexpr_type(&args[0]).or_else(|| {
+                if let IREexpr::Var(name) = &args[0] {
+                    self.current_function_params
+                        .get(name)
+                        .cloned()
+                        .or_else(|| self.lookup_binding_type(name))
+                } else {
+                    None
+                }
+            });
+
             // If it's a string literal, use ion_string_from_literal
-            // Otherwise, assume it's already a String and clone it
+            // &str (char*) uses strlen; &String clones the owned buffer.
             if arg_code.starts_with('"') {
                 // Extract string length
                 let len = arg_code.len() - 2; // Remove quotes
@@ -402,8 +419,28 @@ impl Codegen {
                 code.push_str(", ");
                 code.push_str(&len.to_string());
                 code.push(')');
+            } else if matches!(
+                arg_ty.as_ref(),
+                Some(Type::Ref {
+                    inner,
+                    mutable: false,
+                }) if matches!(**inner, Type::Str)
+            ) {
+                code.push_str("({ const char* _ion_s = ");
+                code.push_str(&arg_code);
+                code.push_str("; ion_string_from_literal(_ion_s, strlen(_ion_s)); })");
+            } else if matches!(
+                arg_ty.as_ref(),
+                Some(Type::Ref {
+                    inner,
+                    mutable: false,
+                }) if matches!(**inner, Type::String)
+            ) {
+                code.push_str("ion_string_clone(");
+                code.push_str(&arg_code);
+                code.push(')');
             } else {
-                // Assume it's a String, clone it
+                // Owned String value
                 code.push_str("ion_string_clone(");
                 code.push_str(&arg_code);
                 code.push(')');

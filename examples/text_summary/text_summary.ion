@@ -35,7 +35,7 @@ fn main() -> int {
     match fs::read_to_string_result(path) {
         ReadResult::Ok(content) => {
             let text: String = content;
-            let bytes: int = String::len(&text);
+            let bytes: int = text.len();
             let counts: TextCounts = summarize_text(text);
 
             io::println(String::from("file: sample.txt"));

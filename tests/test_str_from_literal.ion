@@ -1,0 +1,11 @@
+import "stdlib/io.ion" as io;
+
+fn greet(name: &str) -> String {
+    return String::from(name);
+}
+
+fn main() -> int {
+    let s: String = greet("hi");
+    io::println(s);
+    return 71;
+}

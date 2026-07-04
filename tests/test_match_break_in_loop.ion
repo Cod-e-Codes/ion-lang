@@ -1,0 +1,24 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    Vec::push(&mut v, 2);
+    Vec::push(&mut v, 3);
+    let mut i: int = 0;
+    loop {
+        match Vec::get_ref(&v, i) {
+            Option::Some(n) => {
+                i = i + 1;
+                if i >= 3 {
+                    break;
+                }
+            }
+            Option::None => { break; }
+        };
+    }
+    return i;
+}

@@ -719,6 +719,10 @@ impl Parser {
                         self.advance();
                         Ok(Type::U8)
                     }
+                    TokenKind::Ident(name) if name == "str" => {
+                        self.advance();
+                        Ok(Type::Str)
+                    }
                     TokenKind::String => {
                         self.advance();
                         Ok(Type::String)
@@ -727,7 +731,7 @@ impl Parser {
                         self.advance(); // consume 'Box'
                         self.expect(TokenKind::Less)?;
                         let inner = self.parse_type()?;
-                        self.expect(TokenKind::Greater)?;
+                        self.expect_type_greater()?;
                         Ok(Type::Box {
                             inner: Box::new(inner),
                         })
@@ -736,7 +740,7 @@ impl Parser {
                         self.advance(); // consume 'Vec'
                         self.expect(TokenKind::Less)?;
                         let inner = self.parse_type()?;
-                        self.expect(TokenKind::Greater)?;
+                        self.expect_type_greater()?;
                         Ok(Type::Vec {
                             elem_type: Box::new(inner),
                         })
@@ -746,7 +750,7 @@ impl Parser {
                         self.advance(); // consume 'channel'
                         self.expect(TokenKind::Less)?;
                         let inner = self.parse_type()?;
-                        self.expect(TokenKind::Greater)?;
+                        self.expect_type_greater()?;
                         Ok(Type::Channel {
                             elem_type: Box::new(inner),
                         })
@@ -758,7 +762,7 @@ impl Parser {
                         if type_name == "Sender" || type_name == "Receiver" {
                             self.expect(TokenKind::Less)?;
                             let inner = self.parse_type()?;
-                            self.expect(TokenKind::Greater)?;
+                            self.expect_type_greater()?;
                             if type_name == "Sender" {
                                 return Ok(Type::Sender {
                                     elem_type: Box::new(inner),
@@ -782,7 +786,7 @@ impl Parser {
                                     break;
                                 }
                             }
-                            self.expect(TokenKind::Greater)?;
+                            self.expect_type_greater()?;
                             Ok(Type::Generic {
                                 name: type_name,
                                 params,
@@ -1765,7 +1769,7 @@ impl Parser {
             let span = start_span.merge(&end_span);
 
             match &lhs {
-                Expr::Var(_) | Expr::Index(_) => {
+                Expr::Var(_) | Expr::Index(_) | Expr::FieldAccess(_) => {
                     let add_expr = Expr::BinOp(BinOpExpr {
                         op: BinOp::Add,
                         left: Box::new(lhs.clone()),
@@ -1779,7 +1783,8 @@ impl Parser {
                     }))
                 }
                 _ => Err(ParseError::Message(
-                    "Assignment target must be a variable or indexed expression".to_string(),
+                    "Assignment target must be a variable, field, or indexed expression"
+                        .to_string(),
                 )),
             }
         } else if matches!(self.tokens[equals_idx].kind, TokenKind::Equals) {
@@ -1792,15 +1797,18 @@ impl Parser {
             let end_span = rhs.span();
             let span = start_span.merge(&end_span);
 
-            // Validate that lhs is a valid assignment target (Var or Index)
+            // Validate that lhs is a valid assignment target (Var, field path, or Index)
             match &lhs {
-                Expr::Var(_) | Expr::Index(_) => Ok(Expr::Assign(AssignExpr {
-                    target: Box::new(lhs),
-                    value: Box::new(rhs),
-                    span,
-                })),
+                Expr::Var(_) | Expr::Index(_) | Expr::FieldAccess(_) => {
+                    Ok(Expr::Assign(AssignExpr {
+                        target: Box::new(lhs),
+                        value: Box::new(rhs),
+                        span,
+                    }))
+                }
                 _ => Err(ParseError::Message(
-                    "Assignment target must be a variable or indexed expression".to_string(),
+                    "Assignment target must be a variable, field, or indexed expression"
+                        .to_string(),
                 )),
             }
         } else {
@@ -3141,6 +3149,24 @@ impl Parser {
                 span: Span::from_token(&self.tokens[current_idx]),
             })
         }
+    }
+
+    /// Close a generic type argument list; accept `>` or the first `>` of `>>`.
+    fn expect_type_greater(&mut self) -> Result<(), ParseError> {
+        if !self.is_at_end() && matches!(self.tokens[self.current].kind, TokenKind::Greater) {
+            self.advance();
+            return Ok(());
+        }
+        if !self.is_at_end() && matches!(self.tokens[self.current].kind, TokenKind::ShiftRight) {
+            // Split `>>` so nested `Vec<Vec<T>>` closes one level at a time.
+            self.tokens[self.current].kind = TokenKind::Greater;
+            return Ok(());
+        }
+        Err(ParseError::UnexpectedToken {
+            expected: "Greater".to_string(),
+            got: self.tokens[self.current].kind.clone(),
+            span: Span::from_token(&self.tokens[self.current]),
+        })
     }
 }
 

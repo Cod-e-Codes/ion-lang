@@ -1,0 +1,35 @@
+enum Tag { A { x: int }; B; }
+
+fn main() -> int {
+    let mut v: Vec<Tag> = Vec::new();
+    Vec::push(&mut v, Tag::A { x: 7 });
+    Vec::push(&mut v, Tag::B);
+    match Vec::get_ref(&v, 0) {
+        Option::Some(op) => {
+            match op {
+                Tag::A { x: n } => {
+                    if n != 7 {
+                        return 1;
+                    }
+                }
+                Tag::B => { return 2; }
+            };
+        }
+        Option::None => { return 3; }
+    };
+    Vec::set(&mut v, 1, Tag::A { x: 99 });
+    match Vec::get_ref(&v, 1) {
+        Option::Some(op2) => {
+            match op2 {
+                Tag::A { x: n2 } => {
+                    if n2 != 99 {
+                        return 4;
+                    }
+                }
+                Tag::B => { return 5; }
+            };
+        }
+        Option::None => { return 6; }
+    };
+    return 50;
+}

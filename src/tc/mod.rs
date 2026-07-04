@@ -987,7 +987,7 @@ impl TypeChecker {
                             .to_string(),
                     ));
                 }
-                // Types should match
+                // Allow reborrow: &mut T satisfies &T
                 if !types_equal(receiver_inner, required_inner) {
                     return Err(TypeCheckError::TypeMismatch {
                         expected: type_to_string(required_type),
@@ -1548,6 +1548,9 @@ impl TypeChecker {
             Stmt::Expr(expr_stmt) => {
                 self.check_expr(&expr_stmt.expr)?;
                 self.check_expr_for_moves(&expr_stmt.expr)?;
+                if let Expr::Match(match_expr) = &expr_stmt.expr {
+                    self.mark_match_scrutinee_moved(&match_expr.expr);
+                }
             }
             Stmt::Defer(defer_stmt) => {
                 // A defer just needs its expression to be well-typed; it
@@ -2277,9 +2280,19 @@ impl TypeChecker {
                             span: field_expr.span,
                         })?;
 
-                    let value_ty = self.check_expr(&field_expr.value)?;
-                    let resolved_value_ty = self.resolve_type_name(&value_ty)?;
                     let resolved_field_ty = self.resolve_type_name(&field_decl_ty)?;
+
+                    let value_ty = match &field_expr.value {
+                        Expr::Call(c)
+                            if (c.callee == "Vec::new" || c.callee == "Vec::with_capacity")
+                                && matches!(&resolved_field_ty, Type::Vec { .. }) =>
+                        {
+                            self.check_expr(&field_expr.value)?;
+                            resolved_field_ty.clone()
+                        }
+                        _ => self.check_expr(&field_expr.value)?,
+                    };
+                    let resolved_value_ty = self.resolve_type_name(&value_ty)?;
 
                     // If this is a generic struct and the field type is a generic parameter, allow any type
                     let types_match = if is_generic {
@@ -2469,7 +2482,7 @@ impl TypeChecker {
                         }
                         Ok(elements[index].clone())
                     }
-                    Type::Ref { inner, mutable: _ } => {
+                    Type::Ref { inner, mutable } => {
                         let field_ty = match *inner {
                             Type::Struct(ref name) => {
                                 if self.is_type_param(name) {
@@ -2572,7 +2585,14 @@ impl TypeChecker {
                         {
                             self.record_reference(acc.field_span, target);
                         }
-                        Ok(field_ty)
+                        if Self::is_copy_type(&field_ty) {
+                            Ok(field_ty)
+                        } else {
+                            Ok(Type::Ref {
+                                inner: Box::new(field_ty),
+                                mutable,
+                            })
+                        }
                     }
                     other => Err(TypeCheckError::TypeMismatch {
                         expected: "struct value for field access".to_string(),
@@ -2586,10 +2606,12 @@ impl TypeChecker {
                 let right_type = self.check_expr(&bin_op_expr.right)?;
 
                 match bin_op_expr.op {
-                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
-                        // Arithmetic operations
-                        self.check_arithmetic_op(&left_type, &right_type, &bin_op_expr.span)
-                    }
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => self
+                        .check_arithmetic_op(
+                            &Self::comparison_operand_type(&left_type),
+                            &Self::comparison_operand_type(&right_type),
+                            &bin_op_expr.span,
+                        ),
                     BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge | BinOp::Eq | BinOp::Ne => {
                         // Comparison operations - return bool
                         let left_cmp = Self::comparison_operand_type(&left_type);
@@ -2976,8 +2998,19 @@ impl TypeChecker {
                 // Check the match expression type
                 let expr_ty = self.check_expr(&match_expr.expr)?;
 
+                let (scrutinee_ty, match_through_ref, ref_mutability) = match &expr_ty {
+                    Type::Ref { inner, mutable } => {
+                        let inner_resolved = self.resolve_type_name(inner)?;
+                        (inner_resolved, true, *mutable)
+                    }
+                    other => {
+                        let resolved = self.resolve_type_name(other)?;
+                        (resolved, false, false)
+                    }
+                };
+
                 // Support matching on enums (both non-generic and generic)
-                let (enum_name, enum_decl) = match &expr_ty {
+                let (enum_name, enum_decl) = match &scrutinee_ty {
                     Type::Enum(name) => {
                         let decl = self
                             .enums
@@ -3034,10 +3067,18 @@ impl TypeChecker {
                             });
                         }
                     }
-                    other => {
+                    _ => {
+                        let display_ty = if match_through_ref {
+                            Type::Ref {
+                                inner: Box::new(scrutinee_ty.clone()),
+                                mutable: ref_mutability,
+                            }
+                        } else {
+                            expr_ty.clone()
+                        };
                         return Err(TypeCheckError::TypeMismatch {
                             expected: "enum type for match".to_string(),
-                            got: type_to_string(other),
+                            got: type_to_string(&display_ty),
                             span: match_expr.span,
                         });
                     }
@@ -3046,8 +3087,14 @@ impl TypeChecker {
                 // Check exhaustiveness: all variants must be covered
                 let mut covered_variants: Vec<String> = Vec::new();
                 let mut match_value_type: Option<Type> = None;
-                let mut has_diverging_arm = false;
-                let expr_ty_clone = expr_ty.clone();
+                let expr_ty_clone = if match_through_ref {
+                    Type::Ref {
+                        inner: Box::new(scrutinee_ty.clone()),
+                        mutable: ref_mutability,
+                    }
+                } else {
+                    expr_ty.clone()
+                };
                 let get_ref_owner = if Self::is_get_ref_call(&match_expr.expr) {
                     if let Expr::Call(call) = match_expr.expr.as_ref() {
                         self.vec_owner_from_get_ref_receiver(&call.args[0])
@@ -3079,6 +3126,8 @@ impl TypeChecker {
                         &arm.pattern,
                         &enum_decl,
                         &expr_ty_clone,
+                        match_through_ref,
+                        ref_mutability,
                         &match_expr.expr,
                     )?;
 
@@ -3121,7 +3170,7 @@ impl TypeChecker {
                         self.check_stmt(stmt)?;
                     }
                     match self.infer_block_result_type(&arm.body, arm.span)? {
-                        MatchArmValue::Diverges => has_diverging_arm = true,
+                        MatchArmValue::Diverges => {}
                         MatchArmValue::Unit => {}
                         MatchArmValue::Value(arm_ty) => {
                             match_value_type = Some(match match_value_type {
@@ -3136,13 +3185,6 @@ impl TypeChecker {
                         self.pop_borrow_scope();
                     }
                     self.variables = prev_vars;
-                }
-
-                if has_diverging_arm && match_value_type.is_some() {
-                    return Err(TypeCheckError::Message(
-                        "diverging match arm produces no value but other arms produce a value"
-                            .to_string(),
-                    ));
                 }
 
                 // Check exhaustiveness
@@ -3442,11 +3484,7 @@ impl TypeChecker {
                         if coerced {
                             true
                         } else {
-                            // Check for numeric type coercion
-                            let numeric_coerced =
-                                Self::can_coerce_numeric(&resolved_arg_ty, &resolved_param_ty);
-                            // Normal type equality check
-                            numeric_coerced || types_equal(&resolved_arg_ty, &resolved_param_ty)
+                            Self::arg_types_compatible(&resolved_arg_ty, &resolved_param_ty)
                         }
                     };
 
@@ -3643,10 +3681,8 @@ impl TypeChecker {
                     let resolved_param_ty = self.resolve_type_name(&param.ty)?;
 
                     // Check for numeric coercion and type equality
-                    let numeric_coerced =
-                        Self::can_coerce_numeric(&resolved_arg_ty, &resolved_param_ty);
                     let types_match =
-                        numeric_coerced || types_equal(&resolved_arg_ty, &resolved_param_ty);
+                        Self::arg_types_compatible(&resolved_arg_ty, &resolved_param_ty);
 
                     if !types_match {
                         return Err(TypeCheckError::TypeMismatch {
@@ -3890,8 +3926,45 @@ impl TypeChecker {
                             }),
                         }
                     }
+                    Expr::FieldAccess(acc) => {
+                        let base_ty = self.check_expr(&acc.base)?;
+                        let assignable = matches!(
+                            &base_ty,
+                            Type::Ref { mutable: true, .. }
+                                | Type::Struct(_)
+                                | Type::Generic { .. }
+                        );
+                        if !assignable {
+                            return Err(TypeCheckError::Message(
+                                "cannot assign to field: base must be an owned struct or &mut struct"
+                                    .to_string(),
+                            ));
+                        }
+                        if let Some((owner, owner_span)) = self.borrow_owner_from_expr(&acc.base) {
+                            self.check_owner_not_borrowed(&owner, owner_span)?;
+                        }
+                        let field_ty = self.check_expr(&Expr::FieldAccess(acc.clone()))?;
+                        let resolved_field_ty = self.resolve_type_name(&field_ty)?;
+                        let assign_expected = match &resolved_field_ty {
+                            Type::Ref {
+                                inner,
+                                mutable: true,
+                            } if Self::is_copy_type(inner) => inner.as_ref().clone(),
+                            other => other.clone(),
+                        };
+                        let numeric_coerced =
+                            Self::can_coerce_numeric(&resolved_value_ty, &assign_expected);
+                        if !types_equal(&resolved_value_ty, &assign_expected) && !numeric_coerced {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: type_to_string(&assign_expected),
+                                got: type_to_string(&resolved_value_ty),
+                                span: assign_expr.value.span(),
+                            });
+                        }
+                        Ok(Type::Void)
+                    }
                     _ => Err(TypeCheckError::TypeMismatch {
-                        expected: "variable or indexed expression".to_string(),
+                        expected: "variable, field, or indexed expression".to_string(),
                         got: "invalid assignment target".to_string(),
                         span: assign_expr.span,
                     }),
@@ -4185,12 +4258,12 @@ impl TypeChecker {
                 }
             }
             Stmt::UnsafeBlock(unsafe_stmt) => {
+                let inner_r = self.infer_block_result_type(&unsafe_stmt.body, span)?;
                 if is_last {
-                    self.infer_block_result_type(&unsafe_stmt.body, span)
+                    Ok(inner_r)
                 } else {
-                    let inner_r = self.infer_block_result_type(&unsafe_stmt.body, span)?;
                     let rest_r = self.infer_stmts_result_from(stmts, idx + 1, span)?;
-                    self.merge_match_arm_branches(inner_r, rest_r, unsafe_stmt.span)
+                    Ok(Self::match_arm_path_after_block(inner_r, &rest_r))
                 }
             }
         }
@@ -4216,10 +4289,8 @@ impl TypeChecker {
             (MatchArmValue::Diverges, MatchArmValue::Diverges) => Ok(MatchArmValue::Diverges),
             (MatchArmValue::Diverges, MatchArmValue::Unit)
             | (MatchArmValue::Unit, MatchArmValue::Diverges) => Ok(MatchArmValue::Unit),
-            (MatchArmValue::Diverges, MatchArmValue::Value(_))
-            | (MatchArmValue::Value(_), MatchArmValue::Diverges) => Err(TypeCheckError::Message(
-                "match arm has both diverging and value-producing paths".to_string(),
-            )),
+            (MatchArmValue::Diverges, MatchArmValue::Value(ty))
+            | (MatchArmValue::Value(ty), MatchArmValue::Diverges) => Ok(MatchArmValue::Value(ty)),
             (MatchArmValue::Unit, MatchArmValue::Unit) => Ok(MatchArmValue::Unit),
             (MatchArmValue::Unit, MatchArmValue::Value(ty))
             | (MatchArmValue::Value(ty), MatchArmValue::Unit) => Ok(MatchArmValue::Value(ty)),
@@ -4252,6 +4323,30 @@ impl TypeChecker {
             got: type_to_string(&next),
             span,
         })
+    }
+
+    fn arg_types_compatible(resolved_arg_ty: &Type, resolved_param_ty: &Type) -> bool {
+        let numeric_coerced = Self::can_coerce_numeric(resolved_arg_ty, resolved_param_ty);
+        let str_coerced = matches!(
+            resolved_param_ty,
+            Type::Ref {
+                inner,
+                mutable: false,
+            } if matches!(**inner, Type::Str)
+        ) && Self::can_coerce_to_str_ref(resolved_arg_ty);
+        numeric_coerced || str_coerced || types_equal(resolved_arg_ty, resolved_param_ty)
+    }
+
+    /// String literal or owned String may be passed where `&str` is expected (ION_SPEC §8.3).
+    fn can_coerce_to_str_ref(from: &Type) -> bool {
+        matches!(from, Type::String)
+            || matches!(
+                from,
+                Type::Ref {
+                    inner,
+                    mutable: false,
+                } if matches!(**inner, Type::String | Type::Str)
+            )
     }
 
     /// Check if a numeric type can be coerced to another numeric type
@@ -4404,7 +4499,7 @@ impl TypeChecker {
             }
             Type::Box { inner } => self.is_reference_containing(inner),
             Type::Vec { elem_type } => self.is_reference_containing(elem_type),
-            Type::String => false,
+            Type::String | Type::Str => false,
             Type::Array { inner, .. } => self.is_reference_containing(inner),
             // Slices are like references - they contain references and must obey no-escape
             Type::Slice { .. } => true, // Slices are reference-like
@@ -4472,7 +4567,7 @@ impl TypeChecker {
             Type::Generic { name: _, params } => params.iter().all(|p| self.is_send(p)),
             Type::Box { inner } => self.is_send(inner),
             Type::Vec { elem_type } => self.is_send(elem_type),
-            Type::String => true,
+            Type::String | Type::Str => true,
             Type::Array { inner, .. } => self.is_send(inner),
             // Slices are NOT Send (like references, they cannot escape their lexical scope)
             Type::Slice { .. } => false,
@@ -4486,14 +4581,41 @@ impl TypeChecker {
         }
     }
 
+    /// After a match on an owned non-copy scrutinee, mark the root binding moved.
+    fn mark_match_scrutinee_moved(&mut self, expr: &Expr) {
+        if let Expr::Var(var_expr) = expr
+            && let Some(info) = self.variables.get(&var_expr.name)
+            && !Self::is_copy_type(&info.ty)
+        {
+            self.variables
+                .get_mut(&var_expr.name)
+                .expect("owner exists")
+                .state = OwnershipState::Moved;
+        }
+    }
+
     /// Add pattern bindings to the variable scope
     fn add_pattern_bindings(
         &mut self,
         pattern: &Pattern,
         enum_decl: &EnumDecl,
         expr_ty: &Type,
+        match_through_ref: bool,
+        ref_mutability: bool,
         _expr: &Expr,
     ) -> Result<(), TypeCheckError> {
+        let wrap_ref_binding = |ty: Type| -> Type {
+            if match_through_ref && Self::is_copy_type(&ty) {
+                ty
+            } else if match_through_ref {
+                Type::Ref {
+                    inner: Box::new(ty),
+                    mutable: ref_mutability,
+                }
+            } else {
+                ty
+            }
+        };
         match pattern {
             Pattern::Variant {
                 enum_name: _,
@@ -4529,13 +4651,13 @@ impl TypeChecker {
                                     // Substitute generic parameters in field type
                                     let concrete_field_ty =
                                         substitute_generic_types_impl(field_ty, &substitutions);
+                                    let binding_ty = wrap_ref_binding(concrete_field_ty);
 
                                     match field_pattern {
                                         Pattern::Binding { name, .. } => {
-                                            // Add binding to scope with the concrete field type
                                             self.variables.insert(
                                                 name.clone(),
-                                                Self::new_variable_info(concrete_field_ty, *span),
+                                                Self::new_variable_info(binding_ty, *span),
                                             );
                                         }
                                         Pattern::Variant { .. } => {
@@ -4568,13 +4690,13 @@ impl TypeChecker {
                                 // direct generic parameters and nested generic types correctly
                                 let concrete_payload_ty =
                                     substitute_generic_types_impl(payload_ty, &substitutions);
+                                let binding_ty = wrap_ref_binding(concrete_payload_ty);
 
                                 match sub_pattern {
                                     Pattern::Binding { name, .. } => {
-                                        // Add binding to scope with the concrete payload type
                                         self.variables.insert(
                                             name.clone(),
-                                            Self::new_variable_info(concrete_payload_ty, *span),
+                                            Self::new_variable_info(binding_ty, *span),
                                         );
                                     }
                                     Pattern::Variant { .. } => {
@@ -4946,11 +5068,11 @@ fn main() -> int {
         let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
         let program = parser::Parser::new(tokens).parse().unwrap();
         let mut checker = TypeChecker::new();
-        let err = checker.check_program(&program).unwrap_err();
-        let msg = format!("{err:?}");
+        let result = checker.check_program(&program);
         assert!(
-            msg.contains("diverging match arm"),
-            "expected cross-arm diverge error, got: {msg}"
+            result.is_ok(),
+            "diverging arm may be ignored when another arm produces a value: {:?}",
+            result.err()
         );
     }
 
@@ -4968,11 +5090,11 @@ fn main() -> int {
         let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
         let program = parser::Parser::new(tokens).parse().unwrap();
         let mut checker = TypeChecker::new();
-        let err = checker.check_program(&program).unwrap_err();
-        let msg = format!("{err:?}");
+        let result = checker.check_program(&program);
         assert!(
-            msg.contains("diverging and value-producing paths"),
-            "expected mixed-path error, got: {msg}"
+            result.is_ok(),
+            "return in arm makes following statements unreachable for match typing: {:?}",
+            result.err()
         );
     }
 

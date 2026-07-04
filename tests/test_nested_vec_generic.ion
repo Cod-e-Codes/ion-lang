@@ -1,0 +1,34 @@
+fn sum_matrix(m: Vec<Vec<int>>) -> int {
+    let mut total: int = 0;
+    let mut i: int = 0;
+    while i < Vec::len(&m) {
+        match Vec::get(&m, i) {
+            Option::Some(row) => {
+                let mut j: int = 0;
+                while j < Vec::len(&row) {
+                    match Vec::get(&row, j) {
+                        Option::Some(n) => { total = total + n; }
+                        Option::None => { return 1; }
+                    };
+                    j = j + 1;
+                }
+            }
+            Option::None => { return 2; }
+        };
+        i = i + 1;
+    }
+    return total;
+}
+
+fn main() -> int {
+    let mut inner: Vec<int> = Vec::new();
+    Vec::push(&mut inner, 10);
+    Vec::push(&mut inner, 20);
+    let mut outer: Vec<Vec<int>> = Vec::new();
+    Vec::push(&mut outer, inner);
+    let n = sum_matrix(outer);
+    if n != 30 {
+        return 1;
+    }
+    return 60;
+}

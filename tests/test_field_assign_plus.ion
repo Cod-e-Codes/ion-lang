@@ -1,0 +1,20 @@
+struct Counter {
+    n: int;
+}
+
+fn bump(c: &mut Counter) -> int {
+    c.n += 1;
+    return c.n;
+}
+
+fn main() -> int {
+    let mut c: Counter = Counter { n: 41 };
+    let v = bump(&mut c);
+    if v != 42 {
+        return 1;
+    }
+    if c.n != 42 {
+        return 2;
+    }
+    return 42;
+}

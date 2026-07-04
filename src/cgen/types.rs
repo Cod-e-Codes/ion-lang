@@ -18,6 +18,7 @@ fn mangle_type_component(ty: &Type) -> String {
         Type::F32 => "f32".to_string(),
         Type::F64 => "f64".to_string(),
         Type::String => "String".to_string(),
+        Type::Str => "str".to_string(),
         Type::Struct(name) | Type::Enum(name) => name.clone(),
         Type::Vec { elem_type } => format!("Vec_{}", mangle_type_component(elem_type)),
         Type::Box { inner } => format!("Box_{}", mangle_type_component(inner)),
@@ -211,7 +212,8 @@ pub(crate) fn substitute_type_params(
         | Type::U32
         | Type::U64
         | Type::UInt
-        | Type::String => ty.clone(),
+        | Type::String
+        | Type::Str => ty.clone(),
     }
 }
 
@@ -388,6 +390,7 @@ pub(crate) fn type_to_c_impl(ty: &Type) -> String {
             )
         }
         Type::String => "ion_string_t*".to_string(),
+        Type::Str => "char".to_string(),
         Type::Array { inner, size } => {
             // Fixed-size arrays: [T; N] -> T name[N]
             format!("{}[{}]", type_to_c_impl(inner), size)

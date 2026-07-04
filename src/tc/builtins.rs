@@ -217,29 +217,9 @@ impl TypeChecker {
                     span: call_expr.span,
                 });
             }
-            let index_ty = self.check_expr(&call_expr.args[1])?;
-            if !self.is_integer_type(&index_ty) {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "integer type".to_string(),
-                    got: type_to_string(&index_ty),
-                    span: call_expr.args[1].span(),
-                });
-            }
+            self.check_integer_operand(&call_expr.args[1])?;
 
-            let elem_type = self
-                .vec_elem_type_from_receiver(&call_expr.args[0])
-                .or_else(|| {
-                    let vec_ty = self.check_expr(&call_expr.args[0]).ok()?;
-                    if let Type::Ref {
-                        inner,
-                        mutable: false,
-                    } = vec_ty
-                        && let Type::Vec { elem_type } = *inner
-                    {
-                        return Some(*elem_type);
-                    }
-                    None
-                });
+            let elem_type = self.vec_elem_type_from_vec_arg(&call_expr.args[0]);
 
             if let Some(elem_type) = elem_type {
                 let resolved_elem = self.resolve_type_name(&elem_type)?;
@@ -265,29 +245,9 @@ impl TypeChecker {
                     span: call_expr.span,
                 });
             }
-            let index_ty = self.check_expr(&call_expr.args[1])?;
-            if !self.is_integer_type(&index_ty) {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "integer type".to_string(),
-                    got: type_to_string(&index_ty),
-                    span: call_expr.args[1].span(),
-                });
-            }
+            self.check_integer_operand(&call_expr.args[1])?;
 
-            let elem_type = self
-                .vec_elem_type_from_receiver(&call_expr.args[0])
-                .or_else(|| {
-                    let vec_ty = self.check_expr(&call_expr.args[0]).ok()?;
-                    if let Type::Ref {
-                        inner,
-                        mutable: false,
-                    } = vec_ty
-                        && let Type::Vec { elem_type } = *inner
-                    {
-                        return Some(*elem_type);
-                    }
-                    None
-                });
+            let elem_type = self.vec_elem_type_from_vec_arg(&call_expr.args[0]);
 
             if let Some(elem_type) = elem_type {
                 let resolved_elem = self.resolve_type_name(&elem_type)?;
@@ -365,7 +325,6 @@ impl TypeChecker {
         }
 
         // String::from(s: &str) -> String
-        // Note: &str is not a real type in Ion yet, so we'll accept String for now
         if callee == "String::from" {
             if call_expr.args.len() != 1 {
                 return Err(TypeCheckError::TypeMismatch {
@@ -374,8 +333,17 @@ impl TypeChecker {
                     span: call_expr.span,
                 });
             }
-            let _arg_ty = self.check_expr(&call_expr.args[0])?;
-            // Accept any type for now (String or string literal)
+            let arg_ty = self.check_expr(&call_expr.args[0])?;
+            let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
+            if !Self::can_coerce_to_str_ref(&resolved_arg_ty)
+                && !matches!(call_expr.args[0], Expr::StringLit(_))
+            {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "&str".to_string(),
+                    got: type_to_string(&resolved_arg_ty),
+                    span: call_expr.args[0].span(),
+                });
+            }
             return Ok(Some(Type::String));
         }
 
@@ -529,5 +497,31 @@ impl TypeChecker {
             return Some((**elem_type).clone());
         }
         None
+    }
+
+    fn vec_elem_type_from_vec_arg(&mut self, arg: &Expr) -> Option<Type> {
+        if let Some(elem) = self.vec_elem_type_from_receiver(arg) {
+            return Some(elem);
+        }
+        let vec_ty = self.check_expr(arg).ok()?;
+        if let Type::Ref { inner, .. } = vec_ty
+            && let Type::Vec { elem_type } = *inner
+        {
+            return Some(*elem_type);
+        }
+        None
+    }
+
+    fn check_integer_operand(&mut self, expr: &Expr) -> Result<Type, TypeCheckError> {
+        let raw_ty = self.check_expr(expr)?;
+        let ty = Self::comparison_operand_type(&raw_ty);
+        if !self.is_integer_type(&ty) {
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "integer type".to_string(),
+                got: type_to_string(&raw_ty),
+                span: expr.span(),
+            });
+        }
+        Ok(ty)
     }
 }

@@ -129,6 +129,12 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_get_ref_string.ion` - `Vec::get_ref` with `String` elements
 - `test_vec_get_ref_nested.ion` - `get_ref` on nested `Vec` in a struct field
 - `test_vec_get_ref_scan_nested_vec.ion` - repeated `get_ref` scan over `Vec` of structs with nested `Vec` fields (no heap corruption)
+- `test_vm_execute.ion` - VM-style interpreter loop: `get_ref` enum dispatch, struct field `+=`, method calls on `&mut VM` fields (exit 42)
+- `test_field_assign_plus.ion` - struct field assignment and `+=` on owned and `&mut` receivers (exit 42)
+- `test_vec_enum_push_set.ion` - `Vec` of enums: push, `get_ref` dispatch, and `set` round-trip (exit 50)
+- `test_nested_vec_generic.ion` - nested generic `Vec<Vec<int>>` parse and sum (exit 60)
+- `test_match_break_in_loop.ion` - `break` inside `match` within `loop` without stop-flag workaround (exit 3)
+- `test_str_from_literal.ion` - `&str` parameters and string literal call-site coercion (exit 71)
 - `test_vec_string_mangle.ion` - `Vec<String>` monomorphizes as `Vec_String` in generated C
 - `test_vec_search_index_ok.ion` - `find_index` returns `int`; caller uses `Vec::get` (exit 84)
 - `test_vec_push_mut_param.ion` - `Vec::push` through `&mut Vec<T>` parameter

@@ -141,6 +141,7 @@ pub enum IREexpr {
     Match {
         expr: Box<IREexpr>,
         enum_type: String,
+        scrutinee_type: Option<Type>,
         arms: Vec<IRMatchArm>,
     },
     Call {
@@ -170,6 +171,10 @@ pub enum IREexpr {
     AssignIndex {
         target: Box<IREexpr>,
         index: Box<IREexpr>,
+        value: Box<IREexpr>,
+    },
+    AssignField {
+        target: Box<IREexpr>,
         value: Box<IREexpr>,
     },
     Cast {
@@ -231,16 +236,24 @@ impl LoweringContext {
     }
 
     fn field_type(&self, base_ty: &Type, field: &str) -> Option<Type> {
-        let struct_ty = match base_ty {
-            Type::Ref { inner, .. } => inner.as_ref(),
-            other => other,
-        };
-        let struct_name = Self::struct_name_from_type(struct_ty)?;
-        let decl = self.struct_decls.get(struct_name)?;
-        decl.fields
-            .iter()
-            .find(|f| f.name == field)
-            .map(|f| f.ty.clone())
+        match base_ty {
+            Type::Ref { inner, mutable } => self.field_type(inner, field).map(|ft| Type::Ref {
+                inner: Box::new(ft),
+                mutable: *mutable,
+            }),
+            other => {
+                let struct_ty = match other {
+                    Type::Struct(_) | Type::Generic { .. } => other,
+                    _ => return None,
+                };
+                let struct_name = Self::struct_name_from_type(struct_ty)?;
+                let decl = self.struct_decls.get(struct_name)?;
+                decl.fields
+                    .iter()
+                    .find(|f| f.name == field)
+                    .map(|f| f.ty.clone())
+            }
+        }
     }
 
     fn resolve_expr_type(&self, expr: &Expr) -> Option<Type> {
@@ -811,6 +824,7 @@ impl IRBuilder {
                         while_body_stmts.push(IRStmt::Expr(IREexpr::Match {
                             expr: Box::new(IREexpr::Var(opt_var)),
                             enum_type: "Option".to_string(),
+                            scrutinee_type: None,
                             arms: vec![
                                 IRMatchArm {
                                     pattern: IRPattern::Variant {
@@ -962,6 +976,17 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 .collect(),
         },
         Expr::FieldAccess(acc) => {
+            let base_ty = ctx.resolve_expr_type(&acc.base);
+            let is_pointer = matches!(
+                base_ty,
+                Some(Type::Ref {
+                    inner,
+                    ..
+                }) if matches!(
+                    *inner,
+                    Type::Struct(_) | Type::Generic { .. } | Type::Tuple { .. }
+                )
+            );
             let field = if let Some(Type::Tuple { elements }) = ctx.resolve_expr_type(&acc.base) {
                 if let Ok(idx) = acc.field.parse::<usize>() {
                     if idx < elements.len() {
@@ -978,7 +1003,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             IREexpr::FieldAccess {
                 base: Box::new(build_expr_with_ctx(&acc.base, ctx)),
                 field,
-                is_pointer: false,
+                is_pointer,
             }
         }
         Expr::EnumLit(enum_lit) => IREexpr::EnumLit {
@@ -1040,9 +1065,11 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 .or_else(|| infer_match_enum_name(&match_expr.expr, ctx))
                 .unwrap_or_else(|| "Unknown".to_string());
 
+            let scrutinee_type = ctx.resolve_expr_type(&match_expr.expr);
             IREexpr::Match {
                 expr: Box::new(build_expr_with_ctx(&match_expr.expr, ctx)),
                 enum_type: enum_name,
+                scrutinee_type,
                 arms,
             }
         }
@@ -1061,7 +1088,51 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             }
         }
         Expr::MethodCall(method_call) => {
-            let receiver_expr = build_expr_with_ctx(&method_call.receiver, ctx);
+            let vec_methods = [
+                "push",
+                "pop",
+                "len",
+                "capacity",
+                "get",
+                "get_ref",
+                "set",
+                "with_capacity",
+            ];
+            let is_vec = vec_methods.contains(&method_call.method.as_str());
+            let callee = if is_vec {
+                format!("Vec::{}", method_call.method)
+            } else {
+                format!("METHOD::{}", method_call.method)
+            };
+            let mut expr_args: Vec<Expr> = vec![*method_call.receiver.clone()];
+            expr_args.extend(method_call.args.iter().cloned());
+            let return_type = if is_vec {
+                builtin_option_vec_return(&callee, &expr_args, ctx).or({
+                    match method_call.method.as_str() {
+                        "len" | "capacity" => Some(Type::Int),
+                        "push" | "set" => Some(Type::Void),
+                        _ => None,
+                    }
+                })
+            } else {
+                None
+            };
+            let receiver_is_ref = matches!(
+                method_call.method.as_str(),
+                "push" | "pop" | "set" | "with_capacity" | "len" | "capacity" | "get" | "get_ref"
+            );
+            let receiver_expr = if receiver_is_ref {
+                let mutable = matches!(
+                    method_call.method.as_str(),
+                    "push" | "pop" | "set" | "with_capacity"
+                );
+                IREexpr::AddressOf {
+                    inner: Box::new(build_expr_with_ctx(&method_call.receiver, ctx)),
+                    mutable,
+                }
+            } else {
+                build_expr_with_ctx(&method_call.receiver, ctx)
+            };
             let method_args: Vec<IREexpr> = method_call
                 .args
                 .iter()
@@ -1070,9 +1141,9 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             let mut all_args = vec![receiver_expr];
             all_args.extend(method_args);
             IREexpr::Call {
-                callee: format!("METHOD::{}", method_call.method),
+                callee,
                 args: all_args,
-                return_type: None,
+                return_type,
                 tuple_destructure_index: None,
             }
         }
@@ -1126,6 +1197,10 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             Expr::Index(index_expr) => IREexpr::AssignIndex {
                 target: Box::new(build_expr_with_ctx(&index_expr.target, ctx)),
                 index: Box::new(build_expr_with_ctx(&index_expr.index, ctx)),
+                value: Box::new(build_expr_with_ctx(&assign_expr.value, ctx)),
+            },
+            Expr::FieldAccess(_) => IREexpr::AssignField {
+                target: Box::new(build_expr_with_ctx(&assign_expr.target, ctx)),
                 value: Box::new(build_expr_with_ctx(&assign_expr.value, ctx)),
             },
             _ => panic!("Invalid assignment target in IR lowering"),
@@ -1511,6 +1586,10 @@ fn rewrite_generic_calls_in_expr(
             rewrite_generic_calls_in_expr(index, generic_defs, var_types, instantiations);
             rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
         }
+        IREexpr::AssignField { target, value } => {
+            rewrite_generic_calls_in_expr(target, generic_defs, var_types, instantiations);
+            rewrite_generic_calls_in_expr(value, generic_defs, var_types, instantiations);
+        }
         IREexpr::Cast { expr: inner, .. } => {
             rewrite_generic_calls_in_expr(inner, generic_defs, var_types, instantiations);
         }
@@ -1617,7 +1696,7 @@ fn type_name_for_mangle(ty: &Type) -> String {
         Type::U32 => "u32".to_string(),
         Type::U64 => "u64".to_string(),
         Type::UInt => "uint".to_string(),
-        Type::String => "String".to_string(),
+        Type::String | Type::Str => "str".to_string(),
         Type::Struct(name) | Type::Enum(name) => name.clone(),
         Type::Generic { name, params } => mangle_type_name(name, params),
         Type::Box { inner } => mangle_type_name("Box", std::slice::from_ref(inner)),
@@ -1852,10 +1931,12 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
         IREexpr::Match {
             expr: inner,
             enum_type,
+            scrutinee_type,
             arms,
         } => IREexpr::Match {
             expr: Box::new(substitute_types_in_expr(inner, substitutions)),
             enum_type: enum_type.clone(),
+            scrutinee_type: scrutinee_type.clone(),
             arms: arms
                 .iter()
                 .map(|arm| IRMatchArm {
@@ -1904,6 +1985,10 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
         } => IREexpr::AssignIndex {
             target: Box::new(substitute_types_in_expr(target, substitutions)),
             index: Box::new(substitute_types_in_expr(index, substitutions)),
+            value: Box::new(substitute_types_in_expr(value, substitutions)),
+        },
+        IREexpr::AssignField { target, value } => IREexpr::AssignField {
+            target: Box::new(substitute_types_in_expr(target, substitutions)),
             value: Box::new(substitute_types_in_expr(value, substitutions)),
         },
         IREexpr::Lit(v) => IREexpr::Lit(*v),
@@ -2015,6 +2100,7 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
         | Type::U32
         | Type::U64
         | Type::UInt
-        | Type::String => ty.clone(),
+        | Type::String
+        | Type::Str => ty.clone(),
     }
 }

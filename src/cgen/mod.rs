@@ -73,6 +73,8 @@ pub struct Codegen {
     scope_stack: Vec<ScopeFrame>,
     epilogue_label: String,
     loop_continue_label: Option<String>,
+    loop_break_label: Option<String>,
+    match_in_switch: u32,
     /// When true (single-file merge), module calls use `{alias}_{func}` C names.
     mangle_merged_module_calls: bool,
     /// Set during multi-file codegen: prefix this module's functions (`io_print_int`).
@@ -115,6 +117,8 @@ impl Codegen {
             scope_stack: Vec::new(),
             epilogue_label: "epilogue".to_string(),
             loop_continue_label: None,
+            loop_break_label: None,
+            match_in_switch: 0,
             mangle_merged_module_calls: false,
             multi_file_module: None,
             pending_field_nulls: Vec::new(),
@@ -1132,13 +1136,24 @@ impl Codegen {
                 } else {
                     self.infer_irexpr_type(base)?
                 };
-                let struct_ty = match &base_ty {
-                    Type::Ref { inner, .. } => inner.as_ref(),
-                    other => other,
+                let field_ty = {
+                    let struct_ty = match &base_ty {
+                        Type::Ref { inner, .. } => inner.as_ref(),
+                        other => other,
+                    };
+                    let (decl, substitutions) = self.struct_decl_for_type(struct_ty)?;
+                    let field_decl = decl.fields.iter().find(|f| f.name == *field)?;
+                    Self::substitute_field_types(&field_decl.ty, &substitutions)
                 };
-                let (decl, substitutions) = self.struct_decl_for_type(struct_ty)?;
-                let field_decl = decl.fields.iter().find(|f| f.name == *field)?;
-                Some(Self::substitute_field_types(&field_decl.ty, &substitutions))
+                match base_ty {
+                    Type::Ref { mutable, .. } if self.type_needs_drop(&field_ty) => {
+                        Some(Type::Ref {
+                            inner: Box::new(field_ty),
+                            mutable,
+                        })
+                    }
+                    _ => Some(field_ty),
+                }
             }
             IREexpr::AddressOf { inner, mutable } => {
                 self.infer_irexpr_type(inner).map(|inner_ty| Type::Ref {
@@ -1459,6 +1474,7 @@ impl Codegen {
             IREexpr::Cast { expr, .. } => self.mark_moves_in_expr(expr),
             IREexpr::Assign { value, .. } => self.mark_moves_in_expr(value),
             IREexpr::AssignIndex { value, .. } => self.mark_moves_in_expr(value),
+            IREexpr::AssignField { value, .. } => self.mark_moves_in_expr(value),
             IREexpr::Match { expr, .. } => self.mark_moves_in_expr(expr),
             _ => {}
         }
@@ -1552,6 +1568,7 @@ impl Codegen {
                     expr: match_expr,
                     enum_type,
                     arms,
+                    scrutinee_type,
                 } = value
                 {
                     if let Some(ref ty) = return_ty {
@@ -1560,9 +1577,16 @@ impl Codegen {
                             enum_type,
                             arms,
                             Some(("ret_val", ty)),
+                            scrutinee_type.as_ref(),
                         );
                     } else {
-                        self.generate_match_block(match_expr, enum_type, arms, None);
+                        self.generate_match_block(
+                            match_expr,
+                            enum_type,
+                            arms,
+                            None,
+                            scrutinee_type.as_ref(),
+                        );
                     }
                 } else {
                     self.write("ret_val = ");
@@ -1962,6 +1986,19 @@ impl Codegen {
         self.writeln("}");
     }
 
+    fn emit_break_statement(&mut self) {
+        self.write_indent();
+        if self.match_in_switch > 0 {
+            if let Some(ref label) = self.loop_break_label {
+                self.writeln(&format!("goto {};", label));
+            } else {
+                self.writeln("break;");
+            }
+        } else {
+            self.writeln("break;");
+        }
+    }
+
     fn generate_block(&mut self, block: &IRBlock) {
         let depth_at_entry = self.scope_stack.len();
         self.scope_begin(&block.defers);
@@ -2197,6 +2234,7 @@ impl Codegen {
                         expr: match_expr,
                         enum_type,
                         arms,
+                        scrutinee_type,
                     } = init
                     {
                         self.writeln(";");
@@ -2205,6 +2243,7 @@ impl Codegen {
                             enum_type,
                             arms,
                             Some((&let_stmt.name, &let_stmt.ty)),
+                            scrutinee_type.as_ref(),
                         );
                         self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
                         self.mark_moves_in_expr(match_expr);
@@ -2302,8 +2341,7 @@ impl Codegen {
                 self.emit_function_return(ret);
             }
             IRStmt::Break => {
-                self.write_indent();
-                self.writeln("break;");
+                self.emit_break_statement();
             }
             IRStmt::Continue => {
                 self.write_indent();
@@ -2320,8 +2358,15 @@ impl Codegen {
                         expr: match_expr,
                         enum_type,
                         arms,
+                        scrutinee_type,
                     } => {
-                        self.generate_match_block(match_expr, enum_type, arms, None);
+                        self.generate_match_block(
+                            match_expr,
+                            enum_type,
+                            arms,
+                            None,
+                            scrutinee_type.as_ref(),
+                        );
                         self.mark_moves_in_expr(match_expr);
                         self.flush_pending_field_nulls();
                     }
@@ -2397,6 +2442,19 @@ impl Codegen {
                 }
             }
             IRStmt::While(ir_while) => {
+                let is_infinite = matches!(&ir_while.cond, IREexpr::BoolLiteral(true));
+                let break_label = if is_infinite {
+                    Some(format!("loop_break_{}", self.temp_var_counter))
+                } else {
+                    None
+                };
+                if is_infinite {
+                    self.temp_var_counter += 1;
+                }
+                let prev_break = self.loop_break_label.take();
+                if let Some(ref label) = break_label {
+                    self.loop_break_label = Some(label.clone());
+                }
                 self.write_indent();
                 self.write("while (");
                 self.generate_expr_conditional(&ir_while.cond);
@@ -2418,6 +2476,11 @@ impl Codegen {
                 self.indent_level -= 1;
                 self.write_indent();
                 self.writeln("}");
+                if let Some(label) = break_label {
+                    self.write_indent();
+                    self.writeln(&format!("{}:", label));
+                }
+                self.loop_break_label = prev_break;
             }
             IRStmt::UnsafeBlock(unsafe_block) => {
                 // Unsafe blocks lower to regular C blocks (no special syntax)
@@ -2662,7 +2725,15 @@ impl Codegen {
                             self.write(", ");
                         }
                         self.write(&format!(".{} = ", field.name));
-                        self.generate_expr(&field.value);
+                        let field_ty = struct_name_to_check
+                            .and_then(|sn| self.struct_map.get(sn))
+                            .and_then(|decl| {
+                                decl.fields
+                                    .iter()
+                                    .find(|f| f.name == field.name)
+                                    .map(|f| f.ty.clone())
+                            });
+                        self.generate_expr_with_type(&field.value, field_ty.as_ref());
                     }
                     self.write("}");
                 }
@@ -2677,7 +2748,17 @@ impl Codegen {
                     // Check if this variable is a function parameter of type String
                     let should_use_pointer =
                         if let Some(param_ty) = self.current_function_params.get(var_name) {
-                            matches!(param_ty, Type::String)
+                            match param_ty {
+                                Type::String => true,
+                                Type::Ref { inner, .. } => matches!(
+                                    **inner,
+                                    Type::Struct(_)
+                                        | Type::Generic { .. }
+                                        | Type::Tuple { .. }
+                                        | Type::String
+                                ),
+                                _ => *is_pointer,
+                            }
                         } else if let Some(ty) = self.lookup_var_type(var_name) {
                             matches!(
                                 ty,
@@ -2777,14 +2858,20 @@ impl Codegen {
                 expr,
                 enum_type,
                 arms,
+                scrutinee_type,
             } => {
                 // Generate match expression using switch statement
                 // Get monomorphized enum name if it's generic
                 let enum_decl = self.enum_map.get(enum_type).cloned();
 
                 // Try to extract type from the expression if it's a Call to Vec::pop or Vec::get
-                let (monomorphized_enum_name, type_params) =
-                    self.resolve_option_match_instantiation(expr, enum_type, enum_decl.as_ref());
+                let (monomorphized_enum_name, type_params) = self
+                    .resolve_option_match_instantiation(
+                        expr,
+                        enum_type,
+                        enum_decl.as_ref(),
+                        scrutinee_type.as_ref(),
+                    );
 
                 let match_var_name = format!("match_val_{}", self.match_counter);
                 self.match_counter += 1;
@@ -2809,6 +2896,19 @@ impl Codegen {
                         &match_var_name,
                         expr,
                     );
+                } else if matches!(
+                    scrutinee_type,
+                    Some(Type::Ref {
+                        inner,
+                        ..
+                    }) if matches!(**inner, Type::Enum(_))
+                ) {
+                    self.write(&format!(
+                        "{} {} = *",
+                        monomorphized_enum_name, match_var_name
+                    ));
+                    self.generate_expr(expr);
+                    self.writeln(";");
                 } else {
                     // Evaluate expression once into a temporary with correct enum type
                     self.write(&format!(
@@ -2818,6 +2918,7 @@ impl Codegen {
                     self.generate_expr(expr);
                     self.writeln(";");
                 }
+                self.match_in_switch += 1;
                 self.write_indent();
                 self.write(&format!("switch ({}.tag) {{", match_var_name));
                 self.writeln("");
@@ -2831,6 +2932,7 @@ impl Codegen {
                 );
                 self.write_indent();
                 self.writeln("}");
+                self.match_in_switch = self.match_in_switch.saturating_sub(1);
                 self.write(" 0 })");
             }
             IREexpr::Call {
@@ -3079,6 +3181,11 @@ impl Codegen {
                 self.write("[");
                 self.generate_expr(index);
                 self.write("] = ");
+                self.generate_expr(value);
+            }
+            IREexpr::AssignField { target, value } => {
+                self.generate_expr(target);
+                self.write(" = ");
                 self.generate_expr(value);
             }
             IREexpr::FnLiteral(lit) => {
@@ -3451,6 +3558,7 @@ impl Codegen {
                 "len",
                 "capacity",
                 "get",
+                "get_ref",
                 "set",
                 "with_capacity",
             ];
@@ -3501,7 +3609,7 @@ impl Codegen {
         }
 
         // Fallback: try to infer from method name alone for built-in types
-        let vec_methods = ["push", "pop", "len", "capacity", "get", "set"];
+        let vec_methods = ["push", "pop", "len", "capacity", "get", "get_ref", "set"];
         let string_methods = ["push_str", "push_byte", "len"];
 
         if vec_methods.contains(&method_name) {
@@ -3540,13 +3648,30 @@ impl Codegen {
         }
     }
 
-    /// Resolve monomorphized `Option<T>` when matching on `Vec::get` / `Vec::pop`.
+    /// Resolve monomorphized `Option<T>` for match/for from scrutinee type or call shape.
     fn resolve_option_match_instantiation(
         &self,
         scrutinee: &IREexpr,
         enum_type: &str,
         enum_decl: Option<&EnumDecl>,
+        scrutinee_type: Option<&Type>,
     ) -> (String, Vec<Type>) {
+        if enum_type == "Option" {
+            if let Some(Type::Generic { name, params }) = scrutinee_type
+                && name == "Option"
+                && params.len() == 1
+            {
+                return (mangle_type_name("Option", params), params.clone());
+            }
+            if let Some(inferred) = self.infer_irexpr_type(scrutinee)
+                && let Type::Generic { name, params } = &inferred
+                && name == "Option"
+                && params.len() == 1
+            {
+                return (mangle_type_name("Option", params), params.clone());
+            }
+        }
+
         if let IREexpr::Call {
             callee,
             args,
@@ -3598,14 +3723,19 @@ impl Codegen {
         enum_type: &str,
         arms: &[IRMatchArm],
         match_result: Option<(&str, &Type)>,
+        scrutinee_type: Option<&Type>,
     ) {
         // Generate match as a block (for statement context)
         // Get monomorphized enum name if it's generic
         let enum_decl = self.enum_map.get(enum_type).cloned();
 
         // Try to extract type from the expression if it's a Call to Vec::pop or Vec::get
-        let (monomorphized_enum_name, type_params) =
-            self.resolve_option_match_instantiation(expr, enum_type, enum_decl.as_ref());
+        let (monomorphized_enum_name, type_params) = self.resolve_option_match_instantiation(
+            expr,
+            enum_type,
+            enum_decl.as_ref(),
+            scrutinee_type,
+        );
 
         // Ensure Option<int> is in generic_instantiations
         // Note: The actual type generation happens at file scope before functions
@@ -3663,6 +3793,19 @@ impl Codegen {
                 &match_var_name,
                 expr,
             );
+        } else if matches!(
+            scrutinee_type,
+            Some(Type::Ref {
+                inner,
+                ..
+            }) if matches!(**inner, Type::Enum(_))
+        ) {
+            self.write(&format!(
+                "{} {} = *",
+                monomorphized_enum_name, match_var_name
+            ));
+            self.generate_expr(expr);
+            self.writeln(";");
         } else {
             self.write(&format!(
                 "{} {} = ",
@@ -3672,6 +3815,7 @@ impl Codegen {
             self.writeln(";");
             self.mark_moves_in_expr(expr);
         }
+        self.match_in_switch += 1;
         self.write_indent();
         self.write(&format!("switch ({}.tag) {{", match_var_name));
         self.writeln("");
@@ -3685,6 +3829,7 @@ impl Codegen {
         );
         self.write_indent();
         self.writeln("}");
+        self.match_in_switch = self.match_in_switch.saturating_sub(1);
     }
 
     fn emit_grouped_match_arms(
@@ -4089,8 +4234,7 @@ impl Codegen {
                 self.emit_function_return(ret);
             }
             IRStmt::Break => {
-                self.write_indent();
-                self.writeln("break;");
+                self.emit_break_statement();
             }
             IRStmt::Continue => {
                 self.write_indent();
@@ -4212,7 +4356,8 @@ fn collect_slice_types_from_type(ty: &Type, slice_types: &mut std::collections::
         | Type::U32
         | Type::U64
         | Type::UInt
-        | Type::String => {}
+        | Type::String
+        | Type::Str => {}
         Type::Slice { inner } => {
             let slice_type_name = format!(
                 "ion_slice_{}",
@@ -4406,6 +4551,10 @@ fn collect_slice_types_from_expr(
         } => {
             collect_slice_types_from_expr(target, slice_types);
             collect_slice_types_from_expr(index, slice_types);
+            collect_slice_types_from_expr(value, slice_types);
+        }
+        IREexpr::AssignField { target, value } => {
+            collect_slice_types_from_expr(target, slice_types);
             collect_slice_types_from_expr(value, slice_types);
         }
         IREexpr::TupleLit { .. } => {}
@@ -4625,6 +4774,10 @@ fn collect_tuple_types_from_expr(
         } => {
             collect_tuple_types_from_expr(target, tuple_types);
             collect_tuple_types_from_expr(index, tuple_types);
+            collect_tuple_types_from_expr(value, tuple_types);
+        }
+        IREexpr::AssignField { target, value } => {
+            collect_tuple_types_from_expr(target, tuple_types);
             collect_tuple_types_from_expr(value, tuple_types);
         }
         IREexpr::Lit(_)
@@ -4850,6 +5003,10 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
         } => {
             collect_vec_types_from_expr(target, vec_types);
             collect_vec_types_from_expr(index, vec_types);
+            collect_vec_types_from_expr(value, vec_types);
+        }
+        IREexpr::AssignField { target, value } => {
+            collect_vec_types_from_expr(target, vec_types);
             collect_vec_types_from_expr(value, vec_types);
         }
         IREexpr::FnLiteral(lit) => {
@@ -5410,6 +5567,10 @@ fn collect_generic_from_expr(
         } => {
             collect_generic_from_expr(target, instantiations);
             collect_generic_from_expr(index, instantiations);
+            collect_generic_from_expr(value, instantiations);
+        }
+        IREexpr::AssignField { target, value } => {
+            collect_generic_from_expr(target, instantiations);
             collect_generic_from_expr(value, instantiations);
         }
         IREexpr::FnLiteral(lit) => {
