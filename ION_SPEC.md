@@ -693,7 +693,7 @@ Syntax: `identifier : Bound [ + Bound ... ]` after each type parameter name. Bou
 | Bound | Meaning (structural) |
 |-------|----------------------|
 | `Copy` | Type is copied rather than moved at the ownership level (primitives, references, function pointers). |
-| `Eq` | Type supports `==` and `!=` with correct semantics (primitives, `String`, references, arrays and tuples of `Eq` types, structs and enums whose fields or payloads are all `Eq`). |
+| `Eq` | Type supports `==` and `!=` with correct semantics (primitives, `String`, references, function pointers, arrays and tuples of `Eq` types, structs and enums whose fields or payloads are all `Eq`). |
 | `Send` | Type may cross thread boundaries (Section 7.3). |
 
 At each monomorphization site (generic call, struct or enum construction, type-alias substitution), the compiler substitutes concrete types for parameters and rejects any instantiation where a concrete type does not satisfy a declared bound. Unknown bound names are rejected at the declaration site.

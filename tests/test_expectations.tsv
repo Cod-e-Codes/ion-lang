@@ -214,6 +214,7 @@ test_str_from_literal.ion	run	71
 test_trait_bound_send_ok.ion	run	42
 test_trait_bound_copy_ok.ion	run	7
 test_trait_bound_eq_ok.ion	run	61
+test_trait_bound_eq_fn_ok.ion	run	99
 test_trait_bound_send_error.ion	error		TraitBoundNotSatisfied
 test_trait_bound_copy_error.ion	error		TraitBoundNotSatisfied
 test_trait_bound_eq_error.ion	error		TraitBoundNotSatisfied

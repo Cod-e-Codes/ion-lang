@@ -257,6 +257,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_trait_bound_send_ok.ion` - generic fn with `T: Send` accepts `int`
 - `test_trait_bound_copy_ok.ion` - generic fn with `T: Copy` accepts `int`
 - `test_trait_bound_eq_ok.ion` - generic fn with `T: Eq` compares ints
+- `test_trait_bound_eq_fn_ok.ion` - generic fn with `T: Eq` compares function pointers
 - `test_trait_bound_send_error.ion` - `&int` rejected for `T: Send`
 - `test_trait_bound_copy_error.ion` - `String` rejected for `T: Copy`
 - `test_trait_bound_eq_error.ion` - `Vec<int>` rejected for `T: Eq`

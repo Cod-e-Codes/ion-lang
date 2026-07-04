@@ -3697,7 +3697,10 @@ impl TypeChecker {
                 }
 
                 // Regular function call type checking
-                let (params, return_type_opt) = if desugared_call.callee.contains("::") {
+                let (params, return_type_opt, fn_type_params) = if desugared_call
+                    .callee
+                    .contains("::")
+                {
                     let parts: Vec<&str> = desugared_call.callee.split("::").collect();
                     if parts.len() != 2 {
                         return Err(TypeCheckError::Message(format!(
@@ -3733,12 +3736,20 @@ impl TypeChecker {
                                 }
                             })?;
 
-                        (func_decl.params.clone(), func_decl.return_type.clone())
+                        (
+                            func_decl.params.clone(),
+                            func_decl.return_type.clone(),
+                            func_decl.generics.clone(),
+                        )
                     } else {
                         // Type method case - look up the function again
                         let func_decl =
                             self.lookup_method_function(&desugared_call.callee, &base_type_name)?;
-                        (func_decl.params.clone(), func_decl.return_type.clone())
+                        (
+                            func_decl.params.clone(),
+                            func_decl.return_type.clone(),
+                            func_decl.generics.clone(),
+                        )
                     }
                 } else {
                     // Simple function call - shouldn't happen for methods
@@ -3782,7 +3793,12 @@ impl TypeChecker {
 
                 self.record_signature(
                     method_call.span,
-                    Self::fn_hover_doc(&desugared_call.callee, &[], &params, &return_type_opt),
+                    Self::fn_hover_doc(
+                        &desugared_call.callee,
+                        &fn_type_params,
+                        &params,
+                        &return_type_opt,
+                    ),
                     None,
                 );
 
@@ -5412,6 +5428,63 @@ fn main() -> int {
         assert_eq!(
             doc,
             "fn io::println(s: String) -> void\n\nWrite an owned string to stdout followed by a newline."
+        );
+    }
+
+    #[test]
+    fn method_call_signature_includes_generic_bounds() {
+        let src = r#"
+struct Pair {
+    first: int;
+    second: int;
+}
+
+fn bump(x: int) -> int {
+    return x + 1;
+}
+
+fn main() -> int {
+    let p: Pair = Pair { first: 0, second: 0 };
+    let f: fn(int) -> int = bump;
+    let g: fn(int) -> int = bump;
+    if p.same(f, g) {
+        return 0;
+    }
+    return 1;
+}
+"#;
+        let helper_src = r#"
+fn same<T: Eq>(pair: Pair, a: T, b: T) -> bool {
+    return a == b;
+}
+"#;
+        let fn_ptr = Type::Fn {
+            params: vec![Type::Int],
+            return_type: Box::new(Type::Int),
+        };
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let mut program = parser::Parser::new(tokens).parse().unwrap();
+        let helper_tokens = crate::lexer::Lexer::new(helper_src).tokenize().unwrap();
+        let helper = parser::Parser::new(helper_tokens).parse().unwrap();
+        let mut method_fn = helper.functions.into_iter().next().expect("helper fn");
+        method_fn.name = "Pair::same".to_string();
+        method_fn.params[1].ty = fn_ptr.clone();
+        method_fn.params[2].ty = fn_ptr;
+        program.functions.push(method_fn);
+
+        let mut checker = TypeChecker::new();
+        let (result, errors) = checker.check_program_collecting(&program);
+        assert!(errors.is_empty(), "{errors:?}");
+        let sig = result
+            .lsp_info
+            .signatures
+            .values()
+            .find(|s| s.label.contains("Pair::same"))
+            .expect("Pair::same method signature help");
+        assert!(
+            sig.label.contains("<T: Eq>"),
+            "expected generic bounds in signature help, got: {}",
+            sig.label
         );
     }
 

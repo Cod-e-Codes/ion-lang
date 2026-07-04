@@ -3,6 +3,7 @@
 ## 2026-07
 
 - **VM-style idioms**: `match` on `&Enum` from `Vec::get_ref`; struct field assignment and `+=` on owned/`&mut` paths; method desugaring (`vec.push`, `vec.get_ref`) with correct borrows; nested generic types (`Vec<Vec<int>>`); match-arm control-flow unification (`break`/`return` with value arms); `&str` call-site coercion; enum literals in `Vec::push`/`set` without double-wrapped C; `&mut Struct` field access via `->` in codegen. Integration tests and examples `bytecode_vm`, updated `showcase`, `todo_demo`, `http_server`, `text_summary`. Fix extern call typing so `&T` arguments match `&T` parameters (no erroneous copy-type ref stripping). Fix `Option<T>` match codegen to use the scrutinee type instead of the first registered monomorph. Former negative match-arm rvalue tests now pass as positive runs.
+- **Trait bounds follow-up**: ION_SPEC §4.8 `Eq` row documents function pointers; integration test `test_trait_bound_eq_fn_ok`; method-call signature help threads generic bounds through `fn_hover_doc`.
 
 ## 2026-06
 
