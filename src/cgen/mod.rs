@@ -74,6 +74,7 @@ pub struct Codegen {
     epilogue_label: String,
     loop_continue_label: Option<String>,
     loop_break_label: Option<String>,
+    loop_break_label_used: bool,
     match_in_switch: u32,
     /// When true (single-file merge), module calls use `{alias}_{func}` C names.
     mangle_merged_module_calls: bool,
@@ -118,6 +119,7 @@ impl Codegen {
             epilogue_label: "epilogue".to_string(),
             loop_continue_label: None,
             loop_break_label: None,
+            loop_break_label_used: false,
             match_in_switch: 0,
             mangle_merged_module_calls: false,
             multi_file_module: None,
@@ -1990,6 +1992,7 @@ impl Codegen {
         self.write_indent();
         if self.match_in_switch > 0 {
             if let Some(ref label) = self.loop_break_label {
+                self.loop_break_label_used = true;
                 self.writeln(&format!("goto {};", label));
             } else {
                 self.writeln("break;");
@@ -2452,6 +2455,8 @@ impl Codegen {
                     self.temp_var_counter += 1;
                 }
                 let prev_break = self.loop_break_label.take();
+                let prev_break_used = self.loop_break_label_used;
+                self.loop_break_label_used = false;
                 if let Some(ref label) = break_label {
                     self.loop_break_label = Some(label.clone());
                 }
@@ -2476,11 +2481,14 @@ impl Codegen {
                 self.indent_level -= 1;
                 self.write_indent();
                 self.writeln("}");
-                if let Some(label) = break_label {
+                if let Some(label) = break_label
+                    && self.loop_break_label_used
+                {
                     self.write_indent();
                     self.writeln(&format!("{}:", label));
                 }
                 self.loop_break_label = prev_break;
+                self.loop_break_label_used = prev_break_used;
             }
             IRStmt::UnsafeBlock(unsafe_block) => {
                 // Unsafe blocks lower to regular C blocks (no special syntax)
