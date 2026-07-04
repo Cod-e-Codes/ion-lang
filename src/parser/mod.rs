@@ -807,24 +807,13 @@ impl Parser {
         }
     }
 
-    fn parse_generic_params(&mut self) -> Result<Vec<String>, ParseError> {
+    fn parse_generic_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {
         if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Less) {
             self.advance(); // consume <
             let mut params = Vec::new();
 
             loop {
-                let name_idx = self.current;
-                let name = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind {
-                    ident_name.clone()
-                } else {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "type parameter name".to_string(),
-                        got: self.tokens[name_idx].kind.clone(),
-                        span: Span::from_token(&self.tokens[name_idx]),
-                    });
-                };
-                self.current += 1; // consume identifier
-                params.push(name);
+                params.push(self.parse_type_param()?);
 
                 if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Comma) {
                     self.advance(); // consume ,
@@ -838,6 +827,47 @@ impl Parser {
         } else {
             Ok(Vec::new())
         }
+    }
+
+    fn parse_type_param(&mut self) -> Result<TypeParam, ParseError> {
+        let name_idx = self.current;
+        let name = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind {
+            ident_name.clone()
+        } else {
+            return Err(ParseError::UnexpectedToken {
+                expected: "type parameter name".to_string(),
+                got: self.tokens[name_idx].kind.clone(),
+                span: Span::from_token(&self.tokens[name_idx]),
+            });
+        };
+        self.current += 1; // consume identifier
+
+        let mut bounds = Vec::new();
+        if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Colon) {
+            self.advance(); // consume :
+            loop {
+                let bound_idx = self.current;
+                let bound = if let TokenKind::Ident(ref bound_name) = self.tokens[bound_idx].kind {
+                    bound_name.clone()
+                } else {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "trait bound name".to_string(),
+                        got: self.tokens[bound_idx].kind.clone(),
+                        span: Span::from_token(&self.tokens[bound_idx]),
+                    });
+                };
+                self.current += 1;
+                bounds.push(bound);
+
+                if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Plus) {
+                    self.advance(); // consume +
+                } else {
+                    break;
+                }
+            }
+        }
+
+        Ok(TypeParam { name, bounds })
     }
 
     fn parse_struct_decl(&mut self) -> Result<StructDecl, ParseError> {

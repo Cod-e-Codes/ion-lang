@@ -1,0 +1,10 @@
+// String is move-only, not Copy
+fn require_copy<T: Copy>(value: T) -> int {
+    let _v: T = value;
+    return 0;
+}
+
+fn main() -> int {
+    let s = String::from("hello");
+    return require_copy(s);
+}

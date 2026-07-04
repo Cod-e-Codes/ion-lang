@@ -37,11 +37,51 @@ pub struct ExternFnDecl {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypeParam {
+    pub name: String,
+    pub bounds: Vec<String>,
+}
+
+impl TypeParam {
+    pub fn simple(name: &str) -> Self {
+        TypeParam {
+            name: name.to_string(),
+            bounds: Vec::new(),
+        }
+    }
+
+    pub fn names(params: &[TypeParam]) -> Vec<String> {
+        params.iter().map(|p| p.name.clone()).collect()
+    }
+
+    pub fn format_list(params: &[TypeParam]) -> String {
+        if params.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "<{}>",
+                params
+                    .iter()
+                    .map(|p| {
+                        if p.bounds.is_empty() {
+                            p.name.clone()
+                        } else {
+                            format!("{}: {}", p.name, p.bounds.join(" + "))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct FnDecl {
     pub doc: Option<String>,
     pub pub_: bool,
     pub name: String,
-    pub generics: Vec<String>,
+    pub generics: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
     pub body: Block,
@@ -53,7 +93,7 @@ pub struct StructDecl {
     pub doc: Option<String>,
     pub pub_: bool,
     pub name: String,
-    pub generics: Vec<String>,
+    pub generics: Vec<TypeParam>,
     pub fields: Vec<StructField>,
     pub span: Span,
 }
@@ -63,7 +103,7 @@ pub struct EnumDecl {
     pub doc: Option<String>,
     pub pub_: bool,
     pub name: String,
-    pub generics: Vec<String>,
+    pub generics: Vec<TypeParam>,
     pub variants: Vec<EnumVariant>,
     pub span: Span,
 }
@@ -73,7 +113,7 @@ pub struct TypeAliasDecl {
     pub doc: Option<String>,
     pub pub_: bool,
     pub name: String,
-    pub generics: Vec<String>,
+    pub generics: Vec<TypeParam>,
     pub target: Type,
     pub span: Span,
 }

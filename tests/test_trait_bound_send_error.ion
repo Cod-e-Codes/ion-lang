@@ -1,0 +1,11 @@
+// References are not Send
+fn require_send<T: Send>(value: T) -> int {
+    let _v: T = value;
+    return 0;
+}
+
+fn main() -> int {
+    let x: int = 5;
+    let r: &int = &x;
+    return require_send(r);
+}

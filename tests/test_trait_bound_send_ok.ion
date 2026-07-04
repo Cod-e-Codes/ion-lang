@@ -1,0 +1,9 @@
+// Generic function with Send bound: int satisfies Send
+fn hold<T: Send>(value: T) -> T {
+    return value;
+}
+
+fn main() -> int {
+    let x: int = hold(42);
+    return x;
+}

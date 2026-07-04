@@ -35,7 +35,7 @@ The following features may change shape before 1.0:
 
 - tuples beyond flat two-field values;
 - capture-free function literals and function-pointer coercions;
-- generic ergonomics without trait bounds;
+- generic ergonomics with optional built-in trait bounds (`Copy`, `Eq`, `Send`);
 - byte-oriented string iteration;
 - conservative move analysis in `while` and `for` loops;
 - generated C layout details not covered by `docs/ABI.md`.

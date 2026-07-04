@@ -1,0 +1,8 @@
+// Unknown trait bound name rejected at declaration site
+fn bad_generic<T: Foo>(value: T) -> T {
+    return value;
+}
+
+fn main() -> int {
+    return bad_generic(1);
+}

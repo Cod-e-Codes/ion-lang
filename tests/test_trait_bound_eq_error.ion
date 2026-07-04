@@ -1,0 +1,11 @@
+// Vec<int> does not satisfy Eq
+fn require_eq<T: Eq>(value: T) -> int {
+    let _v: T = value;
+    return 0;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    v.push(1);
+    return require_eq(v);
+}

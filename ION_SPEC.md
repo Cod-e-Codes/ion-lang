@@ -288,7 +288,8 @@ fn_decl          = "fn" , identifier , type_params? , "(" , params? , ")" ,
                    return_type? , block ;
 
 type_params      = "<" , type_param , { "," , type_param } , ">" ;
-type_param       = identifier ;  (* no trait bounds *)
+type_param       = identifier , [ ":" , trait_bound , { "+" , trait_bound } ] ;
+trait_bound      = identifier ;  (* built-in: Copy, Eq, Send *)
 
 params           = param , { "," , param } ;
 param            = identifier , ":" , type_expr ;
@@ -651,7 +652,8 @@ Ion supports a **local, Hindley–Milner-inspired inference**:
 The inference engine is intentionally limited:
 
 - No higher-rank polymorphism.
-- No complex trait constraints; only simple, **structural** `Send` constraints. For a generic type `Wrapper<T>`, each monomorphized instantiation `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`.
+- Generic type parameters may declare optional **trait bounds** (`Copy`, `Eq`, `Send`). Bounds are checked at monomorphization: each concrete instantiation must satisfy every bound on the corresponding parameter. There are no user-defined traits; bounds name structural capabilities checked by the compiler (see Section 4.8).
+- Structural `Send` still applies per instantiation even without an explicit bound: for a generic type `Wrapper<T>`, each monomorphized `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`.
 
 #### 4.5 Type Casting and Array Assignment
 
@@ -676,6 +678,25 @@ The inference engine is intentionally limited:
 - Both `break` and `continue` are compile errors outside of a loop body.
 - **Match guards**: `pattern if expr => { ... }` where `expr` must be `bool`.
 - **Struct-style enum variants**: `enum E { Ok { value: int }; }` with matching literals and patterns.
+
+#### 4.8 Trait Bounds on Generics
+
+Generic functions, structs, enums, and type aliases may declare bounds on type parameters:
+
+```ion
+fn send_value<T: Send>(value: T) { ... }
+struct Pair<T: Copy + Eq> { first: T; second: T; }
+```
+
+Syntax: `identifier : Bound [ + Bound ... ]` after each type parameter name. Bounds are **built-in identifiers** only; there is no `trait` declaration syntax.
+
+| Bound | Meaning (structural) |
+|-------|----------------------|
+| `Copy` | Type is copied rather than moved at the ownership level (primitives, references, function pointers). |
+| `Eq` | Type supports `==` and `!=` with correct semantics (primitives, `String`, references, arrays and tuples of `Eq` types, structs and enums whose fields or payloads are all `Eq`). |
+| `Send` | Type may cross thread boundaries (Section 7.3). |
+
+At each monomorphization site (generic call, struct or enum construction, type-alias substitution), the compiler substitutes concrete types for parameters and rejects any instantiation where a concrete type does not satisfy a declared bound. Unknown bound names are rejected at the declaration site.
 
 ### 5. Ownership and Borrowing
 
@@ -715,7 +736,7 @@ fn main() {
 
 By default, Ion types are **move-only**. For a small subset of primitive types (e.g., `int`, `bool`, pointers), the implementation may treat moves as cheap copies, but the semantic model is still “move”.
 
-Ion does not expose a `Copy` marker to user code; whether a move is implemented as a copy is an implementation detail.
+Whether a move is implemented as a copy is an implementation detail. The `Copy` bound on generic parameters (Section 4.8) names types that are copied rather than moved at the ownership level.
 
 After an `if` statement, ownership is merged from branches that can reach the following code. Branches that always `return`, `break`, or `continue` are omitted from the merge. If two fall-through paths disagree on whether a binding is still valid, the compiler reports an error.
 
@@ -1253,7 +1274,7 @@ and [docs/ABI.md](docs/ABI.md). Features listed below are either intentionally
 constrained in the beta subset or unstable until a later release documents a
 stronger contract.
 
-- No trait bounds on generics
+- Trait bounds are limited to built-in `Copy`, `Eq`, and `Send` (no user-defined traits)
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - `if`/`else` merge: ownership after an `if` is merged from branches that can fall through to the following code. A move in a branch that always `return`s, `break`s, or `continue`s does not block use after the `if`. If two fall-through paths disagree (one moved, one valid), it is still an error.
 - `while`/`for` loops: a non-copy variable moved anywhere in the loop body is an error (repeated iteration would need the binding again); copy types and borrows are unchanged. For read-only scans over an owned `Vec<T>`, prefer `Vec::get_ref` (Section 8.2) or index/handle helpers; `Vec::get` move-out still requires consume-once or put-back per iteration.

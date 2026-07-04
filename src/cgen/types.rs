@@ -232,7 +232,7 @@ pub(crate) fn resolve_type_alias(ty: &Type, type_aliases: &HashMap<String, TypeA
                             .generics
                             .iter()
                             .zip(params.iter())
-                            .map(|(gen_name, param_ty)| (gen_name.clone(), param_ty))
+                            .map(|(tp, param_ty)| (tp.name.clone(), param_ty))
                             .collect();
                         let resolved = substitute_type_params(&alias.target, &substitutions);
                         return resolve_type_alias(&resolved, type_aliases);
@@ -251,7 +251,7 @@ pub(crate) fn resolve_type_alias(ty: &Type, type_aliases: &HashMap<String, TypeA
                         .generics
                         .iter()
                         .zip(params.iter())
-                        .map(|(gen_name, param_ty)| (gen_name.clone(), param_ty))
+                        .map(|(tp, param_ty)| (tp.name.clone(), param_ty))
                         .collect();
                     let resolved = substitute_type_params(&alias.target, &substitutions);
                     return resolve_type_alias(&resolved, type_aliases);

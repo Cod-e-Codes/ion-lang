@@ -400,6 +400,20 @@ fn diagnostic_from_tc_error(err: &TypeCheckError) -> (crate::ast::Span, String) 
                 names.join(", ")
             ),
         ),
+        TypeCheckError::TraitBoundNotSatisfied {
+            span,
+            type_name,
+            bound,
+            context,
+        } => (
+            *span,
+            format!(
+                "Trait bound not satisfied: type '{type_name}' does not satisfy '{bound}' in {context}"
+            ),
+        ),
+        TypeCheckError::UnknownTraitBound { span, bound } => {
+            (*span, format!("Unknown trait bound: '{bound}'"))
+        }
         TypeCheckError::Message(msg) => (crate::ast::Span::default(), msg.clone()),
     }
 }

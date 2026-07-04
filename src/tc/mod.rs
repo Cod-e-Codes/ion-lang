@@ -1,5 +1,6 @@
 mod builtins;
 mod ownership;
+mod trait_bounds;
 mod types;
 
 use crate::ast::*;
@@ -147,6 +148,16 @@ pub enum TypeCheckError {
         names: Vec<String>,
         span: Span,
     },
+    TraitBoundNotSatisfied {
+        type_name: String,
+        bound: String,
+        context: String,
+        span: Span,
+    },
+    UnknownTraitBound {
+        bound: String,
+        span: Span,
+    },
     Message(String),
 }
 
@@ -191,6 +202,21 @@ impl std::fmt::Display for TypeCheckError {
                 "line {}: ClosureCapture: fn literal cannot capture variables from outer scope: {}",
                 span.line,
                 names.join(", ")
+            ),
+            TypeCheckError::TraitBoundNotSatisfied {
+                type_name,
+                bound,
+                context,
+                span,
+            } => write!(
+                f,
+                "line {}: TraitBoundNotSatisfied: type '{}' does not satisfy bound '{}' in {}",
+                span.line, type_name, bound, context
+            ),
+            TypeCheckError::UnknownTraitBound { bound, span } => write!(
+                f,
+                "line {}: UnknownTraitBound: unknown trait bound '{}'",
+                span.line, bound
             ),
             TypeCheckError::Message(msg) => write!(f, "{}", msg),
         }
@@ -283,8 +309,8 @@ impl TypeChecker {
         }
     }
 
-    fn push_type_params(&mut self, params: &[String]) {
-        self.type_param_scopes.push(params.to_vec());
+    fn push_type_params(&mut self, params: &[TypeParam]) {
+        self.type_param_scopes.push(TypeParam::names(params));
     }
 
     fn pop_type_params(&mut self) {
@@ -362,7 +388,7 @@ impl TypeChecker {
 
     fn fn_hover_doc(
         name: &str,
-        generics: &[String],
+        generics: &[TypeParam],
         params: &[Param],
         ret: &Option<Type>,
     ) -> String {
@@ -374,11 +400,7 @@ impl TypeChecker {
             .as_ref()
             .map(type_to_string)
             .unwrap_or_else(|| "void".to_string());
-        let generics = if generics.is_empty() {
-            String::new()
-        } else {
-            format!("<{}>", generics.join(", "))
-        };
+        let generics = TypeParam::format_list(generics);
         format!("fn {}{}({}) -> {}", name, generics, params.join(", "), ret)
     }
 
@@ -404,11 +426,7 @@ impl TypeChecker {
         }
 
         for alias in &source.type_aliases {
-            let generics = if alias.generics.is_empty() {
-                String::new()
-            } else {
-                format!("<{}>", alias.generics.join(", "))
-            };
+            let generics = TypeParam::format_list(&alias.generics);
             let sig = format!(
                 "type {}{} = {}",
                 alias.name,
@@ -431,11 +449,7 @@ impl TypeChecker {
 
         for s in &source.structs {
             let fields: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
-            let generics = if s.generics.is_empty() {
-                String::new()
-            } else {
-                format!("<{}>", s.generics.join(", "))
-            };
+            let generics = TypeParam::format_list(&s.generics);
             let sig = format!("struct {}{} {{ {} }}", s.name, generics, fields.join(", "));
             self.record_hover_doc(s.span, Self::hover_with_doc(&sig, s.doc.as_deref()));
             self.record_completion(&s.name, LspSymbolKind::Struct, None);
@@ -478,11 +492,7 @@ impl TypeChecker {
 
         for e in &source.enums {
             let variants: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
-            let generics = if e.generics.is_empty() {
-                String::new()
-            } else {
-                format!("<{}>", e.generics.join(", "))
-            };
+            let generics = TypeParam::format_list(&e.generics);
             let sig = format!("enum {}{} {{ {} }}", e.name, generics, variants.join(", "));
             self.record_hover_doc(e.span, Self::hover_with_doc(&sig, e.doc.as_deref()));
             self.record_completion(&e.name, LspSymbolKind::Enum, None);
@@ -785,6 +795,28 @@ impl TypeChecker {
             for extern_fn in &extern_block.functions {
                 self.extern_functions
                     .insert(extern_fn.name.clone(), extern_fn.clone());
+            }
+        }
+
+        // Validate trait bounds on generic declarations
+        for s in &program.structs {
+            if let Err(e) = self.validate_declared_bounds(&s.generics, s.span) {
+                errors.push(e);
+            }
+        }
+        for e in &program.enums {
+            if let Err(e) = self.validate_declared_bounds(&e.generics, e.span) {
+                errors.push(e);
+            }
+        }
+        for alias in &program.type_aliases {
+            if let Err(e) = self.validate_declared_bounds(&alias.generics, alias.span) {
+                errors.push(e);
+            }
+        }
+        for function in &program.functions {
+            if let Err(e) = self.validate_declared_bounds(&function.generics, function.span) {
+                errors.push(e);
             }
         }
 
@@ -2262,11 +2294,17 @@ impl TypeChecker {
                 } else {
                     false
                 };
-                let generics = if let Some(decl) = self.structs.get(&struct_name) {
+                let generic_param_names = if let Some(decl) = self.structs.get(&struct_name) {
+                    TypeParam::names(&decl.generics)
+                } else {
+                    Vec::new()
+                };
+                let struct_generics = if let Some(decl) = self.structs.get(&struct_name) {
                     decl.generics.clone()
                 } else {
                     Vec::new()
                 };
+                let mut inferred_substitutions = std::collections::HashMap::new();
 
                 // Check that all fields provided correspond to struct fields
                 for field_expr in &lit.fields {
@@ -2299,7 +2337,13 @@ impl TypeChecker {
                         // Check if field_decl_ty is a generic parameter (e.g., Type::Struct("T"))
                         if let Type::Struct(param_name) = &field_decl_ty {
                             // If this is a generic parameter name, allow any type
-                            generics.contains(param_name)
+                            if generic_param_names.iter().any(|g| g == param_name) {
+                                inferred_substitutions
+                                    .insert(param_name.clone(), resolved_value_ty.clone());
+                                true
+                            } else {
+                                false
+                            }
                         } else {
                             // Check for array element type coercion
                             let array_elem_coerced = if let Type::Array {
@@ -2368,6 +2412,15 @@ impl TypeChecker {
                     }
                 }
 
+                if is_generic {
+                    self.check_instantiation_bounds(
+                        &struct_generics,
+                        &inferred_substitutions,
+                        &format!("struct '{}'", struct_name),
+                        lit.span,
+                    )?;
+                }
+
                 // For now we don't enforce that all fields are initialized; minimal subset.
 
                 Ok(Type::Struct(struct_name))
@@ -2431,8 +2484,14 @@ impl TypeChecker {
                             .generics
                             .iter()
                             .zip(params.iter())
-                            .map(|(param_name, concrete)| (param_name.clone(), concrete.clone()))
+                            .map(|(param, concrete)| (param.name.clone(), concrete.clone()))
                             .collect::<std::collections::HashMap<_, _>>();
+                        self.check_instantiation_bounds(
+                            &decl.generics,
+                            &substitutions,
+                            &format!("struct '{}'", name),
+                            acc.span,
+                        )?;
                         let field = decl
                             .fields
                             .iter()
@@ -2526,7 +2585,7 @@ impl TypeChecker {
                                     .generics
                                     .iter()
                                     .zip(params.iter())
-                                    .map(|(p, t)| (p.clone(), t.clone()))
+                                    .map(|(p, t)| (p.name.clone(), t.clone()))
                                     .collect::<std::collections::HashMap<_, _>>();
                                 let field = decl
                                     .fields
@@ -2944,10 +3003,12 @@ impl TypeChecker {
                         // Check if expected_ty is a generic parameter (e.g., Type::Struct("T"))
                         if let Type::Struct(param_name) = &resolved_expected_ty {
                             // If this is a generic parameter name, infer it from the argument type
-                            if enum_decl.generics.contains(param_name) {
+                            if enum_decl.generics.iter().any(|g| g.name == *param_name) {
                                 // Find the index of this generic parameter
-                                if let Some(index) =
-                                    enum_decl.generics.iter().position(|g| g == param_name)
+                                if let Some(index) = enum_decl
+                                    .generics
+                                    .iter()
+                                    .position(|g| g.name == *param_name)
                                 {
                                     // Ensure we have enough inferred params
                                     while inferred_params.len() <= index {
@@ -2986,6 +3047,18 @@ impl TypeChecker {
 
                 // Return the appropriate type based on whether it's generic
                 if is_generic && inferred_params.len() == enum_decl.generics.len() {
+                    let substitutions = enum_decl
+                        .generics
+                        .iter()
+                        .zip(inferred_params.iter())
+                        .map(|(param, concrete)| (param.name.clone(), concrete.clone()))
+                        .collect::<std::collections::HashMap<_, _>>();
+                    self.check_instantiation_bounds(
+                        &enum_decl.generics,
+                        &substitutions,
+                        &format!("enum '{}'", enum_lit.enum_name),
+                        enum_lit.span,
+                    )?;
                     Ok(Type::Generic {
                         name: enum_lit.enum_name.clone(),
                         params: inferred_params,
@@ -3036,7 +3109,7 @@ impl TypeChecker {
                                 doc: None,
                                 pub_: false,
                                 name: "Option".to_string(),
-                                generics: vec!["T".to_string()],
+                                generics: vec![TypeParam::simple("T")],
                                 variants: vec![
                                     EnumVariant {
                                         doc: None,
@@ -3367,7 +3440,7 @@ impl TypeChecker {
 
                 let func_decl_params = params;
 
-                let fn_generics: Vec<String> = if call_expr.callee.contains("::") {
+                let fn_type_params: Vec<TypeParam> = if call_expr.callee.contains("::") {
                     let parts: Vec<&str> = call_expr.callee.split("::").collect();
                     if parts.len() == 2 {
                         self.module_imports
@@ -3384,6 +3457,7 @@ impl TypeChecker {
                         .map(|f| f.generics.clone())
                         .unwrap_or_default()
                 };
+                let fn_generics = TypeParam::names(&fn_type_params);
 
                 let mut generic_substitutions = std::collections::HashMap::new();
                 if !fn_generics.is_empty()
@@ -3395,6 +3469,15 @@ impl TypeChecker {
                     let param0_ty = self.resolve_type_name(&func_decl_params[0].ty)?;
                     generic_substitutions =
                         infer_generic_substitutions(&param0_ty, &resolved_arg, &fn_generics);
+                }
+
+                if !generic_substitutions.is_empty() {
+                    self.check_instantiation_bounds(
+                        &fn_type_params,
+                        &generic_substitutions,
+                        &format!("fn '{}'", call_expr.callee),
+                        call_expr.span,
+                    )?;
                 }
 
                 // Check argument count
@@ -3517,7 +3600,7 @@ impl TypeChecker {
                 let hover_doc = Self::hover_with_doc(
                     &Self::fn_hover_doc(
                         &call_expr.callee,
-                        &fn_generics,
+                        &fn_type_params,
                         &func_decl_params,
                         &return_type_opt,
                     ),
@@ -3528,7 +3611,7 @@ impl TypeChecker {
                     call_expr.span,
                     Self::fn_hover_doc(
                         &call_expr.callee,
-                        &fn_generics,
+                        &fn_type_params,
                         &func_decl_params,
                         &return_type_opt,
                     ),
@@ -4633,7 +4716,7 @@ impl TypeChecker {
                             .generics
                             .iter()
                             .zip(params.iter())
-                            .map(|(gen_name, concrete_ty)| (gen_name.clone(), concrete_ty.clone()))
+                            .map(|(tp, concrete_ty)| (tp.name.clone(), concrete_ty.clone()))
                             .collect::<std::collections::HashMap<_, _>>()
                     } else {
                         std::collections::HashMap::new()

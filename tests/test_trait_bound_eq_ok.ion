@@ -1,0 +1,11 @@
+// Generic function with Eq bound: int supports ==
+fn is_same<T: Eq>(a: T, b: T) -> bool {
+    return a == b;
+}
+
+fn main() -> int {
+    if is_same(10, 10) {
+        return 61;
+    }
+    return 1;
+}

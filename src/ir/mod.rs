@@ -464,7 +464,7 @@ impl IRBuilder {
 
         IRFunction {
             name: function.name.clone(),
-            generics: function.generics.clone(),
+            generics: TypeParam::names(&function.generics),
             params,
             return_type: function.return_type.clone(),
             blocks,

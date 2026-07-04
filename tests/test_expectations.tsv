@@ -211,3 +211,10 @@ test_vec_enum_push_set.ion	run	50
 test_nested_vec_generic.ion	run	60
 test_match_break_in_loop.ion	run	3
 test_str_from_literal.ion	run	71
+test_trait_bound_send_ok.ion	run	42
+test_trait_bound_copy_ok.ion	run	7
+test_trait_bound_eq_ok.ion	run	61
+test_trait_bound_send_error.ion	error		TraitBoundNotSatisfied
+test_trait_bound_copy_error.ion	error		TraitBoundNotSatisfied
+test_trait_bound_eq_error.ion	error		TraitBoundNotSatisfied
+test_trait_bound_unknown_error.ion	error		UnknownTraitBound

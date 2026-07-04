@@ -251,6 +251,16 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_for_string.ion` - `for...in` over `String` (byte iteration)
 - `test_match_guard.ion` - Match arms with `if` guards
 - `test_generic_field_access.ion` - Field access on generic struct values
+
+### Trait bounds on generics
+
+- `test_trait_bound_send_ok.ion` - generic fn with `T: Send` accepts `int`
+- `test_trait_bound_copy_ok.ion` - generic fn with `T: Copy` accepts `int`
+- `test_trait_bound_eq_ok.ion` - generic fn with `T: Eq` compares ints
+- `test_trait_bound_send_error.ion` - `&int` rejected for `T: Send`
+- `test_trait_bound_copy_error.ion` - `String` rejected for `T: Copy`
+- `test_trait_bound_eq_error.ion` - `Vec<int>` rejected for `T: Eq`
+- `test_trait_bound_unknown_error.ion` - unknown bound name rejected at declaration
 - `test_io_print_int.ion` - `io::print_int` decimal output
 - `test_fmt_int_to_string.ion` - `fmt::int_to_string` decimal output (`0`, positive, negative, `int::MIN`)
 - `test_fmt_println_int.ion` - `fmt::println_int` via stdlib merge; codegen uses `io_print_int` in `fmt_print_int`

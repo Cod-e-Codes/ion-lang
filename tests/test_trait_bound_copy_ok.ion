@@ -1,0 +1,10 @@
+// Generic function with Copy bound: int satisfies Copy
+fn duplicate<T: Copy>(value: T) -> T {
+    return value;
+}
+
+fn main() -> int {
+    let a: int = duplicate(7);
+    let b: int = duplicate(a);
+    return b;
+}

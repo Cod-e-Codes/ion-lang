@@ -9,7 +9,8 @@ use self::types::{
 };
 
 use crate::ast::{
-    BinOp, EnumDecl, EnumVariant, ExternBlock, Program, Span, StructDecl, Type, TypeAliasDecl, UnOp,
+    BinOp, EnumDecl, EnumVariant, ExternBlock, Program, Span, StructDecl, Type, TypeAliasDecl,
+    TypeParam, UnOp,
 };
 use crate::ir::*;
 use crate::types_util::{is_ref_to_vec, ref_to_vec_elem};
@@ -390,7 +391,7 @@ impl Codegen {
                 doc: None,
                 pub_: false,
                 name: "Option".to_string(),
-                generics: vec!["T".to_string()],
+                generics: vec![TypeParam::simple("T")],
                 variants: vec![
                     EnumVariant {
                         doc: None,
@@ -480,7 +481,7 @@ impl Codegen {
                         doc: None,
                         pub_: false,
                         name: "Option".to_string(),
-                        generics: vec!["T".to_string()],
+                        generics: vec![TypeParam::simple("T")],
                         variants: vec![
                             EnumVariant {
                                 doc: None,
@@ -727,7 +728,7 @@ impl Codegen {
                     doc: None,
                     pub_: false,
                     name: "Option".to_string(),
-                    generics: vec!["T".to_string()],
+                    generics: vec![TypeParam::simple("T")],
                     variants: vec![
                         EnumVariant {
                             doc: None,
@@ -805,7 +806,7 @@ impl Codegen {
                         doc: None,
                         pub_: false,
                         name: "Option".to_string(),
-                        generics: vec!["T".to_string()],
+                        generics: vec![TypeParam::simple("T")],
                         variants: vec![
                             EnumVariant {
                                 doc: None,
@@ -1037,9 +1038,9 @@ impl Codegen {
         };
         let decl = self.struct_map.get(base_name)?;
         let mut substitutions = HashMap::new();
-        for (i, gen_name) in decl.generics.iter().enumerate() {
+        for (i, gen_param) in decl.generics.iter().enumerate() {
             if i < params.len() {
-                substitutions.insert(gen_name.clone(), params[i].clone());
+                substitutions.insert(gen_param.name.clone(), params[i].clone());
             }
         }
         Some((decl, substitutions))
@@ -1057,9 +1058,9 @@ impl Codegen {
         };
         let decl = self.enum_map.get(base_name)?;
         let mut substitutions = HashMap::new();
-        for (i, gen_name) in decl.generics.iter().enumerate() {
+        for (i, gen_param) in decl.generics.iter().enumerate() {
             if i < params.len() {
-                substitutions.insert(gen_name.clone(), params[i].clone());
+                substitutions.insert(gen_param.name.clone(), params[i].clone());
             }
         }
         Some((decl, substitutions))
@@ -3327,7 +3328,7 @@ impl Codegen {
             .generics
             .iter()
             .zip(type_params.iter())
-            .map(|(name, ty)| (name.clone(), ty))
+            .map(|(param, ty)| (param.name.clone(), ty))
             .collect();
 
         self.write_indent();
@@ -3952,7 +3953,7 @@ impl Codegen {
                     e.generics
                         .iter()
                         .zip(type_params.iter())
-                        .map(|(name, ty)| (name.clone(), ty))
+                        .map(|(name, ty)| (name.name.clone(), ty))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -5126,9 +5127,9 @@ impl Codegen {
 
         // Create substitution map: generic param name -> concrete type
         let mut substitutions: HashMap<String, &Type> = HashMap::new();
-        for (i, param_name) in decl.generics.iter().enumerate() {
+        for (i, gen_param) in decl.generics.iter().enumerate() {
             if i < params.len() {
-                substitutions.insert(param_name.clone(), &params[i]);
+                substitutions.insert(gen_param.name.clone(), &params[i]);
             }
         }
 
@@ -5161,9 +5162,9 @@ impl Codegen {
 
         // Create substitution map: generic param name -> concrete type
         let mut substitutions: HashMap<String, &Type> = HashMap::new();
-        for (i, param_name) in decl.generics.iter().enumerate() {
+        for (i, gen_param) in decl.generics.iter().enumerate() {
             if i < params.len() {
-                substitutions.insert(param_name.clone(), &params[i]);
+                substitutions.insert(gen_param.name.clone(), &params[i]);
             }
         }
 

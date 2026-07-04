@@ -30,8 +30,20 @@ impl TypeChecker {
                         .generics
                         .iter()
                         .zip(params.iter())
-                        .map(|(gen_name, param_ty)| (gen_name.clone(), param_ty))
+                        .map(|(tp, param_ty)| (tp.name.clone(), param_ty))
                         .collect();
+                    let concrete_substitutions: HashMap<String, Type> = alias
+                        .generics
+                        .iter()
+                        .zip(params.iter())
+                        .map(|(tp, param_ty)| (tp.name.clone(), (*param_ty).clone()))
+                        .collect();
+                    self.check_instantiation_bounds(
+                        &alias.generics,
+                        &concrete_substitutions,
+                        &format!("type alias '{}'", name),
+                        Span::default(),
+                    )?;
                     let resolved = Self::substitute_type_params(&alias.target, &substitutions);
                     return self.resolve_type_name(&resolved);
                 }
