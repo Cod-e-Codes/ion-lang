@@ -1,6 +1,6 @@
 # Verified Ion Patterns
 
-**Canonical idiom reference** for agents and authors. [ION_SPEC.md](../../../ION_SPEC.md) §12 indexes this file; keep long examples here, not in the spec. Every `ion` block should match a pattern in `tests/` or `examples/` (linked inline). When semantics change, update this file and tests together.
+**Canonical idiom reference** for agents and authors. [ION_SPEC.md](../../../../ION_SPEC.md) §12 indexes this file; keep long examples here, not in the spec. Every `ion` block should match a pattern in `tests/` or `examples/` (linked inline). When semantics change, update this file and tests together.
 
 Copy patterns from here or from linked test files. Do not add constructs not shown in ION_SPEC.md or this repo.
 
