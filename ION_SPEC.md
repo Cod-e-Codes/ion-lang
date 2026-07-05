@@ -207,7 +207,7 @@ Delimiters:
 
 - Line comment: `//` to end of line.
 - Block comments are not defined (may be added later).
-- Documentation uses the same `//` syntax; contiguous comment lines immediately above a declaration (no blank line between the last comment and the declaration) are attached to that item for IDE hover and future doc tools. See [§12.6](#126-documentation-comments-non-normative).
+- Documentation uses the same `//` syntax; contiguous comment lines immediately above a declaration (no blank line between the last comment and the declaration) are attached to that item for IDE hover and future doc tools. See [§12.1](#121-documentation-comments-non-normative).
 
 Whitespace (spaces, tabs, newlines) separates tokens but is otherwise insignificant, except in string literals.
 
@@ -253,7 +253,7 @@ line_comment  = "//" , { comment_char } ;
 comment_char  = /* any character except newline */ ;
 ```
 
-Line comments are discarded during lexing and do not appear in generated C. Adjacent `//` lines above declarations are recovered from source during parsing and attached to AST nodes (see [§12.6](#126-documentation-comments-non-normative)).
+Line comments are discarded during lexing and do not appear in generated C. Adjacent `//` lines above declarations are recovered from source during parsing and attached to AST nodes (see [§12.1](#121-documentation-comments-non-normative)).
 
 #### 3.2 Modules and Declarations
 
@@ -1138,24 +1138,11 @@ All I/O functions wrap POSIX calls in safe Ion code. Import with `import "stdlib
 
 ### 9. Examples and Edge Cases
 
+These examples illustrate core semantics (moves, borrows, channels). **Copy-paste idioms** (index/handle search, Vec put-back, concurrency patterns) live in [`.cursor/skills/writing-ion-code/references/verified-patterns.md`](.cursor/skills/writing-ion-code/references/verified-patterns.md), checked against `tests/` and `examples/`.
+
 #### 9.1 Basic Ownership
 
-```ion
-struct Packet {
-    id: i32;
-    data: Vec<u8>;
-}
-
-fn make_packet(data: Vec<u8>) -> Packet {
-    Packet { id: 1, data: data } // data moved into Packet
-}
-
-fn main() {
-    let buf: Vec<u8> = Vec::new();
-    let pkt = make_packet(buf);
-    // buf is now invalid; pkt owns the data
-}
-```
+See [verified-patterns.md](.cursor/skills/writing-ion-code/references/verified-patterns.md) (Ownership move) and [tests/test_move_basic.ion](tests/test_move_basic.ion).
 
 #### 9.2 Borrowing Within Functions
 
@@ -1167,32 +1154,17 @@ fn bump(c: &mut Counter) {
 }
 ```
 
+See [tests/test_field_assign_plus.ion](tests/test_field_assign_plus.ion).
+
 #### 9.3 Concurrency with Channels
 
-```ion
-fn worker(mut rx: Receiver<Vec<u8>>) {
-    loop {
-        let buf = recv(&mut rx); // Blocks until value available
-        // Process buf...
-    }
-}
+See [verified-patterns.md](.cursor/skills/writing-ion-code/references/verified-patterns.md) (Concurrency and ownership transfer), [examples/spawn_channel/spawn_channel.ion](examples/spawn_channel/spawn_channel.ion), and [tests/test_spawn_channel.ion](tests/test_spawn_channel.ion).
 
-fn main() {
-    // Create channel with tuple destructuring
-    let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = channel<Vec<u8>>();
-
-    spawn {
-        worker(rx); // rx moved into worker thread
-    };
-
-    let buf: Vec<u8> = Vec::new();
-    send(&tx, buf); // buf moved into channel
-}
-```
-
-Note: `Sender<T>` and `Receiver<T>` are `Send` values; here we move `rx` directly into the worker thread. No references cross thread boundaries, and all communication uses channels. The split API allows different threads to own different ends of the channel.
+`Sender<T>` and `Receiver<T>` are `Send` values moved between threads; communication is by channel, not shared references.
 
 #### 9.4 Rejected Patterns
+
+See [verified-patterns.md](.cursor/skills/writing-ion-code/references/verified-patterns.md) (Rejected patterns) and negative tests under `tests/`. Summary:
 
 - Returning references.
 - Storing references in structs or enums.
@@ -1294,156 +1266,18 @@ Any such addition must:
 
 ### 12. Appendix: Recommended Design Patterns (Non-Normative)
 
-This appendix describes idioms that work well with Ion’s ownership and no-escape borrowing rules.  They are not part of the core semantics, but library and application authors are encouraged to follow them for clarity and safety.
+Canonical idioms and copy-paste examples: [`.cursor/skills/writing-ion-code/references/verified-patterns.md`](.cursor/skills/writing-ion-code/references/verified-patterns.md). That file is the single source checked against `tests/` and `examples/`; update it when adding patterns rather than duplicating examples here.
 
-#### 12.1 Handle / Index Access Instead of Borrowed Returns
+| Topic | Where |
+|-------|--------|
+| Index/handle instead of returning `&T` | verified-patterns.md: Index and handle search |
+| `Vec::get` / `Vec::set` put-back | verified-patterns.md: Mutating Vec elements; `tests/test_vec_get_putback.ion` |
+| Owned API boundaries | verified-patterns.md: Owned API boundaries |
+| Compare via `&Struct` fields | verified-patterns.md: Comparing borrowed structs |
+| `spawn` and channel ownership | verified-patterns.md: Concurrency and ownership transfer |
+| Compile-error anti-patterns | verified-patterns.md: Rejected patterns |
 
-Because Ion does not allow returning references from functions, helpers that would traditionally return `&T` should instead return:
-
-- An **index** (e.g., `int`) into a collection, or
-- A **key/handle** type that wraps an index or opaque identifier.
-
-Within a single function, read-only inspection of `Vec<T>` elements can use `Vec::get_ref` (Section 8.2), which yields a local `Option<&T>` without move-out.
-
-Example (from [tests/test_vec_search_index_ok.ion](tests/test_vec_search_index_ok.ion) and [tests/test_vec_get_ref_scan.ion](tests/test_vec_get_ref_scan.ion); `Option<T>` as in Section 8.1):
-
-```ion
-enum Option<T> {
-    Some(T);
-    None;
-}
-
-struct Customer {
-    id: int;
-    active: int;
-}
-
-fn find_customer_index(customers: &Vec<Customer>, target_id: int) -> int {
-    let mut i: int = 0;
-    let len: int = Vec::len(customers);
-    while i < len {
-        match Vec::get_ref(customers, i) {
-            Option::Some(c) => {
-                if c.id == target_id {
-                    return i;
-                }
-            }
-            Option::None => {
-                return -1;
-            }
-        };
-        i = i + 1;
-    }
-    return -1;
-}
-
-fn main() -> int {
-    let mut customers: Vec<Customer> = Vec::new();
-    let idx: int = find_customer_index(&customers, 42);
-    if idx >= 0 {
-        match Vec::get(&customers, idx) {
-            Option::Some(c) => {
-                let id: int = c.id;
-                Vec::set(
-                    &mut customers,
-                    idx,
-                    Customer {
-                        id: id,
-                        active: 1,
-                    },
-                );
-            }
-            Option::None => {}
-        };
-    }
-    return 0;
-}
-```
-
-This pattern keeps **all borrows local** to the caller while still allowing helpers to encapsulate search logic.
-
-#### 12.2 Mutating Vec Elements
-
-Extract a helper that takes `&mut Customer` on an owned local, or rebuild the struct after copying fields (see [tests/test_vec_get_putback.ion](tests/test_vec_get_putback.ion)):
-
-```ion
-fn mark_active(c: &mut Customer) {
-    c.active = 1;
-}
-```
-
-After `Vec::get` moves an element out, copy the fields you need, rebuild the struct, and `Vec::set` it back (see the example in Section 12.1).
-
-#### 12.3 Owned Results Instead of Borrowed Views
-
-At API boundaries (public functions, module exports), favor **owned results** over borrowed views:
-
-- Return `Vec<T>` instead of `&[T]`.
-- Return `String` instead of `&str`.
-- Return structs/enums that own their payloads instead of borrowing them.
-
-Borrowed views (`&T`, `&str`, local `Option<&T>` temporaries) are best used **inside** a single function to avoid copying in tight loops, not as part of public APIs.
-
-#### 12.4 Comparing Borrowed Structs
-
-Read fields through `&Struct` parameters directly. Ion does not allow reference fields in structs (even locally); bundle owned data or pass separate `&T` parameters instead.
-
-Example:
-
-```ion
-struct Customer {
-    id: int;
-    score: int;
-}
-
-fn compare(a: &Customer, b: &Customer) -> int {
-    if a.score != b.score {
-        return a.score - b.score;
-    }
-    return a.id - b.id;
-}
-```
-
-This leverages references for readability without leaking them beyond the function body.
-
-#### 12.5 Concurrency: Message-Passing Ownership Transfer
-
-For concurrent designs:
-
-- Treat each `spawn`ed thread as an **owner** of the values moved into it.
-- Use channels to move ownership of work items between threads.
-- Avoid shared mutable state; if multiple threads must coordinate, do so by exchanging owned messages.
-
-Example:
-
-```ion
-struct Job {
-    data: Vec<u8>;
-}
-
-fn worker(rx: Receiver<Job>) {
-    let mut rx_mut: Receiver<Job> = rx;
-    loop {
-        let job: Job = recv(&mut rx_mut);
-        // use job.data
-    }
-}
-
-fn main() {
-    let (tx, rx): (Sender<Job>, Receiver<Job>) = channel<Job>();
-
-    spawn {
-        worker(rx);
-    };
-
-    let job = Job { data: Vec::new() };
-    send(&tx, job);
-}
-```
-
-This emphasizes that concurrency in Ion is about **moving ownership** between threads, not sharing it.
-
-#### 12.6 Documentation Comments (Non-Normative)
+#### 12.1 Documentation Comments (Non-Normative)
 
 Ion has no separate `///` or `//!` documentation syntax. Documentation is ordinary `//` line comments attached to declarations by **adjacency** during parsing (Go/Odin convention):
 

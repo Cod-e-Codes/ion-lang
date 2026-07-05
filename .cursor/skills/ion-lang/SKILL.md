@@ -25,6 +25,7 @@ Ion is a move-only, no-GC systems language transpiled to C. This skill orients y
 | [CHANGELOG.md](../../../CHANGELOG.md) | Release notes by month |
 | [SECURITY.md](../../../SECURITY.md) | Security reporting scope and policy |
 | [tests/README.md](../../../tests/README.md) | Integration test catalog |
+| [writing-ion-code/references/verified-patterns.md](../writing-ion-code/references/verified-patterns.md) | Canonical idioms (ION_SPEC §12 indexes this) |
 
 **Compiler pipeline** (see [references/compiler-pipeline.md](references/compiler-pipeline.md)):
 
