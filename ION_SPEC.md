@@ -103,7 +103,9 @@ Examples: `main`, `Packet`, `_tmp1`, `read_file`.
 
 The following keywords are reserved and cannot be used as identifiers:
 
-`fn`, `let`, `mut`, `struct`, `enum`, `type`, `box`, `if`, `else`, `while`, `for`, `loop`, `match`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `true`, `false`, `nil`, `import`, `as`, `pub`, `extern`, `unsafe`.
+`fn`, `let`, `mut`, `struct`, `enum`, `type`, `if`, `else`, `while`, `for`, `loop`, `match`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `send`, `recv`, `true`, `false`, `import`, `as`, `pub`, `extern`, `unsafe`.
+
+Built-in type names `Box`, `Vec`, and `String` are tokenized as keywords for generic syntax (`Box<T>`, etc.) but are not reserved as identifiers elsewhere.
 
 Note: The `as` keyword is used both for module aliases (`import "file.ion" as name;`) and for type casting (`expr as Type`).
 
@@ -188,7 +190,7 @@ Ion uses the following operators:
 - Type casting: `as` keyword for explicit type conversions
 - Field access: `.`
 - Address-of / borrow: `&` (borrow shared) and `&mut` (borrow exclusive)
-- Channel: `<-` (send and receive in expressions)
+- Channel I/O: `send(sender, value)` and `recv(receiver)` built-ins (see Section 7.2)
 
 Delimiters:
 
@@ -363,7 +365,7 @@ if_stmt          = "if" , expr , block , [ "else" , ( block | if_stmt ) ] ;
 
 while_stmt       = "while" , expr , block ;
 
-for_stmt         = "for" , identifier , "in" , expr , block , ";" ;
+for_stmt         = "for" , identifier , "in" , expr , block ;
 
 match_stmt       = "match" , expr , "{" , { match_arm } , "}" ;
 match_arm        = pattern , [ "if" , expr ] , "=>" , block ;
@@ -379,7 +381,7 @@ defer_stmt       = "defer" , expr , ";" ;
 spawn_stmt       = "spawn" , block , ";" ;
 ```
 
-`else if` chains use the `if_stmt` alternative after `else` (for example `else if cond { ... }`).
+`else if` chains use the `if_stmt` alternative after `else` (for example `else if cond { ... }`). The `in` token in `for_stmt` is required but is not otherwise reserved.
 
 #### 3.5 Expressions
 
@@ -388,16 +390,24 @@ The expression grammar is presented in precedence levels (from lowest to highest
 ```ebnf
 expr             = assign_expr ;
 
-assign_expr      = ( identifier | index_expr ) , [ "=" , assign_expr ]
+assign_expr      = assign_target , ( "=" | "+=" ) , assign_expr
                  | logical_or_expr ;
+assign_target    = identifier | field_expr | index_expr ;
 
 logical_or_expr  = logical_and_expr , { "||" , logical_and_expr } ;
-logical_and_expr = equality_expr , { "&&" , equality_expr } ;
+logical_and_expr = comparison_expr , { "&&" , comparison_expr } ;
 
-equality_expr    = relational_expr , { ( "==" | "!=" ) , relational_expr } ;
+comparison_expr  = equality_expr ,
+                   { ( "<" | ">" | "<=" | ">=" ) , equality_expr } ;
 
-relational_expr  = bitwise_or_expr ,
-                   { ( "<" | ">" | "<=" | ">=" ) , bitwise_or_expr } ;
+equality_expr    = bitwise_or_expr , { ( "==" | "!=" ) , bitwise_or_expr } ;
+
+bitwise_or_expr  = bitwise_xor_expr , { "|" , bitwise_xor_expr } ;
+bitwise_xor_expr = bitwise_and_expr , { "^" , bitwise_and_expr } ;
+bitwise_and_expr = shift_expr , { "&" , shift_expr } ;
+
+shift_expr       = additive_expr ,
+                   { ( "<<" | ">>" ) , additive_expr } ;
 
 additive_expr    = multiplicative_expr ,
                    { ( "+" | "-" ) , multiplicative_expr } ;
@@ -406,35 +416,16 @@ multiplicative_expr =
                    unary_expr ,
                    { ( "*" | "/" | "%" ) , unary_expr } ;
 
-shift_expr       = additive_expr ,
-                   { ( "<<" | ">>" ) , additive_expr } ;
-
-bitwise_and_expr = shift_expr ,
-                   { "&" , shift_expr } ;
-
-bitwise_xor_expr  = bitwise_and_expr ,
-                   { "^" , bitwise_and_expr } ;
-
-bitwise_or_expr   = bitwise_xor_expr ,
-                   { "|" , bitwise_xor_expr } ;
-
 unary_expr       = ( "!" | "-" | "&" | "&mut" ) , unary_expr
-                 | recv_expr ;
-
-recv_expr        = chan_expr
-                 | "<-" , recv_expr ;
-
-chan_expr        = postfix_expr ;
+                 | postfix_expr ;
 
 postfix_expr     = primary_expr ,
-                   { selector | index | call | send_suffix | cast } ;
+                   { selector | index | call | cast } ;
 
 selector         = "." , identifier ;
 index            = "[" , expr , "]" ;
 call             = "(" , arg_list? , ")" ;
 arg_list         = expr , { "," , expr } ;
-
-send_suffix      = "<-" , expr ;  (* e.g., tx<-value *)
 
 cast             = "as" , type_expr ;  (* type casting *)
 
@@ -444,14 +435,21 @@ primary_expr     = identifier
                  | struct_lit
                  | enum_lit
                  | array_lit
-                 | fn_literal ;
+                 | fn_literal
+                 | send_expr
+                 | recv_expr
+                 | channel_expr ;
+
+send_expr        = "send" , "(" , expr , "," , expr , ")" ;
+recv_expr        = "recv" , "(" , expr , ")" ;
+channel_expr     = "channel" , "<" , type_expr , ">" , "(" , ")" ;
 
 fn_literal       = "fn" , "(" , params? , ")" , [ "->" , type_expr ] , block ;
 
 array_lit        = "[" , ( expr_list | ( expr , ";" , int_lit ) ) , "]" ;
 expr_list        = expr , { "," , expr } ;
 
-literal          = int_lit | float_lit | bool_lit | string_lit | "nil" ;
+literal          = int_lit | float_lit | bool_lit | string_lit ;
 
 struct_lit       = identifier , "{" , field_inits? , "}" ;
 field_inits      = field_init , { "," , field_init } ;
@@ -474,7 +472,7 @@ named_pattern_fields = named_pattern_field , { "," , named_pattern_field } ;
 named_pattern_field = identifier , ":" , pattern ;
 ```
 
-This grammar is compatible with a conventional expression parser. Channel send and receive are expressed via `send_suffix` and the unary `<-` operator.
+Channel send and receive use the `send` and `recv` built-ins. `channel<T>()` takes no arguments.
 
 ### 4. Type System
 
@@ -488,6 +486,7 @@ Ion includes the following primitive types:
 - Floating point: `f32`, `f64`
 - Boolean: `bool`
 - Unit / void: `void` (function return type with no value)
+- `str`: unsized UTF-8 slice type; use as `&str` (borrowed view, stack-local only; see Section 8.3)
 
 Each integer primitive exposes compile-time limits as `Type::MIN` and `Type::MAX` (for example `int::MIN`, `i32::MAX`, `u8::MIN`). These lower to C-safe literals (avoiding `-2147483648`-style unary overflow in generated C).
 
@@ -499,24 +498,7 @@ Additional built-in generic types:
 - `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
 - `[T; N]` – fixed-size array of `N` elements of type `T`
 - `[]T` – dynamically sized slice (fat pointer) of type `T`
-- `(T1, T2, ...)` – fixed-size tuple value type (see §4.1.2)
-
-#### 4.1.2 Tuple Values
-
-Tuple types `(T1, T2, ...)` describe anonymous product types with positional fields `f0`, `f1`, ... accessed in source as `.0`, `.1`, etc.
-
-```ion
-let t: (int, int) = (10, 20);
-let x: int = t.0;
-let (a, b) = t; // destructure by move
-```
-
-Rules:
-
-- Tuple literals `(expr1, expr2, ...)` require at least one element; empty `()` is not supported.
-- Field indices are 0-based; out-of-range access is a compile error.
-- Moving a tuple moves all non-copy fields together; destructuring `let (a, b) = t` moves each bound field out of `t`.
-- Nested tuples, tuple equality (`==`), tuples in struct fields, and generic tuple types are not supported in the current compiler.
+- `(T1, T2, ...)` – fixed-size tuple value type (see §4.1.3)
 
 #### 4.1.1 Array Safety
 
@@ -591,6 +573,23 @@ fn main() -> int {
     return sum(&arr); // &[int; 3] coerced to &[]int at the call site
 }
 ```
+
+#### 4.1.3 Tuple Values
+
+Tuple types `(T1, T2, ...)` describe anonymous product types with positional fields `f0`, `f1`, ... accessed in source as `.0`, `.1`, etc.
+
+```ion
+let t: (int, int) = (10, 20);
+let x: int = t.0;
+let (a, b) = t; // destructure by move
+```
+
+Rules:
+
+- Tuple literals `(expr1, expr2, ...)` require at least one element; empty `()` is not supported.
+- Field indices are 0-based; out-of-range access is a compile error.
+- Moving a tuple moves all non-copy fields together; destructuring `let (a, b) = t` moves each bound field out of `t`.
+- Nested tuples, tuple equality (`==`), tuples in struct fields, and generic tuple types are not supported in the current compiler.
 
 
 **Standard library enums (user-defined):**
@@ -726,7 +725,7 @@ fn take(v: Vec<int>) {
 }
 
 fn main() {
-    let xs = Vec::new();
+    let xs: Vec<int> = Vec::new();
     take(xs);       // xs moved into take
     // xs is now invalid; any use is a compile error
 }
@@ -789,11 +788,7 @@ Each reference has a **borrow scope** equal to a syntactic region within a singl
 
 ```ion
 fn max_ref(a: &int, b: &int) -> &int {
-    if *a > *b {
-        return a;    // ERROR: cannot return reference
-    } else {
-        return b;    // ERROR
-    }
+    return a; // ERROR: cannot return reference
 }
 ```
 
@@ -809,7 +804,7 @@ struct Holder {
 
 ```ion
 fn main() {
-    let (tx, rx) = channel::<&int>(1); // ERROR: references cannot be sent
+    let (tx, rx): (Sender<&int>, Receiver<&int>) = channel<&int>(); // ERROR: references cannot be sent
 }
 ```
 
@@ -818,7 +813,7 @@ fn main() {
 ```ion
 fn make_printer(x: &int) -> fn() {
     return fn() {
-        println("x = {}", *x); // ERROR: ClosureCapture (cannot reference outer x)
+        let _y: &int = x; // ERROR: ClosureCapture (cannot reference outer x)
     }; // ERROR: closure escapes with reference
 }
 ```
@@ -828,10 +823,11 @@ Capturing closures are not implemented; the compiler rejects any outer binding r
 **Example (valid – borrow within function):**
 
 ```ion
-fn print_twice(x: &int) {
-    println("{}", x);
-    println("{}", x);
-} // borrow ends here
+struct Counter { n: int; }
+
+fn read_twice(c: &Counter) -> int {
+    return c.n + c.n;
+} // borrows end here
 ```
 
 The type checker implements this by rejecting any attempt to **store or return** a type containing `&` or `&mut` outside the current function’s local variables. In particular, types such as `Option<&T>` or `Result<&T, E>` are only permitted as **local temporaries** within a function body; they cannot be returned, stored in longer-lived data structures, sent through channels, or cross thread boundaries. Standard library APIs are designed to avoid exposing such reference-carrying types across function boundaries.
@@ -934,8 +930,10 @@ spawn {
 The block may capture **owned values** from the enclosing scope **by move** only. Capturing references is disallowed:
 
 ```ion
+fn work(v: Vec<int>) { }
+
 fn main() {
-    let v = Vec::new();
+    let v: Vec<int> = Vec::new();
 
     spawn {
         // v is moved into this thread; main cannot use v after this point
@@ -958,7 +956,7 @@ let value = recv(&mut rx);
 
 Semantics:
 
-- `channel<T>()` is a built-in function that returns `(Sender<T>, Receiver<T>)`. Element type `T` must be `Send`.
+- `channel<T>()` is a built-in that returns `(Sender<T>, Receiver<T>)`. It takes no arguments. Element type `T` must be `Send`. The runtime buffer capacity is fixed at **1** slot per channel in the current compiler.
 - `Sender<T>` and `Receiver<T>` are move-only value types (not pointers).
 - `send(&tx, value)` moves a value into the channel. Requires `&Sender<T>`.
 - `recv(&mut rx)` moves a value out of the channel. Requires `&mut Receiver<T>`. Blocks until a value is available.
@@ -1019,23 +1017,21 @@ These enums follow standard ownership rules (payloads are moved in and out).
 
 `Vec<T>` is a growable, heap-allocated sequence of `T`.
 
-Essential API (implemented):
+Essential API (implemented; pseudocode notation: Ion has no `impl` blocks; these are compiler builtins):
 
 ```ion
-struct Vec<T> { /* opaque fields */ }
-
-impl<T> Vec<T> {
-    fn new() -> Vec<T>;
-    fn with_capacity(cap: int) -> Vec<T>;
-    fn push(self: &mut Vec<T>, value: T);
-    fn pop(self: &mut Vec<T>) -> Option<T>;
-    fn len(self: &Vec<T>) -> int;
-    fn capacity(self: &Vec<T>) -> int;
-    fn get(self: &Vec<T>, index: int) -> Option<T>;
-    fn get_ref(self: &Vec<T>, index: int) -> Option<&T>;
-    fn set(self: &mut Vec<T>, index: int, value: T);
-}
+// Vec::new() -> Vec<T>
+// Vec::with_capacity(cap: int) -> Vec<T>
+// Vec::push(vec: &mut Vec<T>, value: T)
+// Vec::pop(vec: &mut Vec<T>) -> Option<T>
+// Vec::len(vec: &Vec<T>) -> int
+// Vec::capacity(vec: &Vec<T>) -> int
+// Vec::get(vec: &Vec<T>, index: int) -> Option<T>
+// Vec::get_ref(vec: &Vec<T>, index: int) -> Option<&T>
+// Vec::set(vec: &mut Vec<T>, index: int, value: T) -> int
 ```
+
+Method syntax (`vec.push(x)`, `vec.get_ref(i)`) desugars to the qualified forms above.
 
 Note that:
 
@@ -1051,22 +1047,17 @@ For cross-function or long-lived access, Ion still favors an **index/handle styl
 
 `String` is a growable, heap-allocated UTF-8 string.
 
-Essential API (implemented):
+Essential API (implemented; pseudocode notation: Ion has no `impl` blocks; these are compiler builtins):
 
 ```ion
-struct String { /* opaque fields */ }
-
-// `str` is a primitive, unsized UTF-8 slice type. A value of type `&str`
-// is represented as (pointer, length) and does not own its data.
-
-impl String {
-    fn new() -> String;
-    fn from(s: &str) -> String;
-    fn push_str(self: &mut String, s: &str);
-    fn push_byte(self: &mut String, b: u8);
-    fn len(self: &String) -> int;
-}
+// String::new() -> String
+// String::from(s: &str) -> String
+// String::push_str(s: &mut String, other: &str)
+// String::push_byte(s: &mut String, b: u8)
+// String::len(s: &String) -> int
 ```
+
+`str` is a primitive slice type; `&str` is a borrowed UTF-8 view `(pointer, length)`.
 
 Note that:
 
@@ -1160,7 +1151,7 @@ fn make_packet(data: Vec<u8>) -> Packet {
 }
 
 fn main() {
-    let buf = Vec::<u8>::new();
+    let buf: Vec<u8> = Vec::new();
     let pkt = make_packet(buf);
     // buf is now invalid; pkt owns the data
 }
@@ -1169,8 +1160,10 @@ fn main() {
 #### 9.2 Borrowing Within Functions
 
 ```ion
-fn increment(x: &mut int) {
-    *x = *x + 1;
+struct Counter { n: int; }
+
+fn bump(c: &mut Counter) {
+    c.n += 1;
 }
 ```
 
@@ -1192,7 +1185,7 @@ fn main() {
         worker(rx); // rx moved into worker thread
     };
 
-    let buf = Vec::<u8>::new();
+    let buf: Vec<u8> = Vec::new();
     send(&tx, buf); // buf moved into channel
 }
 ```
@@ -1312,53 +1305,74 @@ Because Ion does not allow returning references from functions, helpers that wou
 
 Within a single function, read-only inspection of `Vec<T>` elements can use `Vec::get_ref` (Section 8.2), which yields a local `Option<&T>` without move-out.
 
-Example:
+Example (from [tests/test_vec_search_index_ok.ion](tests/test_vec_search_index_ok.ion) and [tests/test_vec_get_ref_scan.ion](tests/test_vec_get_ref_scan.ion); `Option<T>` as in Section 8.1):
 
 ```ion
-struct Db {
-    customers: Vec<Customer>;
+enum Option<T> {
+    Some(T);
+    None;
 }
 
-// Find a customer index; -1 indicates not found.
-fn find_customer_index(db: &Db, id: int) -> int {
-    let mut i = 0;
-    while i < db.customers.len() {
-        if db.customers[i].id == id {
-            return i;
-        }
+struct Customer {
+    id: int;
+    active: int;
+}
+
+fn find_customer_index(customers: &Vec<Customer>, target_id: int) -> int {
+    let mut i: int = 0;
+    let len: int = Vec::len(customers);
+    while i < len {
+        match Vec::get_ref(customers, i) {
+            Option::Some(c) => {
+                if c.id == target_id {
+                    return i;
+                }
+            }
+            Option::None => {
+                return -1;
+            }
+        };
         i = i + 1;
     }
     return -1;
 }
 
-fn use_customer(db: &mut Db, id: int) {
-    let idx = find_customer_index(db, id);
+fn main() -> int {
+    let mut customers: Vec<Customer> = Vec::new();
+    let idx: int = find_customer_index(&customers, 42);
     if idx >= 0 {
-        db.customers[idx].active = true;
+        match Vec::get(&customers, idx) {
+            Option::Some(c) => {
+                let id: int = c.id;
+                Vec::set(
+                    &mut customers,
+                    idx,
+                    Customer {
+                        id: id,
+                        active: 1,
+                    },
+                );
+            }
+            Option::None => {}
+        };
     }
+    return 0;
 }
 ```
 
 This pattern keeps **all borrows local** to the caller while still allowing helpers to encapsulate search logic.
 
-#### 12.2 Callback-Based Accessors
+#### 12.2 Mutating Vec Elements
 
-For more complex logic, helpers can accept a **callback** to operate on a found element, rather than returning a reference:
+Extract a helper that takes `&mut Customer` on an owned local, or rebuild the struct after copying fields (see [tests/test_vec_get_putback.ion](tests/test_vec_get_putback.ion)):
 
 ```ion
-fn with_customer_mut(db: &mut Db, id: int, f: fn(&mut Customer)) {
-    let mut i = 0;
-    while i < db.customers.len() {
-        if db.customers[i].id == id {
-            f(&mut db.customers[i]); // borrow is local to this function
-            return;
-        }
-        i = i + 1;
-    }
+fn mark_active(c: &mut Customer) {
+    c.active = 1;
 }
 ```
 
-The callback itself must obey the no-escape rule (it cannot store the reference), but this style allows reusable traversal logic.
+After `Vec::get` moves an element out, copy the fields you need, rebuild the struct, and `Vec::set` it back (see the example in Section 12.1).
 
 #### 12.3 Owned Results Instead of Borrowed Views
 
@@ -1370,30 +1384,23 @@ At API boundaries (public functions, module exports), favor **owned results** ov
 
 Borrowed views (`&T`, `&str`, local `Option<&T>` temporaries) are best used **inside** a single function to avoid copying in tight loops, not as part of public APIs.
 
-#### 12.4 Short-Lived Local View Types
+#### 12.4 Comparing Borrowed Structs
 
-Local helper types that contain references (e.g., a small struct bundling several `&T` values) are allowed **within a single function** as long as:
-
-- They are not returned.
-- They are not stored in longer-lived data structures.
-- They do not cross thread or channel boundaries.
+Read fields through `&Struct` parameters directly. Ion does not allow reference fields in structs (even locally); bundle owned data or pass separate `&T` parameters instead.
 
 Example:
 
 ```ion
+struct Customer {
+    id: int;
+    score: int;
+}
+
 fn compare(a: &Customer, b: &Customer) -> int {
-    struct View {
-        id: &int;
-        score: &int;
+    if a.score != b.score {
+        return a.score - b.score;
     }
-
-    let va = View { id: &a.id, score: &a.score };
-    let vb = View { id: &b.id, score: &b.score };
-
-    if *va.score != *vb.score {
-        return *va.score - *vb.score;
-    }
-    return *va.id - *vb.id;
+    return a.id - b.id;
 }
 ```
 
@@ -1414,10 +1421,11 @@ struct Job {
     data: Vec<u8>;
 }
 
-fn worker(mut rx: Receiver<Job>) {
+fn worker(rx: Receiver<Job>) {
+    let mut rx_mut: Receiver<Job> = rx;
     loop {
-        let job = recv(&mut rx);
-        process(job.data);
+        let job: Job = recv(&mut rx_mut);
+        // use job.data
     }
 }
 
@@ -1428,7 +1436,7 @@ fn main() {
         worker(rx);
     };
 
-    let job = Job { data: Vec::<u8>::new() };
+    let job = Job { data: Vec::new() };
     send(&tx, job);
 }
 ```

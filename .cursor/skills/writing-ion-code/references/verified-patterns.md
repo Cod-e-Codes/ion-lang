@@ -78,7 +78,7 @@ let x: int = Box::unwrap(b);
 ```ion
 let arr: [int; 3] = [1, 2, 3];
 let fill: [u8; 4] = [0; 4];
-let slice: []int = arr;  // array to slice coercion
+let s: &[]int = &arr;  // array-to-slice coercion via borrow
 let elem: int = arr[0];  // bounds checked unless unsafe
 ```
 
@@ -147,9 +147,7 @@ Multi-file mode prefixes each module's C symbols (`io_print_int`, `fmt_print_int
 
 ## Channel send expressions
 
-`send(&tx, make())` is valid ([tests/test_channel_send_call_expr.ion](../../../../tests/test_channel_send_call_expr.ion)).
-
-Expression form `tx<-value` exists in grammar; prefer `send(&tx, value)` to match tests and examples.
+`send(&tx, make())` is valid ([tests/test_channel_send_call_expr.ion](../../../../tests/test_channel_send_call_expr.ion)). Use `send(&tx, value)` and `recv(&mut rx)` (see [examples/spawn_channel/spawn_channel.ion](../../../../examples/spawn_channel/spawn_channel.ion)).
 
 ## if / ownership merge
 
@@ -190,7 +188,7 @@ channel<&int>()
 spawn { use_ref(&x); };
 
 // use after move
-let v = Vec::new();
+let v: Vec<int> = Vec::new();
 let w = v;
 let _ = v.len();
 ```

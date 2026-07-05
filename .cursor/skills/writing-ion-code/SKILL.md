@@ -71,7 +71,9 @@ let items: Vec<MyStruct> = Vec::new(); // element type from annotation
 **Integer limits**
 
 ```ion
-if n == int::MIN { ... }
+if n == int::MIN {
+    return 0;
+}
 let cap: int = int::MAX;
 ```
 
@@ -91,7 +93,7 @@ Tuple values (flat only, no nesting): `let t: (int, int) = (1, 2);` then `t.0`, 
 **Control flow**
 
 - `if` / `else if` / `else` conditions must be `bool`.
-- `while`, `loop`, `break`, `continue`, `for x in expr;` (`for` ends with `;` per grammar).
+- `while`, `loop`, `break`, `continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`)
 - `match expr { Pattern => { ... } }` with guards `pattern if cond =>`.
 
 **Methods**
