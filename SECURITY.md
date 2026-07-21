@@ -1,12 +1,12 @@
 # Security policy
 
-Ion is pre-1.0. Please treat the compiler, generated C, and runtime as suitable
-for experimentation and early adopters, not for security-critical deployments.
+Ion is `0.x`. Please treat the compiler, generated C, and runtime as suitable for
+experimentation and early adopters, not for security-critical deployments.
 
 ## Supported versions
 
-Only the current `main` branch and the latest tagged `0.x` release, once tags
-exist, receive security attention.
+Only the current `main` branch and the latest tagged `0.x` release receive
+security attention.
 
 ## Reporting a vulnerability
 

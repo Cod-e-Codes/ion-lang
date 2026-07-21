@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0 - 2026-07-21
+
+First tagged release of the Ion toolchain.
+
+- **Binaries**: `ion-compiler`, `ion-build`, `ion-lsp` (Cargo package version `0.1.0`)
+- **Language**: move-only ownership, no-escape borrows, channels/`spawn`, generics, `match`, `defer`, FFI via `extern "C"` / `unsafe`
+- **Tooling**: `ion.toml` project builds, Linux and Windows CI, integration harness, VS Code/Cursor extension
+- **Docs**: `ION_SPEC.md`, `docs/BETA.md`, `docs/ABI.md`, `SECURITY.md`
+- **Status**: First tagged `0.x` release. See monthly sections below for the full history leading to this tag.
+
 ## 2026-07
 
 - **VM-style idioms**: `match` on `&Enum` from `Vec::get_ref`; struct field assignment and `+=` on owned/`&mut` paths; method desugaring (`vec.push`, `vec.get_ref`) with correct borrows; nested generic types (`Vec<Vec<int>>`); match-arm control-flow unification (`break`/`return` with value arms); `&str` call-site coercion; enum literals in `Vec::push`/`set` without double-wrapped C; `&mut Struct` field access via `->` in codegen. Integration tests and examples `bytecode_vm`, updated `showcase`, `todo_demo`, `http_server`, `text_summary`. Fix extern call typing so `&T` arguments match `&T` parameters (no erroneous copy-type ref stripping). Fix `Option<T>` match codegen to use the scrutinee type instead of the first registered monomorph. Former negative match-arm rvalue tests now pass as positive runs.
