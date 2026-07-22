@@ -3,6 +3,7 @@
 ## 0.1.2 - 2026-07-22
 
 - **Fix**: string literals passed directly to `String`-typed call arguments now lower through `ion_string_from_literal` (same as `let s: String = "…"`). Previously call sites could pass a raw C string (segfault or silent no-op).
+- **Fix**: extern call codegen restores `(uint8_t*)` on string literals for `*u8` parameters when resolving types from `extern_functions` (Linux CI `-Werror=pointer-sign` on io/ffi tests).
 - **Docs**: `tests/README.md` notes that release archives ship this catalog only, not the `.ion` harness files.
 
 ## 0.1.1 - 2026-07-22
