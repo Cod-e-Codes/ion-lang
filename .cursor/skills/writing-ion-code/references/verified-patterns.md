@@ -47,6 +47,8 @@ let n: int = v.len();
 let mut s: String = String::new();
 s.push_str("hi");
 let lit: String = "hello";
+fn owned(s: String) -> int { return s.len(); }
+// owned("hello") is valid; literals coerce to owned String at call sites too.
 ```
 
 `Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). In `match Option::Some(x)`, `x` is `&T`: copy types bind by value; structs and enums with non-copy fields bind as a pointer. Inner `match x` on `&Enum` dispatches variants without deref. `Vec::set(&mut v, index, value)` returns `int` (0 = ok). Method syntax (`v.push(x)`, `v.get_ref(i)`) desugars to `Vec::` builtins with correct receiver borrows.

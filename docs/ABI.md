@@ -26,6 +26,8 @@ Stable beta expectations:
 - `String::new`, `String::from`, `String::len`, `String::push_str`, and
   `String::push_byte` preserve ownership of the `String` receiver unless a
   function explicitly consumes it.
+- String literals in `let` bindings and at call sites for `String` parameters
+  lower to `ion_string_from_literal` in generated C.
 - `String::push_str` appends string literals or owned `String` values (the
   latter reads `.data`/`.len` from the source heap buffer).
 - Dropping a `String` releases its backing allocation once.

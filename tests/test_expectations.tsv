@@ -49,7 +49,8 @@ test_box_basic.ion	run	0
 test_vec_basic.ion	run	0			
 test_enum_generic.ion	run	0			
 test_generic_struct.ion	run	0			
-test_string_from.ion	run	0			
+test_string_from.ion	run	0
+test_string_call_arg_literal.ion	run	0			
 test_box_ops.ion	run	0			
 test_vec_new.ion	run	0			
 test_vec_push_pop.ion	run	0			

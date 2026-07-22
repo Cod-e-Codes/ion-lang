@@ -2,6 +2,8 @@
 
 This directory contains test programs for the Ion compiler.
 
+Prebuilt release archives ship `tests/README.md` only (not the `.ion` files here). Run this harness from a full source checkout.
+
 ## Running Tests
 
 Use the test harness script:
@@ -104,6 +106,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_call_basic.ion` - Function calls
 - `test_string_basic.ion` - String literals
 - `test_string_from.ion` - String::from() function
+- `test_string_call_arg_literal.ion` - string literal as `String` call argument
 - `test_string_new.ion` - String::new() function
 - `test_string_push_str.ion` - String::push_str() function
 - `test_string_push_str_owned.ion` - String::push_str() with an owned String argument

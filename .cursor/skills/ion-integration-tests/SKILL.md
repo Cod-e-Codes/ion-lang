@@ -61,6 +61,8 @@ CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitiz
 
 **Method calls on reference parameters:** `test_method_call_ref_param.ion` covers `out.push()` / `vec.get()` style calls on `&T` and `&mut T` parameters (distinct from static `Vec::push(out, …)` and from method calls on local variables).
 
+**String literal as owned `String` argument:** `test_string_call_arg_literal.ion` covers `fn f(s: String)` called with a string literal (cgen must emit `ion_string_from_literal`, not a raw C string).
+
 ## Manifest (`test_expectations.tsv`)
 
 Tab-separated columns:

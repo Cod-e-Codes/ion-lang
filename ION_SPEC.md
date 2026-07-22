@@ -1062,6 +1062,7 @@ Essential API (implemented; pseudocode notation: Ion has no `impl` blocks; these
 Note that:
 
 - String literals can be directly assigned to `String` type: `let s: String = "hello";`
+- The same literal coercion applies when a string literal is passed as a call argument to a parameter typed `String` (not only in `let` bindings).
 - `String::from()` creates a heap-allocated copy of a string literal.
 - `String::push_str()` appends a string literal or an owned `String` (reads the source buffer).
 - `String::push_byte()` appends a single byte to an existing `String`.

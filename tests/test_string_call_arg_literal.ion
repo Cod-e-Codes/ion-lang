@@ -1,0 +1,12 @@
+// String literal passed directly as a String call argument (not only via let-binding).
+
+fn string_len(s: String) -> int {
+    return s.len();
+}
+
+fn main() -> int {
+    if string_len("hello") != 5 {
+        return 1;
+    }
+    return 0;
+}

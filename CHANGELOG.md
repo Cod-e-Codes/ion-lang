@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 - 2026-07-22
+
+- **Fix**: string literals passed directly to `String`-typed call arguments now lower through `ion_string_from_literal` (same as `let s: String = "…"`). Previously call sites could pass a raw C string (segfault or silent no-op).
+- **Docs**: `tests/README.md` notes that release archives ship this catalog only, not the `.ion` harness files.
+
 ## 0.1.1 - 2026-07-22
 
 - **Fix**: method-call syntax on `&Vec<T>`, `&mut Vec<T>`, `&String`, and `&mut String` parameters (missing dereference in cgen; `String::len` routed through `Vec::len` in IR).

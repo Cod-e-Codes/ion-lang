@@ -237,6 +237,23 @@ impl Codegen {
         }
     }
 
+    fn escape_c_string_literal_content(value: &str) -> String {
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+            .replace('\0', "\\0")
+    }
+
+    fn write_ion_string_from_literal(&mut self, value: &str) {
+        let escaped = Self::escape_c_string_literal_content(value);
+        self.write("ion_string_from_literal(");
+        self.write(&format!("\"{}\", {}", escaped, value.len()));
+        self.write(")");
+    }
+
     pub fn generate(&mut self, program: &IRProgram, source_ion: &str) -> String {
         self.output.clear();
         self.indent_level = 0;
@@ -2320,19 +2337,7 @@ impl Codegen {
                     // Special handling: if assigning String type from string literal, convert it
                     if matches!(let_stmt.ty, Type::String) {
                         if let IREexpr::StringLit(value) = init {
-                            // Convert string literal to heap-allocated string
-                            // Escape special characters for C string literal
-                            let escaped = value
-                                .replace('\\', "\\\\")
-                                .replace('"', "\\\"")
-                                .replace('\n', "\\n")
-                                .replace('\r', "\\r")
-                                .replace('\t', "\\t")
-                                .replace('\0', "\\0");
-                            self.write("ion_string_from_literal(");
-                            self.write(&format!("\"{}\", ", escaped));
-                            self.write(&format!("{}", value.len()));
-                            self.write(")");
+                            self.write_ion_string_from_literal(value);
                         } else {
                             self.generate_expr_with_type(init, Some(&let_stmt.ty));
                         }
@@ -3040,10 +3045,15 @@ impl Codegen {
                         if i > 0 {
                             self.write(", ");
                         }
+                        let param_types = self
+                            .function_param_types
+                            .get(&resolved_callee)
+                            .or_else(|| self.function_param_types.get(&func_name));
+                        let param_ty = param_types.and_then(|pts| pts.get(i).cloned());
                         // If this is an extern function expecting int by value, convert &int (immutable) arguments to int
                         // For &int -> int: just use the inner expression (the variable itself)
                         // For &mut int -> int*: keep the address-of (don't dereference)
-                        if let Some(param_types) = self.function_param_types.get(&func_name)
+                        if let Some(param_types) = param_types
                             && i < param_types.len()
                             && let Some((array_name, size, elem_ty)) =
                                 self.match_array_to_slice_coercion(&param_types[i], arg)
@@ -3073,18 +3083,21 @@ impl Codegen {
                             }
                             // For &mut int, fall through to generate &var normally
                         }
-                        let call_param_types = self
-                            .function_param_types
-                            .get(&func_name)
-                            .or_else(|| self.extern_functions.get(&func_name));
-                        if matches!(arg, IREexpr::StringLit(_))
-                            && let Some(param_types) = call_param_types
-                            && i < param_types.len()
-                            && Self::param_is_byte_ptr(&param_types[i])
-                        {
-                            self.write("(uint8_t*)");
+                        if let IREexpr::StringLit(value) = arg {
+                            if matches!(param_ty, Some(Type::String)) {
+                                self.write_ion_string_from_literal(value);
+                                continue;
+                            }
+                            if matches!(param_ty.as_ref(), Some(pt) if Self::param_is_byte_ptr(pt))
+                            {
+                                self.write("(uint8_t*)");
+                            }
                         }
-                        self.generate_expr(arg);
+                        if matches!(param_ty, Some(Type::String)) {
+                            self.generate_expr_with_type(arg, Some(&Type::String));
+                        } else {
+                            self.generate_expr(arg);
+                        }
                     }
                     self.write(")");
                     for arg in args {
@@ -3093,17 +3106,12 @@ impl Codegen {
                 }
             }
             IREexpr::StringLit(value) => {
-                // String literals are read-only C string literals
-                // When used as String type, they should be converted at assignment site
-                // For other contexts, emit as C string literal
-                // Escape special characters for C (order matters - escape backslash first)
-                let escaped = value
-                    .replace('\\', "\\\\") // Escape backslashes first
-                    .replace('"', "\\\"") // Escape quotes
-                    .replace('\n', "\\n") // Escape newlines
-                    .replace('\r', "\\r") // Escape carriage returns
-                    .replace('\t', "\\t"); // Escape tabs
-                self.write(&format!("\"{}\"", escaped));
+                if matches!(type_context, Some(Type::String)) {
+                    self.write_ion_string_from_literal(value);
+                } else {
+                    let escaped = Self::escape_c_string_literal_content(value);
+                    self.write(&format!("\"{}\"", escaped));
+                }
             }
             IREexpr::TupleLit {
                 elements,

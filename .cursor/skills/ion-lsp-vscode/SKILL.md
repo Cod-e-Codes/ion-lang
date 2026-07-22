@@ -44,9 +44,9 @@ npx @vscode/vsce package --allow-missing-repository
 Install:
 
 ```bash
-cursor --install-extension ion-language-0.1.1.vsix
+cursor --install-extension ion-language-0.1.2.vsix
 # Version comes from ion-vscode/package.json - adjust filename after `vsce package`
-# or: code --install-extension ion-language-0.1.1.vsix
+# or: code --install-extension ion-language-0.1.2.vsix
 ```
 
 Workspace setting `.vscode/settings.json`:

@@ -21,6 +21,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 - **Return unwind**: all function exits use `emit_function_return` (`ret_val`, `scope_emit_return_unwind`, `goto epilogue`), including diverging `return` inside rvalue `match` arms (`rvalue_match_divergent_return_unwinds_owned`). Value-producing rvalue arms still assign and `break` from the `switch`.
 - `Box`, `Vec`, `String` layout vs `runtime/ion_runtime.h`
 - **`String::len`**: null-check the `String*` value, not `&local` (`-Waddress` under CI `-Werror`)
+- **String literal call args**: parameters typed `String` need `ion_string_from_literal` at the call site, not only on `let s: String = "…"` (see `test_string_call_arg_literal.ion`)
 - Single-file merge (`merge_modules`) vs `--mode multi` divergences
 - `extern "C"` calls only inside `unsafe` blocks in source; cgen must not strip guards
 

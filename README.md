@@ -88,9 +88,9 @@ Limitations: built-in methods (`Vec::push`, etc.) and type names in annotations 
    npm install
    npm run compile
    npx @vscode/vsce package --allow-missing-repository
-   code --install-extension ion-language-0.1.1.vsix
+   code --install-extension ion-language-0.1.2.vsix
    ```
-   On Cursor, use `cursor --install-extension ion-language-0.1.1.vsix` instead of `code`.
+   On Cursor, use `cursor --install-extension ion-language-0.1.2.vsix` instead of `code`.
 
 3. Workspace settings (`.vscode/settings.json`) point `ion.lspPath` at `target/release/ion-lsp.exe`.
 
@@ -101,7 +101,7 @@ cd ion-vscode
 npm install
 npm run compile
 npx @vscode/vsce package --allow-missing-repository
-cursor --install-extension ion-language-0.1.1.vsix
+cursor --install-extension ion-language-0.1.2.vsix
 ```
 
 ## Usage
