@@ -207,14 +207,14 @@ jobs:
         shell: bash
         run: |
           tar -czf "${STAGE_DIR}.tar.gz" "$STAGE_DIR"
-          shasum -a 256 "${STAGE_DIR}.tar.gz" > "${STAGE_DIR}.tar.gz.sha256"
+          python3 -c "import hashlib; p='${STAGE_DIR}.tar.gz'; h=hashlib.sha256(open(p,'rb').read()).hexdigest(); open(p+'.sha256','w').write(f'{h}  {p}\n')"
 
       - name: Archive (zip)
         if: matrix.archive_ext == 'zip'
         shell: bash
         run: |
           7z a "${STAGE_DIR}.zip" "$STAGE_DIR" > /dev/null
-          shasum -a 256 "${STAGE_DIR}.zip" > "${STAGE_DIR}.zip.sha256"
+          python3 -c "import hashlib; p='${STAGE_DIR}.zip'; h=hashlib.sha256(open(p,'rb').read()).hexdigest(); open(p+'.sha256','w').write(f'{h}  {p}\n')"
 
       - name: Publish release assets
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
