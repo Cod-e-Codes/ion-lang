@@ -1,0 +1,243 @@
+# Tag push (v*.*.*): verify, build platform archives, publish GitHub Release.
+# Third-party actions are SHA-pinned; dependabot.yml bumps them weekly.
+# dtolnay/rust-toolchain is pinned to a commit on its v1 line (see dtolnay/rust-toolchain docs).
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.96.0"
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - run: cargo fmt --check
+      - run: cargo clippy --locked -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --locked --release --bin ion-compiler --bin ion-build --bin ion-lsp
+
+      - name: Integration tests
+        shell: bash
+        env:
+          COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          ION_BUILD: ${{ github.workspace }}/target/release/ion-build
+        run: cd tests && bash test_runner.sh
+
+      - name: Confirm tag matches Cargo.toml version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(cargo metadata --no-deps --locked --format-version 1)"
+          pkg_version="$(printf '%s' "$pkg" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["packages"][0]["version"])')"
+          if [ "$tag" != "$pkg_version" ]; then
+            echo "::error::tag v$tag does not match Cargo.toml version $pkg_version"
+            exit 1
+          fi
+
+  build:
+    needs: verify
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            archive_ext: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04
+            archive_ext: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-14
+            archive_ext: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive_ext: tar.gz
+          - target: x86_64-pc-windows-gnu
+            os: windows-2025
+            archive_ext: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Resolve tag
+        id: meta
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "stage=ion-${TAG}-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            echo "asset=ion-${TAG}-${{ matrix.target }}.zip" >> "$GITHUB_OUTPUT"
+          else
+            echo "asset=ion-${TAG}-${{ matrix.target }}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.96.0"
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross-compiler (aarch64-unknown-linux-gnu)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure cross-linker (aarch64-unknown-linux-gnu)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build release binaries
+        shell: bash
+        run: cargo build --locked --release --target ${{ matrix.target }} --bin ion-compiler --bin ion-build --bin ion-lsp
+
+      - name: Smoke test binaries
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -e
+          bin_ext=""
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-gnu" ]; then
+            bin_ext=".exe"
+          fi
+          "target/${{ matrix.target }}/release/ion-compiler${bin_ext}" --version
+          "target/${{ matrix.target }}/release/ion-build${bin_ext}" --version
+          "target/${{ matrix.target }}/release/ion-lsp${bin_ext}" --version
+
+      - name: Stage release directory
+        shell: bash
+        run: |
+          set -e
+          stage="${{ steps.meta.outputs.stage }}"
+          mkdir -p "$stage"
+
+          bin_ext=""
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-gnu" ]; then
+            bin_ext=".exe"
+          fi
+          cp "target/${{ matrix.target }}/release/ion-compiler${bin_ext}" "$stage/"
+          cp "target/${{ matrix.target }}/release/ion-build${bin_ext}" "$stage/"
+          cp "target/${{ matrix.target }}/release/ion-lsp${bin_ext}" "$stage/"
+
+          cp -r runtime stdlib examples "$stage/"
+          cp README.md LICENSE ION_SPEC.md CHANGELOG.md CONTRIBUTING.md "$stage/"
+          mkdir -p "$stage/docs"
+          cp docs/BETA.md docs/ABI.md "$stage/docs/"
+          mkdir -p "$stage/tests"
+          cp tests/README.md "$stage/tests/"
+
+          echo "STAGE_DIR=$stage" >> "$GITHUB_ENV"
+
+      - name: Verify staged archive contents
+        shell: bash
+        run: |
+          set -e
+          missing=0
+          check() {
+            if [ ! -e "$STAGE_DIR/$1" ]; then
+              echo "::error::missing from release archive: $1"
+              missing=1
+            fi
+          }
+          check "README.md"
+          check "LICENSE"
+          check "ION_SPEC.md"
+          check "CHANGELOG.md"
+          check "CONTRIBUTING.md"
+          check "docs/BETA.md"
+          check "docs/ABI.md"
+          check "tests/README.md"
+          check "runtime/ion_runtime.h"
+          check "runtime/ion_runtime.c"
+          check "stdlib/io.ion"
+          check "stdlib/fmt.ion"
+          check "stdlib/fs.ion"
+          check "stdlib/result.ion"
+          for dir in examples/*/; do
+            name="$(basename "$dir")"
+            check "examples/$name"
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Archive (tar.gz)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          tar -czf "${STAGE_DIR}.tar.gz" "$STAGE_DIR"
+          shasum -a 256 "${STAGE_DIR}.tar.gz" > "${STAGE_DIR}.tar.gz.sha256"
+
+      - name: Archive (zip)
+        if: matrix.archive_ext == 'zip'
+        shell: bash
+        run: |
+          7z a "${STAGE_DIR}.zip" "$STAGE_DIR" > /dev/null
+          shasum -a 256 "${STAGE_DIR}.zip" > "${STAGE_DIR}.zip.sha256"
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          draft: true
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: |
+            ${{ steps.meta.outputs.stage }}.${{ matrix.archive_ext }}
+            ${{ steps.meta.outputs.stage }}.${{ matrix.archive_ext }}.sha256
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Publish release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          draft: false
+          tag_name: ${{ github.ref_name }}

@@ -10,4 +10,6 @@ cd examples\http_server
 
 In another terminal: `curl http://127.0.0.1:8080/`
 
+`ion.toml` maps `recv`/`send` to `recv_sys`/`send_sys` via `cflags`. On Windows only, `cflags_windows` maps `close` to `closesocket` for Winsock.
+
 Build artifacts land in `target/` (not committed).

@@ -191,6 +191,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 ### Method call syntax
 - `test_method_call_basic.ion` - Basic method call syntax (`vec.push()`, `s.len()`)
 - `test_method_call_mut.ion` - Mutable receiver method calls (`vec.pop()`, `vec.set()`)
+- `test_method_call_ref_param.ion` - Method-call syntax on `&T` / `&mut T` parameters (`out.push()`, `vec.get()`)
 - `test_method_call_generic.ion` - Generic method calls with type inference
 - `test_method_call_chaining.ion` - Chained method calls (`vec.push().len()`)
 

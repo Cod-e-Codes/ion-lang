@@ -1098,9 +1098,18 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 "set",
                 "with_capacity",
             ];
-            let is_vec = vec_methods.contains(&method_call.method.as_str());
+            let string_methods = ["push_str", "push_byte", "len"];
+            let receiver_ty = ctx.resolve_expr_type(&method_call.receiver);
+            let receiver_is_string = match receiver_ty.as_ref() {
+                Some(Type::String) => true,
+                Some(Type::Ref { inner, .. }) => matches!(**inner, Type::String),
+                _ => false,
+            };
+            let is_vec = vec_methods.contains(&method_call.method.as_str()) && !receiver_is_string;
             let callee = if is_vec {
                 format!("Vec::{}", method_call.method)
+            } else if string_methods.contains(&method_call.method.as_str()) {
+                format!("String::{}", method_call.method)
             } else {
                 format!("METHOD::{}", method_call.method)
             };
@@ -1114,17 +1123,32 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                         _ => None,
                     }
                 })
+            } else if string_methods.contains(&method_call.method.as_str()) {
+                match method_call.method.as_str() {
+                    "len" => Some(Type::Int),
+                    "push_str" | "push_byte" => Some(Type::Void),
+                    _ => None,
+                }
             } else {
                 None
             };
             let receiver_is_ref = matches!(
                 method_call.method.as_str(),
-                "push" | "pop" | "set" | "with_capacity" | "len" | "capacity" | "get" | "get_ref"
+                "push"
+                    | "pop"
+                    | "set"
+                    | "with_capacity"
+                    | "len"
+                    | "capacity"
+                    | "get"
+                    | "get_ref"
+                    | "push_str"
+                    | "push_byte"
             );
             let receiver_expr = if receiver_is_ref {
                 let mutable = matches!(
                     method_call.method.as_str(),
-                    "push" | "pop" | "set" | "with_capacity"
+                    "push" | "pop" | "set" | "with_capacity" | "push_str" | "push_byte"
                 );
                 IREexpr::AddressOf {
                     inner: Box::new(build_expr_with_ctx(&method_call.receiver, ctx)),

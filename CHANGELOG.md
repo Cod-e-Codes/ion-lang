@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 - 2026-07-22
+
+- **Fix**: method-call syntax on `&Vec<T>`, `&mut Vec<T>`, `&String`, and `&mut String` parameters (missing dereference in cgen; `String::len` routed through `Vec::len` in IR).
+- **Fix**: `examples/http_server` links on Linux/macOS (`cflags_windows` for Winsock `close` mapping).
+- **Tooling**: GitHub Actions release workflow (multi-platform archives with docs/examples verification), Dependabot for pinned action SHAs.
+- **Docs**: `ion-build` runtime/stdlib walk-up discovery; `cflags_windows` / `cflags_unix` in `ion.toml`.
+
 ## 0.1.0 - 2026-07-21
 
 First tagged release of the Ion toolchain.

@@ -1,0 +1,91 @@
+// Method-call syntax on &T / &mut T parameters (not static Vec::/String:: calls).
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn vec_push(out: &mut Vec<int>, val: int) {
+    out.push(val);
+}
+
+fn vec_pop(out: &mut Vec<int>) -> Option<int> {
+    return out.pop();
+}
+
+fn vec_set(out: &mut Vec<int>, idx: int, val: int) {
+    out.set(idx, val);
+}
+
+fn vec_get(vec: &Vec<int>, idx: int) -> Option<int> {
+    return vec.get(idx);
+}
+
+fn vec_len(vec: &Vec<int>) -> int {
+    return vec.len();
+}
+
+fn str_push_str(out: &mut String, other: &str) {
+    out.push_str(other);
+}
+
+fn str_len(s: &String) -> int {
+    return s.len();
+}
+
+fn main() -> int {
+    let mut items: Vec<int> = Vec::new();
+    vec_push(&mut items, 10);
+    vec_push(&mut items, 20);
+    vec_push(&mut items, 30);
+
+    if vec_len(&items) != 3 {
+        return 1;
+    }
+
+    match vec_get(&items, 1) {
+        Option::Some(v) => {
+            if v != 20 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+
+    vec_set(&mut items, 0, 99);
+    match vec_get(&items, 0) {
+        Option::Some(v) => {
+            if v != 99 {
+                return 4;
+            }
+        }
+        Option::None => {
+            return 5;
+        }
+    };
+
+    match vec_pop(&mut items) {
+        Option::Some(v) => {
+            if v != 30 {
+                return 6;
+            }
+        }
+        Option::None => {
+            return 7;
+        }
+    };
+
+    if vec_len(&items) != 2 {
+        return 8;
+    }
+
+    let mut text: String = "ab";
+    str_push_str(&mut text, "cd");
+    if str_len(&text) != 4 {
+        return 9;
+    }
+
+    return 0;
+}

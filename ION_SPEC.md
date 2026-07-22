@@ -1187,6 +1187,8 @@ cargo build --release --bin ion-build
 
 Manifest discovery walks upward from the current directory for a file named `ion.toml`. Pass `--manifest <path>` when cwd is not the example directory; the manifest's parent directory is the project root and `main` paths are relative to that directory.
 
+**Runtime and stdlib discovery:** `ion-build` locates `runtime/ion_runtime.h` by walking upward from the project root, then from the current working directory if needed. Stdlib search paths walk upward from the project root (see below) and also check install-relative `stdlib/` next to the compiler executable. A build fails with `runtime/ion_runtime.h not found` when neither walk finds a `runtime/` directory; keep the project under a tree that contains `runtime/` and `stdlib/` (repo root or an unpacked release archive).
+
 `ion-compiler` remains available for codegen inspection, LSP internals, and integration tests that grep `.c` output. It does not require `ion.toml`.
 
 **`ion.toml` fields (tooling, not language semantics):**
@@ -1200,6 +1202,8 @@ Manifest discovery walks upward from the current directory for a file named `ion
 | `out_dir` | no | Build output directory relative to project root (default: `target`) |
 | `stdlib_paths` | no | Extra stdlib search directories (relative to project root) |
 | `cflags` | no | Extra flags when compiling generated `.c` files (e.g. `-Drecv_sys=recv` for FFI name mapping) |
+| `cflags_windows` | no | Extra `cflags` applied only on Windows (e.g. `-Dclose=closesocket` for Winsock) |
+| `cflags_unix` | no | Extra `cflags` applied only on Linux and macOS |
 | `ldflags` | no | Extra flags passed when linking (e.g. `-lm` overrides) |
 | `emit_in_source` | no | When `true`, emit `.c`/`.h`/`.o` next to sources instead of `out_dir` |
 

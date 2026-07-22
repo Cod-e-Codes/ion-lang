@@ -125,7 +125,8 @@ test_type_alias_basic.ion	run	42
 test_type_alias_generic.ion	run	0			
 test_type_alias_resolution.ion	run	0			
 test_method_call_basic.ion	run	0			
-test_method_call_mut.ion	run	0			
+test_method_call_mut.ion	run	0
+test_method_call_ref_param.ion	run	0			
 test_method_call_generic.ion	run	0			
 test_method_call_chaining.ion	run	0			
 test_channel_split.ion	run	0			

@@ -129,7 +129,7 @@ fn build_single(
         &object_file,
         &out_abs,
         runtime_dir,
-        &project.manifest.cflags,
+        &project.manifest.effective_cflags(),
     )
     .map_err(BuildError::CCompile)?;
 
@@ -234,7 +234,7 @@ fn build_multi(
             &object_file,
             &out_abs,
             runtime_dir,
-            &project.manifest.cflags,
+            &project.manifest.effective_cflags(),
         )
         .map_err(BuildError::CCompile)?;
         object_files.push(object_file);

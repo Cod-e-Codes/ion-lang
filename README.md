@@ -88,9 +88,9 @@ Limitations: built-in methods (`Vec::push`, etc.) and type names in annotations 
    npm install
    npm run compile
    npx @vscode/vsce package --allow-missing-repository
-   code --install-extension ion-language-0.1.0.vsix
+   code --install-extension ion-language-0.1.1.vsix
    ```
-   On Cursor, use `cursor --install-extension ion-language-0.1.0.vsix` instead of `code`.
+   On Cursor, use `cursor --install-extension ion-language-0.1.1.vsix` instead of `code`.
 
 3. Workspace settings (`.vscode/settings.json`) point `ion.lspPath` at `target/release/ion-lsp.exe`.
 
@@ -101,7 +101,7 @@ cd ion-vscode
 npm install
 npm run compile
 npx @vscode/vsce package --allow-missing-repository
-cursor --install-extension ion-language-0.1.0.vsix
+cursor --install-extension ion-language-0.1.1.vsix
 ```
 
 ## Usage
@@ -135,7 +135,9 @@ The integration harness (`tests/test_runner.sh`) calls `ion-compiler` and `gcc` 
 
 ### Project manifests (`ion.toml`)
 
-`ion-build` discovers `ion.toml` by walking up from the current directory. Required fields: `name`, `main`, `output`. Common optional fields: `mode` (`single` or `multi`), `out_dir` (default `target`), `cflags`, `ldflags`, `stdlib_paths`, `emit_in_source`.
+`ion-build` discovers `ion.toml` by walking up from the current directory. Required fields: `name`, `main`, `output`. Common optional fields: `mode` (`single` or `multi`), `out_dir` (default `target`), `cflags`, `cflags_windows`, `cflags_unix`, `ldflags`, `stdlib_paths`, `emit_in_source`.
+
+`ion-build` also locates `runtime/` for linking by walking upward from the project root (the directory that contains `ion.toml`), then from the current working directory if needed. Stdlib imports use a similar walk-up from the project root plus install-relative paths next to the compiler. Run `ion-build` from a directory whose ancestors include both `runtime/` and `stdlib/` (for example the repo root or an unpacked release archive directory).
 
 Root [ion.toml](ion.toml) builds [examples/hello_world_safe/hello_world_safe.ion](examples/hello_world_safe/hello_world_safe.ion). Each example lives in its own directory under [examples/](examples/) with an `ion.toml` manifest. Use `--manifest path` when cwd is not the example directory:
 

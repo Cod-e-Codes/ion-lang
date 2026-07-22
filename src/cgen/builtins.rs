@@ -451,34 +451,16 @@ impl Codegen {
         // String::len(s: &String) -> int
         if callee == "String::len" && args.len() == 1 {
             let mut code = String::new();
-            // Only bare Ref{String} vars (e.g. get_ref bindings) need (*r)->len.
-            // AddressOf (&local) must not use needs_deref: (&s) is always true under -Waddress.
-            let needs_deref = matches!(&args[0], IREexpr::Var(_))
-                && self.infer_irexpr_type(&args[0]).is_some_and(
-                    |ty| matches!(ty, Type::Ref { inner, .. } if matches!(*inner, Type::String)),
-                );
-            if needs_deref {
-                code.push_str("((");
-                let mut arg_code = String::new();
-                let old_output = std::mem::replace(&mut self.output, arg_code);
-                self.generate_expr(&args[0]);
-                arg_code = std::mem::replace(&mut self.output, old_output);
-                code.push_str(&arg_code);
-                code.push_str(") ? (int)((*");
-                code.push_str(&arg_code);
-                code.push_str(")->len) : 0)");
-            } else {
-                let mut arg_code = String::new();
-                let old_output = std::mem::replace(&mut self.output, arg_code);
-                self.generate_expr(&args[0]);
-                arg_code = std::mem::replace(&mut self.output, old_output);
-                let deref_arg = arg_code.strip_prefix('&').unwrap_or(&arg_code);
-                code.push_str("((");
-                code.push_str(deref_arg);
-                code.push_str(") ? (int)((");
-                code.push_str(deref_arg);
-                code.push_str(")->len) : 0)");
-            }
+            let mut arg_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, arg_code);
+            self.generate_expr(&args[0]);
+            arg_code = std::mem::replace(&mut self.output, old_output);
+            let deref_arg = self.string_ion_ptr_expr(&args[0], &arg_code);
+            code.push_str("((");
+            code.push_str(&deref_arg);
+            code.push_str(") ? (int)((");
+            code.push_str(&deref_arg);
+            code.push_str(")->len) : 0)");
             return Some(code);
         }
 
@@ -489,30 +471,47 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, str_code);
             self.generate_expr(&args[0]);
             str_code = std::mem::replace(&mut self.output, old_output);
-            // Remove leading & if present
-            let deref_str = str_code.strip_prefix('&').unwrap_or(&str_code);
+            let deref_str = self.string_ion_ptr_expr(&args[0], &str_code);
 
             let mut other_code = String::new();
             let old_output = std::mem::replace(&mut self.output, other_code);
             self.generate_expr(&args[1]);
             other_code = std::mem::replace(&mut self.output, old_output);
 
-            if other_code.starts_with('"') {
+            let other_is_str_slice = match &args[1] {
+                IREexpr::StringLit(_) => true,
+                IREexpr::Var(name) => self.lookup_var_type(name).is_some_and(|ty| match &ty {
+                    Type::Str => true,
+                    Type::Ref { inner, .. } => matches!(inner.as_ref(), Type::Str),
+                    _ => false,
+                }),
+                _ => false,
+            };
+
+            if matches!(&args[1], IREexpr::StringLit(_)) {
                 code.push_str("ion_string_push_str(");
-                code.push_str(deref_str);
+                code.push_str(&deref_str);
                 code.push_str(", ");
                 let len = other_code.len() - 2;
                 code.push_str(&other_code);
                 code.push_str(", ");
                 code.push_str(&len.to_string());
                 code.push(')');
+            } else if other_is_str_slice {
+                code.push_str("ion_string_push_str(");
+                code.push_str(&deref_str);
+                code.push_str(", ");
+                code.push_str(&other_code);
+                code.push_str(", strlen(");
+                code.push_str(&other_code);
+                code.push_str("))");
             } else {
                 // Owned String or &String: append using heap buffer (.data/.len).
                 let deref_other = other_code.strip_prefix('&').unwrap_or(&other_code);
                 code.push_str("({ ion_string_t* _ion_push_other = ");
                 code.push_str(deref_other);
                 code.push_str("; ion_string_push_str(");
-                code.push_str(deref_str);
+                code.push_str(&deref_str);
                 code.push_str(", ((_ion_push_other != NULL && _ion_push_other->data != NULL) ? (const char*)_ion_push_other->data : \"\"), (_ion_push_other != NULL ? _ion_push_other->len : (size_t)0)); })");
             }
             return Some(code);
@@ -525,7 +524,7 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, str_code);
             self.generate_expr(&args[0]);
             str_code = std::mem::replace(&mut self.output, old_output);
-            let deref_str = str_code.strip_prefix('&').unwrap_or(&str_code);
+            let deref_str = self.string_ion_ptr_expr(&args[0], &str_code);
 
             let mut byte_code = String::new();
             let old_output = std::mem::replace(&mut self.output, byte_code);
@@ -533,7 +532,7 @@ impl Codegen {
             byte_code = std::mem::replace(&mut self.output, old_output);
 
             code.push_str("ion_string_push_byte(");
-            code.push_str(deref_str);
+            code.push_str(&deref_str);
             code.push_str(", (unsigned char)(");
             code.push_str(&byte_code);
             code.push_str("))");

@@ -30,8 +30,22 @@ pub struct Manifest {
     pub out_dir: PathBuf,
     pub stdlib_paths: Vec<PathBuf>,
     pub cflags: Vec<String>,
+    pub cflags_windows: Vec<String>,
+    pub cflags_unix: Vec<String>,
     pub ldflags: Vec<String>,
     pub emit_in_source: bool,
+}
+
+impl Manifest {
+    pub fn effective_cflags(&self) -> Vec<String> {
+        let mut flags = self.cflags.clone();
+        if cfg!(windows) {
+            flags.extend(self.cflags_windows.iter().cloned());
+        } else {
+            flags.extend(self.cflags_unix.iter().cloned());
+        }
+        flags
+    }
 }
 
 #[derive(Debug)]
@@ -165,6 +179,8 @@ fn parse_manifest_file(path: &Path, root: &Path) -> Result<Manifest, ManifestErr
 
     let stdlib_paths = parse_path_list(table.get("stdlib_paths"), path, "stdlib_paths")?;
     let cflags = parse_string_list(table.get("cflags"), path, "cflags")?;
+    let cflags_windows = parse_string_list(table.get("cflags_windows"), path, "cflags_windows")?;
+    let cflags_unix = parse_string_list(table.get("cflags_unix"), path, "cflags_unix")?;
     let ldflags = parse_string_list(table.get("ldflags"), path, "ldflags")?;
 
     let emit_in_source = match table.get("emit_in_source") {
@@ -194,6 +210,8 @@ fn parse_manifest_file(path: &Path, root: &Path) -> Result<Manifest, ManifestErr
         out_dir,
         stdlib_paths,
         cflags,
+        cflags_windows,
+        cflags_unix,
         ldflags,
         emit_in_source,
     })

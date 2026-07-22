@@ -59,6 +59,8 @@ CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitiz
 
 **Stale binaries:** `test_runner.sh` defaults to `../target/release/ion-compiler`. Rebuild after codegen changes and confirm that path is the binary you just built. Agent shells may set `CARGO_TARGET_DIR` outside the repo; pin it to the repo `target/` when verifying locally, or override with `COMPILER=` / `ION_BUILD=`.
 
+**Method calls on reference parameters:** `test_method_call_ref_param.ion` covers `out.push()` / `vec.get()` style calls on `&T` and `&mut T` parameters (distinct from static `Vec::push(out, …)` and from method calls on local variables).
+
 ## Manifest (`test_expectations.tsv`)
 
 Tab-separated columns:

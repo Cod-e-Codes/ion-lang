@@ -1172,16 +1172,46 @@ impl Codegen {
         }
     }
 
+    fn binding_is_ref_param(&self, name: &str, pointee: fn(&Type) -> bool) -> bool {
+        self.lookup_var_type(name).as_ref().is_some_and(pointee)
+    }
+
     /// C expression for `ion_vec_t*` from a `&Vec<T>`, `&mut Vec<T>`, or owned `Vec<T>` IR arg.
     pub(crate) fn vec_ion_ptr_expr(&self, arg: &IREexpr, vec_code: &str) -> String {
         let stripped = vec_code.strip_prefix('&').unwrap_or(vec_code);
-        if matches!(arg, IREexpr::Var(_))
-            && let Some(ty) = self.infer_irexpr_type(arg)
-            && is_ref_to_vec(&ty)
-        {
-            return format!("(*{stripped})");
+        let ref_param = match arg {
+            IREexpr::Var(name) => self.binding_is_ref_param(name, is_ref_to_vec),
+            IREexpr::AddressOf { inner, .. } => match inner.as_ref() {
+                IREexpr::Var(name) => self.binding_is_ref_param(name, is_ref_to_vec),
+                _ => false,
+            },
+            _ => false,
+        };
+        if ref_param {
+            format!("(*{stripped})")
+        } else {
+            stripped.to_string()
         }
-        stripped.to_string()
+    }
+
+    /// C expression for `ion_string_t*` from a `&String`, `&mut String`, or owned `String` IR arg.
+    pub(crate) fn string_ion_ptr_expr(&self, arg: &IREexpr, str_code: &str) -> String {
+        let stripped = str_code.strip_prefix('&').unwrap_or(str_code);
+        let is_ref_string: fn(&Type) -> bool =
+            |ty: &Type| matches!(ty, Type::Ref { inner, .. } if matches!(**inner, Type::String));
+        let ref_param = match arg {
+            IREexpr::Var(name) => self.binding_is_ref_param(name, is_ref_string),
+            IREexpr::AddressOf { inner, .. } => match inner.as_ref() {
+                IREexpr::Var(name) => self.binding_is_ref_param(name, is_ref_string),
+                _ => false,
+            },
+            _ => false,
+        };
+        if ref_param {
+            format!("(*{stripped})")
+        } else {
+            stripped.to_string()
+        }
     }
 
     pub(crate) fn vec_elem_type_from_arg(&self, arg: &IREexpr) -> Option<Type> {
@@ -1216,6 +1246,23 @@ impl Codegen {
                 }
             })
             .unwrap_or_else(|| "int".to_string())
+    }
+
+    pub(crate) fn write_option_from_runtime_raw_assign(
+        &mut self,
+        mono_name: &str,
+        elem_c_type: &str,
+        dest_var: &str,
+        raw_expr: &IREexpr,
+    ) {
+        self.write("{ void* _ion_raw = ");
+        self.generate_expr(raw_expr);
+        self.writeln(";");
+        self.write_indent();
+        self.writeln(&format!(
+            "ion_option_from_raw(&{dest_var}, _ion_raw, sizeof({elem_c_type}), offsetof({mono_name}, data.variant_0.arg0)); }}"
+        ));
+        self.mark_moves_in_expr(raw_expr);
     }
 
     pub(crate) fn write_option_from_runtime_raw(
@@ -1591,6 +1638,20 @@ impl Codegen {
                             scrutinee_type.as_ref(),
                         );
                     }
+                } else if let Some(Type::Generic { name, params }) = return_ty.as_ref()
+                    && name == "Option"
+                    && params.len() == 1
+                    && let IREexpr::Call { callee, .. } = value
+                    && (callee == "Vec::pop" || callee == "Vec::get")
+                {
+                    let mono_name = mangle_type_name("Option", params);
+                    let elem_c_type = self.type_to_c(&params[0]);
+                    self.write_option_from_runtime_raw_assign(
+                        &mono_name,
+                        &elem_c_type,
+                        "ret_val",
+                        value,
+                    );
                 } else {
                     self.write("ret_val = ");
 
