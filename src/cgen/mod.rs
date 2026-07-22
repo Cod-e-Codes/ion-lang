@@ -3048,7 +3048,8 @@ impl Codegen {
                         let param_types = self
                             .function_param_types
                             .get(&resolved_callee)
-                            .or_else(|| self.function_param_types.get(&func_name));
+                            .or_else(|| self.function_param_types.get(&func_name))
+                            .or_else(|| self.extern_functions.get(&func_name));
                         let param_ty = param_types.and_then(|pts| pts.get(i).cloned());
                         // If this is an extern function expecting int by value, convert &int (immutable) arguments to int
                         // For &int -> int: just use the inner expression (the variable itself)
