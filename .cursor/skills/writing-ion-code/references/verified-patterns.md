@@ -298,7 +298,9 @@ Multi-file mode prefixes each module's C symbols (`io_print_int`, `fmt_print_int
 
 A move in an `if` branch that always `return`s does not block use after the `if`. Two fall-through branches must agree on whether a binding is still valid.
 
-Do not move a non-copy binding inside a `while` or `for` body (next iteration would need it again).
+## loop ownership joins
+
+A non-copy binding moved on a path that can reenter the loop (`continue` or body fall-through) is an error. Move then `break` or `return` is allowed; after `break`, the binding is moved for later code. Exit paths that disagree (for example one `break` moves and another does not, or a `while` condition-false exit stays valid while a `break` moves) error at the loop exit join.
 
 ## extern block
 

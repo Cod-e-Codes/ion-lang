@@ -1,0 +1,17 @@
+// Two break paths disagree on ownership: error at the loop exit join.
+fn take(b: Box<int>) {
+}
+
+fn main() -> int {
+    let x = Box::new(1);
+    let cond = true;
+    loop {
+        if cond {
+            take(x);
+            break;
+        } else {
+            break;
+        }
+    }
+    return 0;
+}

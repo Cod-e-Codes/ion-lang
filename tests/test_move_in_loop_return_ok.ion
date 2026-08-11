@@ -1,0 +1,8 @@
+// Move then return inside a loop is OK (return is excluded from loop joins).
+fn main() -> int {
+    let x = Box::new(9);
+    while true {
+        return Box::unwrap(x);
+    }
+    return 0;
+}

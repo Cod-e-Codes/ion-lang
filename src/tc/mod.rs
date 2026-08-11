@@ -4,6 +4,7 @@ mod trait_bounds;
 mod types;
 
 use crate::ast::*;
+use ownership::join_ownership_states;
 use std::collections::HashMap;
 use std::path::PathBuf;
 pub use types::type_to_string;
@@ -51,12 +52,21 @@ pub enum OwnershipState {
 }
 
 #[derive(Debug, Clone)]
-struct VariableInfo {
+pub(crate) struct VariableInfo {
     ty: Type,
     state: OwnershipState,
     definition_span: Span,
     shared_borrow_count: u32,
     mut_borrow_count: u32,
+}
+
+/// Structured edge snapshots for one loop nesting level (AST-level join, not a CFG).
+#[derive(Debug, Clone)]
+pub(crate) struct LoopOwnershipFrame {
+    /// Ownership of bindings that existed at loop entry (loop-head state).
+    entry_states: HashMap<String, OwnershipState>,
+    continue_snaps: Vec<HashMap<String, OwnershipState>>,
+    break_snaps: Vec<HashMap<String, OwnershipState>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,6 +261,8 @@ pub struct TypeChecker {
     unsafe_context_depth: usize,
     // Loop nesting depth (for break/continue validation)
     loop_depth: usize,
+    // Innermost-last frames for structured loop ownership joins (ION_SPEC §5.2)
+    loop_frames: Vec<LoopOwnershipFrame>,
     // Current function's resolved return type (for return statement checking)
     current_return_type: Option<Type>,
     // LSP information collected during type checking
@@ -291,6 +303,7 @@ impl TypeChecker {
             module_paths: HashMap::new(),
             unsafe_context_depth: 0,
             loop_depth: 0,
+            loop_frames: Vec::new(),
             current_return_type: None,
             lsp_info: LspInfo::default(),
             type_param_scopes: Vec::new(),
@@ -1569,6 +1582,7 @@ impl TypeChecker {
                         "break statement outside of loop".to_string(),
                     ));
                 }
+                self.record_loop_break_snapshot();
             }
             Stmt::Continue(_) => {
                 if self.loop_depth == 0 {
@@ -1576,6 +1590,7 @@ impl TypeChecker {
                         "continue statement outside of loop".to_string(),
                     ));
                 }
+                self.record_loop_continue_snapshot();
             }
             Stmt::Expr(expr_stmt) => {
                 self.check_expr(&expr_stmt.expr)?;
@@ -1656,15 +1671,8 @@ impl TypeChecker {
 
                     let merged_state = if reach_states.is_empty() {
                         prev_info.state
-                    } else if reach_states.iter().all(|s| *s == OwnershipState::Valid) {
-                        OwnershipState::Valid
-                    } else if reach_states.iter().all(|s| *s == OwnershipState::Moved) {
-                        OwnershipState::Moved
                     } else {
-                        return Err(TypeCheckError::UseAfterMove {
-                            name: name.clone(),
-                            span: if_stmt.span,
-                        });
+                        join_ownership_states(&reach_states, name, if_stmt.span)?
                     };
 
                     if let Some(info) = merged.get_mut(name) {
@@ -1742,6 +1750,7 @@ impl TypeChecker {
                     });
                 }
                 self.variables = before.clone();
+                self.push_loop_ownership_frame();
                 self.loop_depth += 1;
                 self.push_borrow_scope();
                 for inner in &while_stmt.body.statements {
@@ -1750,40 +1759,24 @@ impl TypeChecker {
                 self.pop_borrow_scope();
                 self.loop_depth -= 1;
                 let body_env = self.variables.clone();
+                let Some(frame) = self.pop_loop_ownership_frame() else {
+                    return Err(TypeCheckError::Message(
+                        "internal error: missing loop ownership frame for while".to_string(),
+                    ));
+                };
 
-                // Merge pessimistically for repeated iteration: a variable may only stay
-                // Valid if it is Valid both before the loop and after one abstract pass
-                // through the body. If it is moved in the body, later iterations or uses
-                // after the loop would be invalid (same rule spirit as if/else merge).
-                let mut merged = before.clone();
-                for (name, prev_info) in before.iter() {
-                    let body_state = body_env
-                        .get(name)
-                        .map(|info| info.state)
-                        .unwrap_or(prev_info.state);
-
-                    let merged_state = match (prev_info.state, body_state) {
-                        (OwnershipState::Valid, OwnershipState::Valid) => OwnershipState::Valid,
-                        (OwnershipState::Moved, OwnershipState::Moved) => OwnershipState::Moved,
-                        _ => {
-                            return Err(TypeCheckError::UseAfterMove {
-                                name: name.clone(),
-                                span: while_stmt.span,
-                            });
-                        }
-                    };
-
-                    if let Some(info) = merged.get_mut(name) {
-                        info.state = merged_state;
-                        info.shared_borrow_count = prev_info.shared_borrow_count;
-                        info.mut_borrow_count = prev_info.mut_borrow_count;
-                    }
-                }
-
-                self.variables = merged;
+                self.variables = self.finish_loop_ownership(
+                    &before,
+                    &while_stmt.body,
+                    &body_env,
+                    &frame,
+                    true,
+                    while_stmt.span,
+                )?;
             }
             Stmt::Loop(loop_stmt) => {
                 let before = self.variables.clone();
+                self.push_loop_ownership_frame();
                 self.loop_depth += 1;
                 self.push_borrow_scope();
                 for inner in &loop_stmt.body.statements {
@@ -1792,33 +1785,20 @@ impl TypeChecker {
                 self.pop_borrow_scope();
                 self.loop_depth -= 1;
                 let body_env = self.variables.clone();
+                let Some(frame) = self.pop_loop_ownership_frame() else {
+                    return Err(TypeCheckError::Message(
+                        "internal error: missing loop ownership frame for loop".to_string(),
+                    ));
+                };
 
-                let mut merged = before.clone();
-                for (name, prev_info) in before.iter() {
-                    let body_state = body_env
-                        .get(name)
-                        .map(|info| info.state)
-                        .unwrap_or(prev_info.state);
-
-                    let merged_state = match (prev_info.state, body_state) {
-                        (OwnershipState::Valid, OwnershipState::Valid) => OwnershipState::Valid,
-                        (OwnershipState::Moved, OwnershipState::Moved) => OwnershipState::Moved,
-                        _ => {
-                            return Err(TypeCheckError::UseAfterMove {
-                                name: name.clone(),
-                                span: loop_stmt.span,
-                            });
-                        }
-                    };
-
-                    if let Some(info) = merged.get_mut(name) {
-                        info.state = merged_state;
-                        info.shared_borrow_count = prev_info.shared_borrow_count;
-                        info.mut_borrow_count = prev_info.mut_borrow_count;
-                    }
-                }
-
-                self.variables = merged;
+                self.variables = self.finish_loop_ownership(
+                    &before,
+                    &loop_stmt.body,
+                    &body_env,
+                    &frame,
+                    false,
+                    loop_stmt.span,
+                )?;
             }
             Stmt::For(for_stmt) => {
                 // Desugar: for x in container { body }

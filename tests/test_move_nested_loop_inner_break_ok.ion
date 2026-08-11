@@ -1,0 +1,14 @@
+// Inner break after move must not become an exit snapshot for the outer loop.
+fn main() -> int {
+    let outer = Box::new(3);
+    let mut i = 0;
+    while i < 2 {
+        let inner = Box::new(2);
+        loop {
+            let _n = Box::unwrap(inner);
+            break;
+        }
+        i = i + 1;
+    }
+    return Box::unwrap(outer);
+}

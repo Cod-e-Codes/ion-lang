@@ -1,0 +1,9 @@
+// Move then continue reenters with a Moved binding.
+fn main() -> int {
+    let x = Box::new(1);
+    loop {
+        let _n = Box::unwrap(x);
+        continue;
+    }
+    return 0;
+}

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08
+
+- **Language / type checker**: loop ownership uses structured reentry/exit edge snapshots (ION_SPEC §5.2). Move then `break`/`return` is allowed when there is no reentering path; after-loop state stays affine; exit-path disagreement errors at the loop join. Replaces the old "any move in a loop body" beta rule. Integration tests cover break/return/continue, while head-vs-break disagreement, and nested inner break.
+
 ## 0.1.2 - 2026-07-22
 
 - **Fix**: string literals passed directly to `String`-typed call arguments now lower through `ion_string_from_literal` (same as `let s: String = "…"`). Previously call sites could pass a raw C string (segfault or silent no-op).

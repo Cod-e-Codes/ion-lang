@@ -37,7 +37,7 @@ The following features may change shape before 1.0:
 - capture-free function literals and function-pointer coercions;
 - generic ergonomics with optional built-in trait bounds (`Copy`, `Eq`, `Send`);
 - byte-oriented string iteration;
-- conservative move analysis in `while` and `for` loops;
+- AST-structured loop ownership joins without a full CFG (see ION_SPEC §5.2);
 - generated C layout details not covered by `docs/ABI.md`.
 
 ## Compatibility policy
