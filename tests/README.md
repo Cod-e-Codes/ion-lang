@@ -313,7 +313,7 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 - `test_vec_get_ref_return_error.ion` - Returning `&T` from `Vec::get_ref` (ReferenceEscape)
 - `test_vec_get_ref_mut_error.ion` - `Vec::set` while `get_ref` borrow is active (BorrowConflict)
 - `test_slice_get_ref_return_error.ion` - Returning `&T` from `Slice::get_ref` (ReferenceEscape)
-- `test_slice_get_ref_mut_error.ion` - Mutate root owner while `Slice::get_ref` borrow is active (BorrowConflict)
+- `test_slice_get_ref_mut_error.ion` - Indexed write `arr[i] = ...` while `Slice::get_ref` borrow is active (BorrowConflict)
 - `test_nested_struct_ref_error.ion` - Nested struct storing a reference field (ReferenceEscape)
 - `test_module_visibility.ion` - Module visibility violations
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls

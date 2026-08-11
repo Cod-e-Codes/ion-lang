@@ -1,4 +1,4 @@
-// Mutating the root owner conflicts with an active Slice::get_ref shared borrow.
+// Indexed write on the root owner conflicts with an active Slice::get_ref shared borrow.
 enum Option<T> {
     Some(T);
     None;
@@ -8,7 +8,7 @@ fn main() -> int {
     let mut items: [int; 1] = [1];
     match Slice::get_ref(&items, 0) {
         Option::Some(_x) => {
-            items = [2];
+            items[0] = 2;
         }
         Option::None => {}
     };

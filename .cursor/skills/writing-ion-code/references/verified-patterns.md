@@ -55,7 +55,7 @@ fn owned(s: String) -> int { return s.len(); }
 
 `String::get(&s, i)` returns `Option<u8>` without panicking (negative/OOB are `None`). Prefer it over `s[i]` when the index may be invalid. There is no `String::get_ref` / escaping `as_str`; byte peeks stay by-value.
 
-`Slice::get_ref(&s, i)` mirrors `Vec::get_ref` for `&[]T` (and arrays via coercion): local `Option<&T>`, root-owner shared borrow while live, `None` on OOB/negative. See [tests/test_slice_get_ref_scan.ion](../../../../tests/test_slice_get_ref_scan.ion) and [tests/test_string_get.ion](../../../../tests/test_string_get.ion).
+`Slice::get_ref(&s, i)` mirrors `Vec::get_ref` for `&[]T` (and arrays via coercion): local `Option<&T>`, root-owner shared borrow while live (`arr[i] = ...` and whole-owner assign are rejected), `None` on OOB/negative. See [tests/test_slice_get_ref_scan.ion](../../../../tests/test_slice_get_ref_scan.ion), [tests/test_slice_get_ref_mut_error.ion](../../../../tests/test_slice_get_ref_mut_error.ion), and [tests/test_string_get.ion](../../../../tests/test_string_get.ion).
 
 ## Struct field mutation
 
