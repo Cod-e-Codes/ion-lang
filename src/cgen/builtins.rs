@@ -539,6 +539,140 @@ impl Codegen {
             return Some(code);
         }
 
+        // String::get(s: &String, index: int) -> Option<u8>
+        if callee == "String::get" && args.len() == 2 {
+            let option_name = mangle_type_name("Option", std::slice::from_ref(&Type::U8));
+
+            let mut str_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, str_code);
+            self.generate_expr(&args[0]);
+            str_code = std::mem::replace(&mut self.output, old_output);
+            let deref_str = self.string_ion_ptr_expr(&args[0], &str_code);
+
+            let mut index_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, index_code);
+            self.generate_expr(&args[1]);
+            index_code = std::mem::replace(&mut self.output, old_output);
+
+            let mut code = String::new();
+            code.push_str("({ ");
+            code.push_str(&option_name);
+            code.push_str(" _ion_get; ion_string_t* _ion_s = ");
+            code.push_str(&deref_str);
+            code.push_str("; int _ion_i = ");
+            code.push_str(&index_code);
+            code.push_str("; if (_ion_s && _ion_s->data && _ion_i >= 0 && (size_t)_ion_i < _ion_s->len) { _ion_get.tag = 0; _ion_get.data.variant_0.arg0 = (uint8_t)_ion_s->data[_ion_i]; } else { _ion_get.tag = 1; } _ion_get; })");
+            return Some(code);
+        }
+
+        // Slice::get_ref<T>(s: &[]T, index: int) -> Option<&T> (stack-local, no move-out)
+        if callee == "Slice::get_ref" && args.len() == 2 {
+            let effective_return_type = return_type.cloned().or_else(|| {
+                self.slice_elem_type_from_arg(&args[0])
+                    .map(|elem| Type::Generic {
+                        name: "Option".to_string(),
+                        params: vec![Type::Ref {
+                            inner: Box::new(elem),
+                            mutable: false,
+                        }],
+                    })
+            });
+            let option_name = effective_return_type
+                .as_ref()
+                .map(|t| {
+                    mangle_type_name(
+                        "Option",
+                        match t {
+                            Type::Generic { params, .. } => params.as_slice(),
+                            _ => &[],
+                        },
+                    )
+                })
+                .unwrap_or_else(|| "Option_int_".to_string());
+            let ref_c_type = effective_return_type
+                .as_ref()
+                .and_then(|t| {
+                    if let Type::Generic { params, .. } = t
+                        && params.len() == 1
+                        && let Type::Ref { inner, .. } = &params[0]
+                    {
+                        Some(self.type_to_c(&Type::Ref {
+                            inner: inner.clone(),
+                            mutable: false,
+                        }))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "int*".to_string());
+            let elem_c_type = effective_return_type
+                .as_ref()
+                .and_then(|t| {
+                    if let Type::Generic { params, .. } = t
+                        && params.len() == 1
+                        && let Type::Ref { inner, .. } = &params[0]
+                    {
+                        Some(self.type_to_c(inner))
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    self.slice_elem_type_from_arg(&args[0])
+                        .map(|elem| self.type_to_c(&elem))
+                })
+                .unwrap_or_else(|| "int".to_string());
+
+            let mut index_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, index_code);
+            self.generate_expr(&args[1]);
+            index_code = std::mem::replace(&mut self.output, old_output);
+
+            let mut code = String::new();
+            code.push_str("({ ");
+            code.push_str(&option_name);
+            code.push_str(" _ion_get_ref; int _ion_i = ");
+            code.push_str(&index_code);
+            code.push_str("; ");
+
+            if let Some((array_name, size, _)) = self.slice_arg_as_array(&args[0]) {
+                code.push_str(&elem_c_type);
+                code.push_str("* _ion_data = ");
+                code.push_str(&array_name);
+                code.push_str("; int _ion_len = ");
+                code.push_str(&size.to_string());
+                code.push_str("; if (_ion_i >= 0 && _ion_i < _ion_len) { _ion_get_ref.tag = 0; _ion_get_ref.data.variant_0.arg0 = (");
+                code.push_str(&ref_c_type);
+                code.push_str(
+                    ")(_ion_data + _ion_i); } else { _ion_get_ref.tag = 1; } _ion_get_ref; })",
+                );
+            } else {
+                let mut slice_code = String::new();
+                let old_output = std::mem::replace(&mut self.output, slice_code);
+                self.generate_expr(&args[0]);
+                slice_code = std::mem::replace(&mut self.output, old_output);
+                let (slice_expr, by_ref) = self.slice_ion_access_from_code(&args[0], &slice_code);
+                let len_access = if by_ref {
+                    format!("({slice_expr})->len")
+                } else {
+                    format!("({slice_expr}).len")
+                };
+                let data_access = if by_ref {
+                    format!("({slice_expr})->data")
+                } else {
+                    format!("({slice_expr}).data")
+                };
+                code.push_str("if (_ion_i >= 0 && _ion_i < ");
+                code.push_str(&len_access);
+                code.push_str(") { _ion_get_ref.tag = 0; _ion_get_ref.data.variant_0.arg0 = (");
+                code.push_str(&ref_c_type);
+                code.push_str(")(");
+                code.push_str(&data_access);
+                code.push_str(" + _ion_i); } else { _ion_get_ref.tag = 1; } _ion_get_ref; })");
+            }
+            return Some(code);
+        }
+
         None
     }
 }

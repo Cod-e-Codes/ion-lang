@@ -1,0 +1,23 @@
+// Cannot return &T from Slice::get_ref (no-escape).
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn peek(values: &[]int, idx: int) -> &int {
+    match Slice::get_ref(values, idx) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            let zero: int = 0;
+            return &zero;
+        }
+    };
+}
+
+fn main() -> int {
+    let arr: [int; 1] = [1];
+    let _r: &int = peek(&arr, 0);
+    return 0;
+}

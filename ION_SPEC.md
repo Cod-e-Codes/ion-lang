@@ -105,7 +105,7 @@ The following keywords are reserved and cannot be used as identifiers:
 
 `fn`, `let`, `mut`, `struct`, `enum`, `type`, `if`, `else`, `while`, `for`, `loop`, `match`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `send`, `recv`, `true`, `false`, `import`, `as`, `pub`, `extern`, `unsafe`.
 
-Built-in type names `Box`, `Vec`, and `String` are tokenized as keywords for generic syntax (`Box<T>`, etc.) but are not reserved as identifiers elsewhere.
+Built-in type names `Box`, `Vec`, `String`, and `Slice` are tokenized as keywords for generic syntax (`Box<T>`, etc.) and builtin method qualification (`Slice::get_ref`); they are not reserved as identifiers elsewhere.
 
 Note: The `as` keyword is used both for module aliases (`import "file.ion" as name;`) and for type casting (`expr as Type`).
 
@@ -495,7 +495,7 @@ Additional built-in generic types:
 - `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`)
 - `Sender<T>` and `Receiver<T>` – move-only handles for the two ends of a bounded MPSC channel
 - `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::get_ref()`, `Vec::set()`)
-- `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
+- `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::get()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
 - `[T; N]` – fixed-size array of `N` elements of type `T`
 - `[]T` – dynamically sized slice (fat pointer) of type `T`
 - `(T1, T2, ...)` – fixed-size tuple value type (see §4.1.3)
@@ -563,7 +563,7 @@ return s[10]; // Runtime panic: "Slice index out of bounds" when len <= 10
 
 **Array-to-slice coercion:**
 
-A reference to a fixed-size array `&[T; N]` coerces to `&[]T` where the type checker accepts it (let bindings and function arguments). Codegen builds a temporary `ion_slice_T` fat pointer with `data` pointing at the array and `len = N`.
+A reference to a fixed-size array `&[T; N]` coerces to `&[]T` where the type checker accepts it (let bindings and function arguments). Codegen builds a temporary fat-pointer slice with `data` pointing at the array and `len = N`.
 
 ```ion
 fn sum(s: &[]int) -> int { return s[0] + s[1]; }
@@ -573,6 +573,14 @@ fn main() -> int {
     return sum(&arr); // &[int; 3] coerced to &[]int at the call site
 }
 ```
+
+**Non-panicking element borrow:**
+
+```ion
+// Slice::get_ref(s: &[]T, index: int) -> Option<&T>
+```
+
+`Slice::get_ref` returns a **local, stack-only** `Option<&T>` for an in-bounds element (same no-escape and root-owner shared-borrow rules as `Vec::get_ref` in Section 8.2). Negative or out-of-range indices yield `Option::None` instead of panicking. Method form `s.get_ref(i)` desugars to `Slice::get_ref`; fixed arrays may use `arr.get_ref(i)` or `Slice::get_ref(&arr, i)` via array-to-slice coercion. While the borrow is live, the root owner cannot be mutated or moved.
 
 #### 4.1.3 Tuple Values
 
@@ -1060,6 +1068,7 @@ Essential API (implemented; pseudocode notation: Ion has no `impl` blocks; these
 ```ion
 // String::new() -> String
 // String::from(s: &str) -> String
+// String::get(s: &String, index: int) -> Option<u8>
 // String::push_str(s: &mut String, other: &str)
 // String::push_byte(s: &mut String, b: u8)
 // String::len(s: &String) -> int
@@ -1072,6 +1081,7 @@ Note that:
 - String literals can be directly assigned to `String` type: `let s: String = "hello";`
 - The same literal coercion applies when a string literal is passed as a call argument to a parameter typed `String` (not only in `let` bindings).
 - `String::from()` creates a heap-allocated copy of a string literal.
+- `String::get()` returns `Option<u8>` for a byte at `index`. Negative or out-of-range indices yield `Option::None` (non-panicking complement to `s[i]`, which still aborts on OOB). The result is a by-value `u8` (copy); no lasting borrow is registered. Method form `s.get(i)` desugars to `String::get`.
 - `String::push_str()` appends a string literal or an owned `String` (reads the source buffer).
 - `String::push_byte()` appends a single byte to an existing `String`.
 - `==` and `!=` compare UTF-8 byte content (value equality), not pointer identity.

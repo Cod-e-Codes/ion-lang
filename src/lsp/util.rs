@@ -9,8 +9,8 @@ pub const KEYWORDS: &[&str] = &[
     "fn", "let", "mut", "struct", "enum", "if", "else", "return", "break", "continue", "while",
     "for", "in", "loop", "match", "spawn", "defer", "unsafe", "pub", "import", "extern", "type",
     "as", "true", "false", "int", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "uint",
-    "f32", "f64", "bool", "void", "String", "Vec", "Box", "Sender", "Receiver", "channel", "send",
-    "recv",
+    "f32", "f64", "bool", "void", "String", "Vec", "Box", "Slice", "Sender", "Receiver", "channel",
+    "send", "recv",
 ];
 
 pub const BUILTINS: &[&str] = &[
@@ -23,8 +23,10 @@ pub const BUILTINS: &[&str] = &[
     "Vec::get",
     "Vec::get_ref",
     "Vec::set",
+    "Slice::get_ref",
     "String::new",
     "String::from",
+    "String::get",
     "String::len",
     "String::push_str",
     "String::push_byte",
@@ -50,7 +52,11 @@ pub const BUILTIN_TYPE_MEMBERS: &[(&str, &[&str])] = &[
             "set",
         ],
     ),
-    ("String", &["new", "from", "len", "push_str", "push_byte"]),
+    (
+        "String",
+        &["new", "from", "get", "len", "push_str", "push_byte"],
+    ),
+    ("Slice", &["get_ref"]),
     ("Box", &["new", "unwrap"]),
     ("int", &["MIN", "MAX"]),
     ("i8", &["MIN", "MAX"]),

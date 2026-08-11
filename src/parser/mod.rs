@@ -2448,6 +2448,7 @@ impl Parser {
                 TokenKind::Box => "Box",
                 TokenKind::Vec => "Vec",
                 TokenKind::String => "String",
+                TokenKind::Slice => "Slice",
                 _ => "",
             };
 

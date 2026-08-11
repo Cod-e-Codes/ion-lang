@@ -87,7 +87,7 @@
                 },
                 {
                     "name": "storage.type.standard-library.ion",
-                    "match": "\\b(String|Box|Vec|channel|Sender|Receiver)\\b"
+                    "match": "\\b(String|Box|Vec|Slice|channel|Sender|Receiver)\\b"
                 }
             ]
         },

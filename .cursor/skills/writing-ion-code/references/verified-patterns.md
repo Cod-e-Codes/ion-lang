@@ -53,6 +53,10 @@ fn owned(s: String) -> int { return s.len(); }
 
 `Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). In `match Option::Some(x)`, `x` is `&T`: copy types bind by value; structs and enums with non-copy fields bind as a pointer. Inner `match x` on `&Enum` dispatches variants without deref. `Vec::set(&mut v, index, value)` returns `int` (0 = ok). Method syntax (`v.push(x)`, `v.get_ref(i)`) desugars to `Vec::` builtins with correct receiver borrows.
 
+`String::get(&s, i)` returns `Option<u8>` without panicking (negative/OOB are `None`). Prefer it over `s[i]` when the index may be invalid. There is no `String::get_ref` / escaping `as_str`; byte peeks stay by-value.
+
+`Slice::get_ref(&s, i)` mirrors `Vec::get_ref` for `&[]T` (and arrays via coercion): local `Option<&T>`, root-owner shared borrow while live (`arr[i] = ...` and whole-owner assign are rejected), `None` on OOB/negative. See [tests/test_slice_get_ref_scan.ion](../../../../tests/test_slice_get_ref_scan.ion), [tests/test_slice_get_ref_mut_error.ion](../../../../tests/test_slice_get_ref_mut_error.ion), and [tests/test_string_get.ion](../../../../tests/test_string_get.ion).
+
 ## Struct field mutation
 
 ```ion
@@ -205,7 +209,7 @@ fn main() -> int {
 
 ## Owned API boundaries
 
-At module exports and public functions, prefer owned results (`Vec<T>`, `String`, structs with owned fields) over borrowed views. Use `&T`, `&str`, and local `Option<&T>` from `Vec::get_ref` inside a single function only.
+At module exports and public functions, prefer owned results (`Vec<T>`, `String`, structs with owned fields) over borrowed views. Use `&T`, `&str`, and local `Option<&T>` from `Vec::get_ref` / `Slice::get_ref` inside a single function only.
 
 ## VM dispatch loop
 
@@ -220,10 +224,19 @@ let x: int = Box::unwrap(b);
 
 ## Arrays and slices
 
+Fixed arrays `[T; N]` and slices `[]T` / `&[]T` support bounds-checked indexing (panic on OOB). For non-panicking element access use `Slice::get_ref` (`Option<&T>`, local only), including after `&[T; N]` -> `&[]T` coercion. See [tests/test_slice_get_ref_from_array.ion](../../../../tests/test_slice_get_ref_from_array.ion).
+
 ```ion
 let arr: [int; 3] = [1, 2, 3];
+let s: &[]int = &arr;
+match Slice::get_ref(s, 1) {
+    Option::Some(x) => { /* x is int (copy) or &T for non-copy */ }
+    Option::None => {}
+};
+```
+
+```ion
 let fill: [u8; 4] = [0; 4];
-let s: &[]int = &arr;  // array-to-slice coercion via borrow
 let elem: int = arr[0];  // bounds checked unless unsafe
 ```
 
