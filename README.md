@@ -122,7 +122,7 @@ Source: [examples/hello_world_safe/hello_world_safe.ion](examples/hello_world_sa
 
 ### Advanced: Manual Transpile and Link
 
-For codegen inspection, integration test workflows, or debugging generated C, use `ion-compiler` directly (see [ION_SPEC.md section 10.1](ION_SPEC.md#101-project-build-ion-build)):
+For codegen inspection, integration test workflows, or debugging generated C, use `ion-compiler` directly (see [ION_SPEC.md section 10.1](ION_SPEC.md#101-project-build-ion-build)). The file passed to `ion-compiler` must define `fn main() -> int` (imported modules need not):
 
 ```bash
 ./target/release/ion-compiler examples/hello_world/hello_world.ion

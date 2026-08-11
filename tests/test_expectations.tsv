@@ -236,3 +236,6 @@ test_trait_bound_send_error.ion	error		TraitBoundNotSatisfied
 test_trait_bound_copy_error.ion	error		TraitBoundNotSatisfied
 test_trait_bound_eq_error.ion	error		TraitBoundNotSatisfied
 test_trait_bound_unknown_error.ion	error		UnknownTraitBound
+test_empty_file_error.ion	error		MissingMain
+test_no_main_error.ion	error		MissingMain
+test_match_stmt_no_semi.ion	run	1

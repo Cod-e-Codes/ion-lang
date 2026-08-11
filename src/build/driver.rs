@@ -90,6 +90,11 @@ fn type_check(
     if !errors.is_empty() {
         return Err(BuildError::TypeCheck(tc::format_type_errors(&errors)));
     }
+    if !compiler::program_has_entry_main(&merged) {
+        return Err(BuildError::TypeCheck(
+            "Error: MissingMain: program requires fn main() -> int".to_string(),
+        ));
+    }
     Ok(())
 }
 
