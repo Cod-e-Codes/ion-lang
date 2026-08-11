@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 - 2026-08-11
 
 - **CLI**: `ion-compiler --help` / `-h` prints usage and exits 0 (aligned with `ion-build`).
 - **Parser**: trailing `;` after a statement-form `match` is **optional** (ION_SPEC `match_stmt` needs none; existing `match { ... };` still parses). Rvalue `match` is unchanged.
