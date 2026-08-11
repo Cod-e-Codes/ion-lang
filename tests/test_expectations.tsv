@@ -74,6 +74,13 @@ test_vec_get_ref_nested.ion	run	0
 test_vec_get_ref_scan_nested_vec.ion	run	0			
 test_vec_get_ref_return_error.ion	error		ReferenceEscape		
 test_vec_get_ref_mut_error.ion	error		BorrowConflict		
+test_string_get.ion	run	0			
+test_string_get_method.ion	run	0			
+test_slice_get_ref_scan.ion	run	0			
+test_slice_get_ref_oob.ion	run	0			
+test_slice_get_ref_from_array.ion	run	0			
+test_slice_get_ref_return_error.ion	error		ReferenceEscape		
+test_slice_get_ref_mut_error.ion	error		BorrowConflict		
 test_vec_string_mangle.ion	run	0
 test_vec_string_mangle.ion	cgen			typedef struct Vec_String
 test_vec_push_mut_param.ion	run	0

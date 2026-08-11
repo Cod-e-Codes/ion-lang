@@ -1,0 +1,41 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let s: String = String::from("hi");
+    match String::get(&s, 0) {
+        Option::Some(b) => {
+            if b != 104 as u8 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    match String::get(&s, 1) {
+        Option::Some(b) => {
+            if b != 105 as u8 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    };
+    match String::get(&s, -1) {
+        Option::Some(_) => {
+            return 5;
+        }
+        Option::None => {}
+    };
+    match String::get(&s, 2) {
+        Option::Some(_) => {
+            return 6;
+        }
+        Option::None => {}
+    };
+    return 0;
+}

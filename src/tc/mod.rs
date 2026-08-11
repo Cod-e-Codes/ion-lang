@@ -713,8 +713,10 @@ impl TypeChecker {
             "Vec::get" => Some("fn Vec::get(vec: &Vec<T>, index: int) -> Option<T>"),
             "Vec::get_ref" => Some("fn Vec::get_ref(vec: &Vec<T>, index: int) -> Option<&T>"),
             "Vec::set" => Some("fn Vec::set(vec: &mut Vec<T>, index: int, value: T) -> int"),
+            "Slice::get_ref" => Some("fn Slice::get_ref(s: &[]T, index: int) -> Option<&T>"),
             "String::new" => Some("fn String::new() -> String"),
             "String::from" => Some("fn String::from(s: &str) -> String"),
+            "String::get" => Some("fn String::get(s: &String, index: int) -> Option<u8>"),
             "String::len" => Some("fn String::len(s: &String) -> int"),
             "String::push_str" => Some("fn String::push_str(s: &mut String, other: &str)"),
             "String::push_byte" => Some("fn String::push_byte(s: &mut String, b: u8)"),
@@ -930,8 +932,24 @@ impl TypeChecker {
                     mutable: false,
                 }))
             }
-            ("String", "String::len") => {
-                // String::len requires &String
+            ("Slice", "Slice::get_ref") => {
+                let elem_type = match receiver_type {
+                    Type::Slice { inner } => inner.clone(),
+                    Type::Ref { inner, .. } => match **inner {
+                        Type::Slice { ref inner } => inner.clone(),
+                        Type::Array { ref inner, .. } => inner.clone(),
+                        _ => return Ok(None),
+                    },
+                    Type::Array { inner, .. } => inner.clone(),
+                    _ => return Ok(None),
+                };
+                Ok(Some(Type::Ref {
+                    inner: Box::new(Type::Slice { inner: elem_type }),
+                    mutable: false,
+                }))
+            }
+            ("String", "String::len") | ("String", "String::get") => {
+                // String::len / String::get require &String
                 Ok(Some(Type::Ref {
                     inner: Box::new(Type::String),
                     mutable: false,
@@ -1033,7 +1051,12 @@ impl TypeChecker {
                     ));
                 }
                 // Allow reborrow: &mut T satisfies &T
-                if !types_equal(receiver_inner, required_inner) {
+                // Allow array-to-slice: &[T; N] satisfies &[]T for Slice methods.
+                let array_to_slice = matches!(
+                    (receiver_inner.as_ref(), required_inner.as_ref()),
+                    (Type::Array { inner: a, .. }, Type::Slice { inner: s }) if types_equal(a, s)
+                );
+                if !types_equal(receiver_inner, required_inner) && !array_to_slice {
                     return Err(TypeCheckError::TypeMismatch {
                         expected: type_to_string(required_type),
                         got: type_to_string(receiver_type),
@@ -1486,9 +1509,9 @@ impl TypeChecker {
                         self.register_borrow(&owner, ref_expr.mutable, span)?;
                     }
 
-                    // Shared borrow on vec owner while `Option<&T>` from `Vec::get_ref` is live.
+                    // Shared borrow on root owner while `Option<&T>` from get_ref is live.
                     if let Expr::Call(call) = init
-                        && call.callee == "Vec::get_ref"
+                        && (call.callee == "Vec::get_ref" || call.callee == "Slice::get_ref")
                         && call.args.len() == 2
                     {
                         self.register_get_ref_borrow_from_receiver(&call.args[0], let_stmt.span)?;
@@ -3946,6 +3969,11 @@ impl TypeChecker {
                     Expr::Index(index_expr) => {
                         // Array element assignment: arr[i] = value
                         // Check the base of the index expression to get the array type
+                        if let Some((owner, owner_span)) =
+                            self.borrow_owner_from_expr(&index_expr.target)
+                        {
+                            self.check_owner_not_borrowed(&owner, owner_span)?;
+                        }
                         let base_ty = self.check_expr(&index_expr.target)?;
                         let target_ty_str = type_to_string(&base_ty);
                         match base_ty {

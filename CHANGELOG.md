@@ -3,6 +3,7 @@
 ## 0.1.3 - 2026-08-11
 
 - **Language / type checker**: loop ownership uses structured reentry/exit edge snapshots (ION_SPEC §5.2). Move then `break`/`return` is allowed when there is no reentering path; after-loop state stays affine; exit-path disagreement errors at the loop join. Replaces the old "any move in a loop body" beta rule. Integration tests cover break/return/continue, while head-vs-break disagreement, and nested inner break.
+- **Builtins**: `String::get(&String, int) -> Option<u8>` (non-panicking byte peek) and `Slice::get_ref(&[]T, int) -> Option<&T>` (local borrow mirroring `Vec::get_ref`, including array coercion). `Slice` is a lexer keyword for `Slice::` qualification. Spec, skills, LSP completions, TextMate grammar, and integration tests updated.
 
 ## 0.1.2 - 2026-07-22
 

@@ -1239,6 +1239,79 @@ impl Codegen {
         ref_to_vec_elem(&inner_ty).cloned()
     }
 
+    pub(crate) fn slice_elem_type_from_arg(&self, arg: &IREexpr) -> Option<Type> {
+        let ty = match arg {
+            IREexpr::AddressOf { inner, .. } => self.infer_irexpr_type(inner)?,
+            _ => self.infer_irexpr_type(arg)?,
+        };
+        match ty {
+            Type::Slice { inner } => Some(*inner),
+            Type::Array { inner, .. } => Some(*inner),
+            Type::Ref { inner, .. } => match *inner {
+                Type::Slice { inner } => Some(*inner),
+                Type::Array { inner, .. } => Some(*inner),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// If `arg` is `&arr` for a fixed array, return (name, len, elem type).
+    pub(crate) fn slice_arg_as_array(&self, arg: &IREexpr) -> Option<(String, usize, Type)> {
+        let IREexpr::AddressOf { inner, .. } = arg else {
+            return None;
+        };
+        let IREexpr::Var(array_name) = inner.as_ref() else {
+            return None;
+        };
+        let var_ty = self.lookup_var_type(array_name)?;
+        let var_ty = resolve_type_alias(&var_ty, &self.type_aliases);
+        let Type::Array {
+            inner: array_elem,
+            size,
+        } = var_ty
+        else {
+            return None;
+        };
+        Some((array_name.clone(), size, (*array_elem).clone()))
+    }
+
+    /// From a generated C expression for a `&[]T` / `[]T` arg, return (base expr, uses_arrow).
+    pub(crate) fn slice_ion_access_from_code(
+        &self,
+        arg: &IREexpr,
+        slice_code: &str,
+    ) -> (String, bool) {
+        let stripped = slice_code.strip_prefix('&').unwrap_or(slice_code);
+        match arg {
+            IREexpr::Var(name) => {
+                let is_ref_slice = self.lookup_var_type(name).is_some_and(|ty| {
+                    matches!(ty, Type::Ref { inner, .. } if matches!(*inner, Type::Slice { .. }))
+                });
+                (stripped.to_string(), is_ref_slice)
+            }
+            IREexpr::AddressOf { inner, .. } => match inner.as_ref() {
+                IREexpr::Var(name) => {
+                    let is_ref_slice = self.lookup_var_type(name).is_some_and(|ty| {
+                        matches!(
+                            ty,
+                            Type::Ref { inner, .. } if matches!(*inner, Type::Slice { .. })
+                        )
+                    });
+                    if is_ref_slice {
+                        // `&s` where `s: &[]T` yields pointer-to-pointer; deref once to the slice value.
+                        (format!("(*{stripped})"), false)
+                    } else {
+                        // `&owned_slice` where owned is `[]T`: use the slice value.
+                        (stripped.to_string(), false)
+                    }
+                }
+                _ => (stripped.to_string(), true),
+            },
+            _ => (stripped.to_string(), true),
+        }
+    }
+
     pub(crate) fn resolve_vec_elem_c_type(
         &self,
         vec_arg: &IREexpr,
@@ -3619,84 +3692,74 @@ impl Codegen {
     }
 
     /// Resolve METHOD:: prefix to actual qualified method name
-    /// This infers the type from common patterns (Vec, String, etc.)
+    /// This infers the type from common patterns (Vec, String, Slice, etc.)
     fn resolve_method_call(&self, callee: &str, args: &[IREexpr]) -> String {
         if !callee.starts_with("METHOD::") {
             return callee.to_string();
         }
 
         let method_name = callee.strip_prefix("METHOD::").unwrap_or(callee);
+        let vec_methods = [
+            "push",
+            "pop",
+            "len",
+            "capacity",
+            "get",
+            "get_ref",
+            "set",
+            "with_capacity",
+        ];
+        let string_methods = ["push_str", "push_byte", "len", "get"];
 
-        // Try to infer receiver type from first argument
         if let Some(receiver) = args.first() {
-            // Check if receiver is a variable or field access that we can infer from
-            // For now, we'll check known method patterns
-            let vec_methods = [
-                "push",
-                "pop",
-                "len",
-                "capacity",
-                "get",
-                "get_ref",
-                "set",
-                "with_capacity",
-            ];
-            let string_methods = ["push_str", "push_byte", "len"];
-
-            if vec_methods.contains(&method_name) {
-                // Check if we have Vec types in generic_instantiations
-                if self
-                    .generic_instantiations
-                    .iter()
-                    .any(|(_, (base, _))| base == "Vec")
-                {
-                    return format!("Vec::{}", method_name);
-                }
-            }
-
-            if string_methods.contains(&method_name) {
-                // String methods
-                return format!("String::{}", method_name);
-            }
-
-            // Try to infer from receiver expression patterns
-            match receiver {
-                IREexpr::Var(_var_name) => {
-                    // We can't look up variable types here, but we can try common patterns
-                    // For now, fall back to checking if it's a known Vec/String method
-                    if vec_methods.contains(&method_name) {
-                        return format!("Vec::{}", method_name);
-                    }
-                    if string_methods.contains(&method_name) {
-                        return format!("String::{}", method_name);
-                    }
-                }
+            let receiver_ty = match receiver {
+                IREexpr::Var(name) => self.lookup_var_type(name),
+                IREexpr::AddressOf { inner, .. } => match inner.as_ref() {
+                    IREexpr::Var(name) => self.lookup_var_type(name),
+                    _ => None,
+                },
                 IREexpr::Call {
                     callee: inner_callee,
                     ..
                 } => {
-                    // If receiver is a call like Vec::new(), infer Vec
                     if inner_callee == "Vec::new" && vec_methods.contains(&method_name) {
-                        return format!("Vec::{}", method_name);
+                        return format!("Vec::{method_name}");
                     }
                     if inner_callee == "String::new" && string_methods.contains(&method_name) {
-                        return format!("String::{}", method_name);
+                        return format!("String::{method_name}");
                     }
+                    None
                 }
-                _ => {}
+                _ => None,
+            };
+            let receiver_is_string = match receiver_ty.as_ref() {
+                Some(Type::String) => true,
+                Some(Type::Ref { inner, .. }) => matches!(**inner, Type::String),
+                _ => false,
+            };
+            let receiver_is_slice = match receiver_ty.as_ref() {
+                Some(Type::Slice { .. } | Type::Array { .. }) => true,
+                Some(Type::Ref { inner, .. }) => {
+                    matches!(**inner, Type::Slice { .. } | Type::Array { .. })
+                }
+                _ => false,
+            };
+            if method_name == "get_ref" && receiver_is_slice {
+                return "Slice::get_ref".to_string();
+            }
+            if string_methods.contains(&method_name) && receiver_is_string {
+                return format!("String::{method_name}");
+            }
+            if vec_methods.contains(&method_name) && !receiver_is_string && !receiver_is_slice {
+                return format!("Vec::{method_name}");
             }
         }
 
-        // Fallback: try to infer from method name alone for built-in types
-        let vec_methods = ["push", "pop", "len", "capacity", "get", "get_ref", "set"];
-        let string_methods = ["push_str", "push_byte", "len"];
-
         if vec_methods.contains(&method_name) {
-            format!("Vec::{}", method_name)
+            format!("Vec::{method_name}")
         } else if string_methods.contains(&method_name) {
-            format!("String::{}", method_name)
+            format!("String::{method_name}")
         } else {
-            // Unknown method, return as-is (will likely error later)
             callee.to_string()
         }
     }
@@ -3763,7 +3826,7 @@ impl Codegen {
                 || callee == "METHOD::pop"
                 || callee == "METHOD::get";
 
-            if is_vec_pop_or_get || callee == "Vec::get_ref" {
+            if is_vec_pop_or_get || callee == "Vec::get_ref" || callee == "Slice::get_ref" {
                 if let Some(Type::Generic { name, params }) = return_type
                     && name == "Option"
                     && params.len() == 1
@@ -3771,20 +3834,43 @@ impl Codegen {
                     let mono_name = mangle_type_name("Option", params);
                     return (mono_name, params.clone());
                 }
-                if let Some(first_arg) = args.first()
-                    && let Some(elem_type) = self.vec_elem_type_from_arg(first_arg)
-                {
-                    if callee == "Vec::get_ref" {
-                        let ref_elem = Type::Ref {
-                            inner: Box::new(elem_type.clone()),
-                            mutable: false,
-                        };
-                        let mono_name = mangle_type_name("Option", std::slice::from_ref(&ref_elem));
-                        return (mono_name, vec![ref_elem]);
+                if let Some(first_arg) = args.first() {
+                    if callee == "Slice::get_ref" {
+                        if let Some(elem_type) = self.slice_elem_type_from_arg(first_arg) {
+                            let ref_elem = Type::Ref {
+                                inner: Box::new(elem_type.clone()),
+                                mutable: false,
+                            };
+                            let mono_name =
+                                mangle_type_name("Option", std::slice::from_ref(&ref_elem));
+                            return (mono_name, vec![ref_elem]);
+                        }
+                    } else if let Some(elem_type) = self.vec_elem_type_from_arg(first_arg) {
+                        if callee == "Vec::get_ref" {
+                            let ref_elem = Type::Ref {
+                                inner: Box::new(elem_type.clone()),
+                                mutable: false,
+                            };
+                            let mono_name =
+                                mangle_type_name("Option", std::slice::from_ref(&ref_elem));
+                            return (mono_name, vec![ref_elem]);
+                        }
+                        let mono_name =
+                            mangle_type_name("Option", std::slice::from_ref(&elem_type));
+                        return (mono_name, vec![elem_type]);
                     }
-                    let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem_type));
-                    return (mono_name, vec![elem_type]);
                 }
+            } else if callee == "String::get" {
+                if let Some(Type::Generic { name, params }) = return_type
+                    && name == "Option"
+                    && params.len() == 1
+                {
+                    let mono_name = mangle_type_name("Option", params);
+                    return (mono_name, params.clone());
+                }
+                let elem = Type::U8;
+                let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem));
+                return (mono_name, vec![elem]);
             } else if let Some(Type::Generic { name, params }) = return_type
                 && name == "Option"
                 && params.len() == 1
@@ -3848,9 +3934,13 @@ impl Codegen {
                 || callee.starts_with("ion_vec_pop")
                 || callee.starts_with("ion_vec_get");
 
-            // Stack-local Option<&T> from Vec::get_ref is assigned directly.
+            // Stack-local Option<&T> from get_ref / Option<u8> from String::get are assigned directly.
             let returns_heap_option = if let Some(Type::Generic { name, params }) = return_type {
-                name == "Option" && params.len() == 1 && !matches!(params[0], Type::Ref { .. })
+                name == "Option"
+                    && params.len() == 1
+                    && !matches!(params[0], Type::Ref { .. })
+                    && callee != "String::get"
+                    && callee != "METHOD::get"
             } else {
                 false
             };
@@ -5538,8 +5628,11 @@ fn collect_generic_from_expr(
                 let is_vec_option_call = callee == "Vec::pop"
                     || callee == "Vec::get"
                     || callee == "Vec::get_ref"
+                    || callee == "Slice::get_ref"
+                    || callee == "String::get"
                     || callee == "METHOD::pop"
-                    || callee == "METHOD::get";
+                    || callee == "METHOD::get"
+                    || callee == "METHOD::get_ref";
 
                 if is_vec_option_call {
                     // First try to get Option type from return_type if available
@@ -5551,12 +5644,12 @@ fn collect_generic_from_expr(
                         instantiations
                             .entry(option_key)
                             .or_insert_with(|| ("Option".to_string(), params.clone()));
-                    } else if callee == "Vec::get_ref" {
+                    } else if callee == "Vec::get_ref" || callee == "Slice::get_ref" {
                         if let Some(elem_type) =
                             instantiations
                                 .iter()
                                 .find_map(|(_mono_name, (base, params))| {
-                                    if base == "Vec" && params.len() == 1 {
+                                    if (base == "Vec" || base == "Slice") && params.len() == 1 {
                                         Some(params[0].clone())
                                     } else {
                                         None
@@ -5573,6 +5666,12 @@ fn collect_generic_from_expr(
                                 .entry(option_key)
                                 .or_insert_with(|| ("Option".to_string(), vec![ref_elem]));
                         }
+                    } else if callee == "String::get" {
+                        let option_key =
+                            mangle_type_name("Option", std::slice::from_ref(&Type::U8));
+                        instantiations
+                            .entry(option_key)
+                            .or_insert_with(|| ("Option".to_string(), vec![Type::U8]));
                     } else {
                         // Otherwise, extract element type from Vec<T> in instantiations
                         if let Some(elem_type) =

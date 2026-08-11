@@ -1098,24 +1098,39 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 "set",
                 "with_capacity",
             ];
-            let string_methods = ["push_str", "push_byte", "len"];
+            let string_methods = ["push_str", "push_byte", "len", "get"];
             let receiver_ty = ctx.resolve_expr_type(&method_call.receiver);
             let receiver_is_string = match receiver_ty.as_ref() {
                 Some(Type::String) => true,
                 Some(Type::Ref { inner, .. }) => matches!(**inner, Type::String),
                 _ => false,
             };
-            let is_vec = vec_methods.contains(&method_call.method.as_str()) && !receiver_is_string;
-            let callee = if is_vec {
+            let receiver_is_slice = match receiver_ty.as_ref() {
+                Some(Type::Slice { .. }) => true,
+                Some(Type::Ref { inner, .. }) => {
+                    matches!(**inner, Type::Slice { .. } | Type::Array { .. })
+                }
+                Some(Type::Array { .. }) => true,
+                _ => false,
+            };
+            let is_string =
+                string_methods.contains(&method_call.method.as_str()) && receiver_is_string;
+            let is_slice = method_call.method == "get_ref" && receiver_is_slice;
+            let is_vec = vec_methods.contains(&method_call.method.as_str())
+                && !receiver_is_string
+                && !is_slice;
+            let callee = if is_slice {
+                "Slice::get_ref".to_string()
+            } else if is_vec {
                 format!("Vec::{}", method_call.method)
-            } else if string_methods.contains(&method_call.method.as_str()) {
+            } else if is_string {
                 format!("String::{}", method_call.method)
             } else {
                 format!("METHOD::{}", method_call.method)
             };
             let mut expr_args: Vec<Expr> = vec![*method_call.receiver.clone()];
             expr_args.extend(method_call.args.iter().cloned());
-            let return_type = if is_vec {
+            let return_type = if is_slice || is_vec {
                 builtin_option_vec_return(&callee, &expr_args, ctx).or({
                     match method_call.method.as_str() {
                         "len" | "capacity" => Some(Type::Int),
@@ -1123,9 +1138,13 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                         _ => None,
                     }
                 })
-            } else if string_methods.contains(&method_call.method.as_str()) {
+            } else if is_string {
                 match method_call.method.as_str() {
                     "len" => Some(Type::Int),
+                    "get" => Some(Type::Generic {
+                        name: "Option".to_string(),
+                        params: vec![Type::U8],
+                    }),
                     "push_str" | "push_byte" => Some(Type::Void),
                     _ => None,
                 }
@@ -1150,9 +1169,15 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     method_call.method.as_str(),
                     "push" | "pop" | "set" | "with_capacity" | "push_str" | "push_byte"
                 );
-                IREexpr::AddressOf {
-                    inner: Box::new(build_expr_with_ctx(&method_call.receiver, ctx)),
-                    mutable,
+                // Already `&[]T` / `&String` / `&Vec<T>`: pass through without double-ref.
+                let already_ref = matches!(receiver_ty.as_ref(), Some(Type::Ref { .. }));
+                if already_ref {
+                    build_expr_with_ctx(&method_call.receiver, ctx)
+                } else {
+                    IREexpr::AddressOf {
+                        inner: Box::new(build_expr_with_ctx(&method_call.receiver, ctx)),
+                        mutable,
+                    }
                 }
             } else {
                 build_expr_with_ctx(&method_call.receiver, ctx)
@@ -1296,6 +1321,23 @@ fn vec_elem_type_from_arg_expr(arg: &Expr, ctx: &LoweringContext) -> Option<Type
     ref_to_vec_elem(&ty).cloned()
 }
 
+fn slice_elem_type_from_arg_expr(arg: &Expr, ctx: &LoweringContext) -> Option<Type> {
+    let ty = match arg {
+        Expr::Ref(r) => ctx.resolve_expr_type(&r.inner)?,
+        _ => ctx.resolve_expr_type(arg)?,
+    };
+    match &ty {
+        Type::Slice { inner } => Some((**inner).clone()),
+        Type::Array { inner, .. } => Some((**inner).clone()),
+        Type::Ref { inner, .. } => match inner.as_ref() {
+            Type::Slice { inner } => Some((**inner).clone()),
+            Type::Array { inner, .. } => Some((**inner).clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn builtin_option_vec_return(callee: &str, args: &[Expr], ctx: &LoweringContext) -> Option<Type> {
     if callee == "Vec::get_ref" {
         let elem = vec_elem_type_from_arg_expr(args.first()?, ctx)?;
@@ -1305,6 +1347,22 @@ fn builtin_option_vec_return(callee: &str, args: &[Expr], ctx: &LoweringContext)
                 inner: Box::new(elem),
                 mutable: false,
             }],
+        });
+    }
+    if callee == "Slice::get_ref" {
+        let elem = slice_elem_type_from_arg_expr(args.first()?, ctx)?;
+        return Some(Type::Generic {
+            name: "Option".to_string(),
+            params: vec![Type::Ref {
+                inner: Box::new(elem),
+                mutable: false,
+            }],
+        });
+    }
+    if callee == "String::get" {
+        return Some(Type::Generic {
+            name: "Option".to_string(),
+            params: vec![Type::U8],
         });
     }
     if callee != "Vec::get" && callee != "Vec::pop" {
@@ -1343,6 +1401,15 @@ fn infer_type_from_call(callee: &str, args: &[Expr]) -> Option<Type> {
     if callee == "String::from" && !args.is_empty() {
         // String::from(str: &str) -> String
         return Some(Type::String);
+    }
+    if callee == "String::get" {
+        return Some(Type::Generic {
+            name: "Option".to_string(),
+            params: vec![Type::U8],
+        });
+    }
+    if callee == "Slice::get_ref" {
+        return None; // needs context for T
     }
     // For other calls, we can't infer without type information
     None

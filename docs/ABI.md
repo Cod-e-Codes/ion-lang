@@ -23,9 +23,11 @@ iteration.
 
 Stable beta expectations:
 
-- `String::new`, `String::from`, `String::len`, `String::push_str`, and
+- `String::new`, `String::from`, `String::get`, `String::len`, `String::push_str`, and
   `String::push_byte` preserve ownership of the `String` receiver unless a
   function explicitly consumes it.
+- `String::get` returns a stack-local `Option<u8>` (by-value byte, or `None` on
+  negative/OOB index). It does not register a lasting borrow.
 - String literals in `let` bindings and at call sites for `String` parameters
   lower to `ion_string_from_literal` in generated C.
 - `String::push_str` appends string literals or owned `String` values (the
@@ -78,6 +80,11 @@ Stable beta expectations:
 Fixed arrays `[T; N]` are inline values. Slices `[]T` are fat views carrying a
 data pointer and length. Safe indexing emits runtime bounds checks; indexing
 inside `unsafe` blocks may omit those checks.
+
+- `Slice::get_ref` returns a stack-local `Option<&T>` the same way as
+  `Vec::get_ref` (pointer into the slice/array buffer, or `None` on OOB). The
+  root owner is shared-borrowed while the result is live. `&[T; N]` may coerce
+  to `&[]T` for this builtin.
 
 ## Enums and structs
 

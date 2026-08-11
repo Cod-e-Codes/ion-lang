@@ -73,6 +73,8 @@ impl TypeChecker {
                 // But for method lookup, we just use "Vec"
                 Ok(("Vec".to_string(), false, false))
             }
+            Type::Slice { .. } => Ok(("Slice".to_string(), false, false)),
+            Type::Array { .. } => Ok(("Slice".to_string(), false, false)),
             Type::String => Ok(("String".to_string(), false, false)),
             Type::Box { .. } => Ok(("Box".to_string(), false, false)),
             Type::Struct(name) => Ok((name.clone(), false, false)),

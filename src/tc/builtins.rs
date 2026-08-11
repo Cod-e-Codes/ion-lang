@@ -267,6 +267,37 @@ impl TypeChecker {
             });
         }
 
+        // Slice::get_ref<T>(s: &[]T, index: int) -> Option<&T>
+        if callee == "Slice::get_ref" {
+            if call_expr.args.len() != 2 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "2 arguments".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            self.check_integer_operand(&call_expr.args[1])?;
+
+            let elem_type = self.slice_elem_type_from_slice_arg(&call_expr.args[0]);
+
+            if let Some(elem_type) = elem_type {
+                let resolved_elem = self.resolve_type_name(&elem_type)?;
+                return Ok(Some(Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![Type::Ref {
+                        inner: Box::new(resolved_elem),
+                        mutable: false,
+                    }],
+                }));
+            }
+            let slice_ty = self.check_expr(&call_expr.args[0])?;
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "&[]T".to_string(),
+                got: type_to_string(&slice_ty),
+                span: call_expr.args[0].span(),
+            });
+        }
+
         // Vec::set<T>(vec: &mut Vec<T>, index: int, value: T) -> int
         if callee == "Vec::set" {
             if call_expr.args.len() != 3 {
@@ -372,6 +403,35 @@ impl TypeChecker {
             });
         }
 
+        // String::get(s: &String, index: int) -> Option<u8>
+        if callee == "String::get" {
+            if call_expr.args.len() != 2 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "2 arguments".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            self.check_integer_operand(&call_expr.args[1])?;
+            let str_ty = self.check_expr(&call_expr.args[0])?;
+            if let Type::Ref {
+                inner: ref inner_ty,
+                mutable: false,
+            } = str_ty
+                && let Type::String = **inner_ty
+            {
+                return Ok(Some(Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![Type::U8],
+                }));
+            }
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "&String".to_string(),
+                got: type_to_string(&str_ty),
+                span: call_expr.args[0].span(),
+            });
+        }
+
         // String::push_str(s: &mut String, other: &str)
         if callee == "String::push_str" {
             if call_expr.args.len() != 2 {
@@ -450,7 +510,7 @@ impl TypeChecker {
         Ok(None)
     }
 
-    /// Root owner binding for `Vec::get_ref(&owner, index)` (or `&owner.field`).
+    /// Root owner binding for `Vec::get_ref` / `Slice::get_ref` receivers (`&owner` or `&owner.field`).
     pub(crate) fn vec_owner_from_get_ref_receiver(
         &self,
         receiver: &Expr,
@@ -464,11 +524,12 @@ impl TypeChecker {
     pub(crate) fn is_get_ref_call(expr: &Expr) -> bool {
         matches!(
             expr,
-            Expr::Call(c) if c.callee == "Vec::get_ref" && c.args.len() == 2
+            Expr::Call(c) if (c.callee == "Vec::get_ref" || c.callee == "Slice::get_ref")
+                && c.args.len() == 2
         )
     }
 
-    /// Register a shared borrow on the vector owner while `Option<&T>` from `get_ref` is live.
+    /// Register a shared borrow on the root owner while `Option<&T>` from get_ref is live.
     pub(crate) fn register_get_ref_borrow_from_receiver(
         &mut self,
         receiver: &Expr,
@@ -479,7 +540,7 @@ impl TypeChecker {
         } else {
             let _ = self.check_expr(receiver)?;
             return Err(TypeCheckError::TypeMismatch {
-                expected: "&Vec<T>".to_string(),
+                expected: "&Vec<T> or &[]T with a local owner".to_string(),
                 got: "expression with a local owner".to_string(),
                 span,
             });
@@ -510,6 +571,22 @@ impl TypeChecker {
             return Some(*elem_type);
         }
         None
+    }
+
+    fn slice_elem_type_from_slice_arg(&mut self, arg: &Expr) -> Option<Type> {
+        let slice_ty = self.check_expr(arg).ok()?;
+        match slice_ty {
+            Type::Ref {
+                inner,
+                mutable: false,
+            } => match *inner {
+                Type::Slice { inner: elem } => Some(*elem),
+                // Array-to-slice coercion at call sites: `&[T; N]` accepted as `&[]T`.
+                Type::Array { inner: elem, .. } => Some(*elem),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     fn check_integer_operand(&mut self, expr: &Expr) -> Result<Type, TypeCheckError> {

@@ -1,0 +1,35 @@
+// Read-only scan via Slice::get_ref; array slots stay intact.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let products: [int; 3] = [100, 0, 50];
+    let mut count: int = 0;
+    let mut sum: int = 0;
+    let mut i: int = 0;
+    while i < 3 {
+        match Slice::get_ref(&products, i) {
+            Option::Some(price) => {
+                if price > 0 {
+                    count = count + 1;
+                    sum = sum + price;
+                } else {
+                }
+            }
+            Option::None => {}
+        };
+        i = i + 1;
+    }
+    if count != 2 {
+        return 1;
+    }
+    if sum != 150 {
+        return 2;
+    }
+    if products[0] != 100 {
+        return 3;
+    }
+    return 0;
+}

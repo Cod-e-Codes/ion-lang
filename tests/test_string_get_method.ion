@@ -1,0 +1,19 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let s: String = String::from("A");
+    match s.get(0) {
+        Option::Some(b) => {
+            if b != 65 as u8 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    return 0;
+}
