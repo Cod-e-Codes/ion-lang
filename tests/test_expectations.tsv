@@ -27,6 +27,9 @@ test_struct_enum_empty_drop.ion	run	45
 test_move_call_drop.ion	run	42			
 test_move_in_loop_ok.ion	run	42			
 test_move_in_loop_copy.ion	run	30			
+test_move_in_loop_break_ok.ion	run	7			
+test_move_in_loop_return_ok.ion	run	9			
+test_move_nested_loop_inner_break_ok.ion	run	3			
 test_scope_drop_elif.ion	run	0			
 test_channel_basic.ion	run	0			
 test_spawn_basic.ion	run	0			
@@ -164,6 +167,10 @@ test_struct_field_drop_vec.ion	run	46
 test_move_error.ion	error		UseAfterMove		
 test_move_in_loop.ion	error		UseAfterMove		
 test_move_in_loop_for.ion	error		UseAfterMove		
+test_move_in_loop_break_use_error.ion	error		UseAfterMove		
+test_move_in_loop_continue_error.ion	error		UseAfterMove		
+test_move_in_loop_break_disagree.ion	error		UseAfterMove		
+test_move_in_while_break_disagree.ion	error		UseAfterMove		
 test_move_channel_error.ion	error		UseAfterMove		
 test_ref_return_error.ion	error		ReferenceEscape		
 test_ref_return_error2.ion	error		ReferenceEscape\|TypeMismatch		

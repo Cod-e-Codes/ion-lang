@@ -1,0 +1,9 @@
+// Move then break leaves the binding Moved; later use is UseAfterMove.
+fn main() -> int {
+    let x = Box::new(7);
+    loop {
+        let _n = Box::unwrap(x);
+        break;
+    }
+    return Box::unwrap(x);
+}

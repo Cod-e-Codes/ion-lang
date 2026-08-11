@@ -83,6 +83,9 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_move_call_drop.ion` - No double-drop when String is moved into a function call
 - `test_move_in_loop_ok.ion` - Borrowing a non-copy value across loop iterations (no move in body)
 - `test_move_in_loop_copy.ion` - Fresh copy-type bindings each loop iteration (exit 30)
+- `test_move_in_loop_break_ok.ion` - Move then break with no later use (exit 7)
+- `test_move_in_loop_return_ok.ion` - Move then return inside a loop (exit 9)
+- `test_move_nested_loop_inner_break_ok.ion` - Inner break after move does not exit-snapshot the outer loop (exit 3)
 - `test_scope_drop_elif.ion` - Vec drop inside an else-if branch
 - `test_channel_basic.ion` - Channel operations
 - `test_channel_contention.ion` - Four producer spawns, one channel each; sum exit 73
@@ -284,8 +287,12 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors
-- `test_move_in_loop.ion` - Use-after-move when a non-copy value is moved inside a loop body
-- `test_move_in_loop_for.ion` - Same rule for `for` loops (outer binding moved in body)
+- `test_move_in_loop.ion` - Use-after-move when a non-copy value is moved on a reentering loop path
+- `test_move_in_loop_for.ion` - Same reentry rule for `for` loops (outer binding moved in body)
+- `test_move_in_loop_break_use_error.ion` - Move then break, then use after the loop
+- `test_move_in_loop_continue_error.ion` - Move then continue (reentry)
+- `test_move_in_loop_break_disagree.ion` - Break paths disagree on ownership at loop exit join
+- `test_move_in_while_break_disagree.ion` - while head Valid vs break Moved at loop exit join
 - `test_move_channel_error.ion` - Use-after-move on channel receivers
 - `test_ref_return_error.ion` - Reference escape errors
 - `test_ref_return_error2.ion` - Additional reference escape errors

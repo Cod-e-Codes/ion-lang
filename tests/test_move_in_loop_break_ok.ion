@@ -1,0 +1,10 @@
+// Move then break is OK when there is no later use (after-state is Moved).
+fn main() -> int {
+    let x = Box::new(7);
+    let mut result = 0;
+    loop {
+        result = Box::unwrap(x);
+        break;
+    }
+    return result;
+}

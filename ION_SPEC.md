@@ -739,6 +739,14 @@ Whether a move is implemented as a copy is an implementation detail. The `Copy` 
 
 After an `if` statement, ownership is merged from branches that can reach the following code. Branches that always `return`, `break`, or `continue` are omitted from the merge. If two fall-through paths disagree on whether a binding is still valid, the compiler reports an error.
 
+After a `while`, `loop`, or `for` statement, ownership uses the same join lattice on structured edge snapshots (not a full CFG):
+
+- **Reentry** (back-edge): contributors are body fall-through and `continue`. A binding that is valid at loop entry must stay valid on every reentry contributor; otherwise the compiler reports an error at the loop.
+- **Exit** (after the loop): for `while`/`for`, contributors are the loop-head state (ordinary condition-false / zero-trip exit) plus every `break` snapshot; for `loop`, contributors are `break` snapshots only. Disagreeing exit contributors report an error at the loop exit join. A `return` inside a loop is checked normally and does not contribute to reentry or exit joins.
+- After a loop that exits only via `break` after moving a binding, that binding is moved for later code (use-after-move remains an error).
+
+Beta limitations that remain are precision under-approximations of this join model, not a second ownership thesis. Section 11 exclusions reject features that would force GC, richer lifetimes, or heavy runtime machinery; they are separate from checker precision.
+
 #### 5.3 Borrowing
 
 References provide scoped, non-owning access:
@@ -1247,7 +1255,7 @@ stronger contract.
 - Trait bounds are limited to built-in `Copy`, `Eq`, and `Send` (no user-defined traits)
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - `if`/`else` merge: ownership after an `if` is merged from branches that can fall through to the following code. A move in a branch that always `return`s, `break`s, or `continue`s does not block use after the `if`. If two fall-through paths disagree (one moved, one valid), it is still an error.
-- `while`/`for` loops: a non-copy variable moved anywhere in the loop body is an error (repeated iteration would need the binding again); copy types and borrows are unchanged. For read-only scans over an owned `Vec<T>`, prefer `Vec::get_ref` (Section 8.2) or index/handle helpers; `Vec::get` move-out still requires consume-once or put-back per iteration.
+- Loop ownership uses structured reentry/exit joins (Section 5.2). Remaining conservatism is AST-structured analysis without a full CFG (for example nested unstructured control flow may still under-approximate). For read-only scans over an owned `Vec<T>`, prefer `Vec::get_ref` (Section 8.2) or index/handle helpers; `Vec::get` move-out still requires consume-once or put-back per iteration when the body reenters.
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (signature hover only)
 - LSP go-to-definition for type names in type annotations (no source spans on `Type` AST nodes)

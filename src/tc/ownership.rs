@@ -1,6 +1,149 @@
 use super::*;
 
+/// Join ownership states from reachable control-flow edges (ION_SPEC §5.2).
+/// Empty `states` is a caller error; prefer skipping the join when no edges reach.
+pub(crate) fn join_ownership_states(
+    states: &[OwnershipState],
+    name: &str,
+    span: Span,
+) -> Result<OwnershipState, TypeCheckError> {
+    if states.is_empty() {
+        return Ok(OwnershipState::Valid);
+    }
+    if states.iter().all(|s| *s == OwnershipState::Valid) {
+        Ok(OwnershipState::Valid)
+    } else if states.iter().all(|s| *s == OwnershipState::Moved) {
+        Ok(OwnershipState::Moved)
+    } else {
+        Err(TypeCheckError::UseAfterMove {
+            name: name.to_string(),
+            span,
+        })
+    }
+}
+
 impl TypeChecker {
+    pub(crate) fn push_loop_ownership_frame(&mut self) {
+        let entry_states = self
+            .variables
+            .iter()
+            .map(|(name, info)| (name.clone(), info.state))
+            .collect();
+        self.loop_frames.push(LoopOwnershipFrame {
+            entry_states,
+            continue_snaps: Vec::new(),
+            break_snaps: Vec::new(),
+        });
+    }
+
+    pub(crate) fn pop_loop_ownership_frame(&mut self) -> Option<LoopOwnershipFrame> {
+        self.loop_frames.pop()
+    }
+
+    fn snapshot_loop_entry_ownership(&self) -> HashMap<String, OwnershipState> {
+        let Some(frame) = self.loop_frames.last() else {
+            return HashMap::new();
+        };
+        frame
+            .entry_states
+            .keys()
+            .map(|name| {
+                let state = self
+                    .variables
+                    .get(name)
+                    .map(|info| info.state)
+                    .unwrap_or(OwnershipState::Moved);
+                (name.clone(), state)
+            })
+            .collect()
+    }
+
+    pub(crate) fn record_loop_break_snapshot(&mut self) {
+        let snap = self.snapshot_loop_entry_ownership();
+        if let Some(frame) = self.loop_frames.last_mut() {
+            frame.break_snaps.push(snap);
+        }
+    }
+
+    pub(crate) fn record_loop_continue_snapshot(&mut self) {
+        let snap = self.snapshot_loop_entry_ownership();
+        if let Some(frame) = self.loop_frames.last_mut() {
+            frame.continue_snaps.push(snap);
+        }
+    }
+
+    /// Validate reentry edges, then join exit edges into `before` for the env after the loop.
+    pub(crate) fn finish_loop_ownership(
+        &self,
+        before: &HashMap<String, VariableInfo>,
+        body: &Block,
+        body_env: &HashMap<String, VariableInfo>,
+        frame: &LoopOwnershipFrame,
+        include_condition_false_exit: bool,
+        span: Span,
+    ) -> Result<HashMap<String, VariableInfo>, TypeCheckError> {
+        // Reentry: body fall-through + continue snapshots.
+        let mut reentry_snaps: Vec<HashMap<String, OwnershipState>> = frame.continue_snaps.clone();
+        if block_falls_through(body) {
+            let mut fall_through = HashMap::new();
+            for name in frame.entry_states.keys() {
+                let state = body_env
+                    .get(name)
+                    .map(|info| info.state)
+                    .unwrap_or(OwnershipState::Moved);
+                fall_through.insert(name.clone(), state);
+            }
+            reentry_snaps.push(fall_through);
+        }
+
+        for (name, entry_state) in &frame.entry_states {
+            if *entry_state != OwnershipState::Valid {
+                continue;
+            }
+            for snap in &reentry_snaps {
+                let state = snap.get(name).copied().unwrap_or(*entry_state);
+                if state != OwnershipState::Valid {
+                    return Err(TypeCheckError::UseAfterMove {
+                        name: name.clone(),
+                        span,
+                    });
+                }
+            }
+        }
+
+        // Exit join: while/for use loop-head (condition-false) + breaks; loop uses breaks only.
+        let mut merged = before.clone();
+        for (name, prev_info) in before.iter() {
+            let mut exit_states: Vec<OwnershipState> = Vec::new();
+            if include_condition_false_exit {
+                exit_states.push(
+                    frame
+                        .entry_states
+                        .get(name)
+                        .copied()
+                        .unwrap_or(prev_info.state),
+                );
+            }
+            for snap in &frame.break_snaps {
+                exit_states.push(snap.get(name).copied().unwrap_or(prev_info.state));
+            }
+
+            let merged_state = if exit_states.is_empty() {
+                prev_info.state
+            } else {
+                join_ownership_states(&exit_states, name, span)?
+            };
+
+            if let Some(info) = merged.get_mut(name) {
+                info.state = merged_state;
+                info.shared_borrow_count = prev_info.shared_borrow_count;
+                info.mut_borrow_count = prev_info.mut_borrow_count;
+            }
+        }
+
+        Ok(merged)
+    }
+
     pub(crate) fn push_borrow_scope(&mut self) {
         self.borrow_scopes.push(Vec::new());
     }

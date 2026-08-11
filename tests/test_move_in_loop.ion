@@ -1,5 +1,4 @@
-// Moving a non-copy value inside a loop body is rejected: a second iteration
-// would need the binding again.
+// Moving a non-copy value on a path that can reenter the loop is rejected.
 fn consume(b: Box<int>) -> int {
     return Box::unwrap(b);
 }
