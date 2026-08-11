@@ -1,0 +1,21 @@
+fn f(a: int) -> int {
+    return a;
+}
+
+fn g() -> int {
+    return 1;
+}
+
+fn main() -> int {
+    let x: int = 3;
+    if 5 < x {
+        f(x);
+    }
+    if 5 <= x {
+        g();
+    }
+    if x < 5 {
+        f(x);
+    }
+    return 0;
+}

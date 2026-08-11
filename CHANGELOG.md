@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fix**: `if 5 < x { f(x); }` (literal on the left of `<`/`<=`, function call in the body) no longer misparses as a struct literal. Struct-vs-block lookahead after `{` requires `name:` for fields, so calls like `f(` stay block statements.
+
 ## 0.1.5 - 2026-08-11
 
 - **CLI**: `ion-compiler --help` / `-h` prints usage and exits 0 (aligned with `ion-build`).
