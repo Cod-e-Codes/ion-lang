@@ -1161,6 +1161,17 @@ impl Parser {
                 let stmt = self.parse_unsafe_block()?;
                 Ok(Stmt::UnsafeBlock(stmt))
             }
+            TokenKind::Match => {
+                // Statement-form match (ION_SPEC match_stmt): trailing `;` is optional
+                // so both `match { ... }` and legacy `match { ... };` parse.
+                let match_expr = self.parse_match_expr()?;
+                if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Semicolon) {
+                    let _ = self.advance();
+                }
+                Ok(Stmt::Expr(ExprStmt {
+                    expr: Expr::Match(match_expr),
+                }))
+            }
             _ => {
                 let expr = self.parse_expr()?;
                 self.expect(TokenKind::Semicolon)?;

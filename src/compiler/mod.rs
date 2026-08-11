@@ -19,6 +19,7 @@ pub enum CompileError {
     ImportCycle { path: PathBuf },
     FileNotFound { path: PathBuf },
     IoError(String),
+    InvalidUtf8 { path: PathBuf, valid_up_to: usize },
 }
 
 impl std::fmt::Display for CompileError {
@@ -26,12 +27,25 @@ impl std::fmt::Display for CompileError {
         match self {
             CompileError::ParseError(err) => write!(f, "{}", err),
             CompileError::ImportCycle { path } => {
-                write!(f, "import cycle detected involving {:?}", path)
+                write!(f, "import cycle detected involving {}", path.display())
             }
-            CompileError::FileNotFound { path } => write!(f, "file not found: {:?}", path),
+            CompileError::FileNotFound { path } => {
+                write!(f, "file not found: {}", path.display())
+            }
             CompileError::IoError(msg) => write!(f, "IO error: {}", msg),
+            CompileError::InvalidUtf8 { path, valid_up_to } => write!(
+                f,
+                "invalid UTF-8 in source file {} (at byte {})",
+                path.display(),
+                valid_up_to
+            ),
         }
     }
+}
+
+/// True when the merged program defines an entry point named `main`.
+pub fn program_has_entry_main(program: &Program) -> bool {
+    program.functions.iter().any(|f| f.name == "main")
 }
 
 impl Compiler {
@@ -93,9 +107,17 @@ impl Compiler {
         // Mark as visiting
         self.visiting.insert(canonical_path.clone());
 
-        // Read file
-        let content = std::fs::read_to_string(&canonical_path).map_err(|e| {
-            CompileError::IoError(format!("Failed to read file {:?}: {}", canonical_path, e))
+        // Read file as bytes, then decode UTF-8 (clear error; avoid Debug path noise).
+        let bytes = std::fs::read(&canonical_path).map_err(|e| {
+            CompileError::IoError(format!(
+                "Failed to read file {}: {}",
+                canonical_path.display(),
+                e
+            ))
+        })?;
+        let content = String::from_utf8(bytes).map_err(|e| CompileError::InvalidUtf8 {
+            path: path.to_path_buf(),
+            valid_up_to: e.utf8_error().valid_up_to(),
         })?;
 
         // Lex

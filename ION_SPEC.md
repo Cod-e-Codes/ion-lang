@@ -436,9 +436,12 @@ primary_expr     = identifier
                  | enum_lit
                  | array_lit
                  | fn_literal
+                 | match_expr
                  | send_expr
                  | recv_expr
                  | channel_expr ;
+
+match_expr       = "match" , expr , "{" , { match_arm } , "}" ;
 
 send_expr        = "send" , "(" , expr , "," , expr , ")" ;
 recv_expr        = "recv" , "(" , expr , ")" ;
@@ -760,7 +763,7 @@ Beta limitations that remain are precision under-approximations of this join mod
 References provide scoped, non-owning access:
 
 - `&T` – shared borrow, read-only.
-- `&mut T` – exclusive borrow, read-write.
+- `&mut T` – exclusive borrow. Mutation through `&mut` is supported for **struct field paths** on an `&mut Struct` receiver and for **callee parameters** of type `&mut T` (for example `Vec::push`, `recv`). There is no unary `*` and no assign-through a bound scalar reference such as `let r: &mut int = &mut x; r = 1;`. Write the owner (or a field) directly and let the borrow checker reject conflicts while a lasting borrow is live.
 
 Borrowing does **not** change ownership: the owner remains responsible for destruction. Borrows are created with:
 
@@ -1208,7 +1211,7 @@ Manifest discovery walks upward from the current directory for a file named `ion
 
 **Runtime and stdlib discovery:** `ion-build` locates `runtime/ion_runtime.h` by walking upward from the project root, then from the current working directory if needed. Stdlib search paths walk upward from the project root (see below) and also check install-relative `stdlib/` next to the compiler executable. A build fails with `runtime/ion_runtime.h not found` when neither walk finds a `runtime/` directory; keep the project under a tree that contains `runtime/` and `stdlib/` (repo root or an unpacked release archive).
 
-`ion-compiler` remains available for codegen inspection, LSP internals, and integration tests that grep `.c` output. It does not require `ion.toml`.
+`ion-compiler` remains available for codegen inspection, LSP internals, and integration tests that grep `.c` output. It does not require `ion.toml`. The input must be a **program entry file** that defines `fn main() -> int` (after imports are merged); helper-only modules are compiled as imports of that entry, not as standalone `ion-compiler` inputs.
 
 **`ion.toml` fields (tooling, not language semantics):**
 

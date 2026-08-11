@@ -68,7 +68,7 @@ fn step(vm: &mut VM) {
 }
 ```
 
-Field paths are valid assignment targets on owned structs and `&mut` parameters.
+Field paths are valid assignment targets on owned structs and `&mut` parameters. There is no unary `*` and no assign-through a bound scalar `&mut int` (or other primitive reference): mutate via a field path on `&mut Struct`, a callee that takes `&mut T`, or a direct write to the owner while no conflicting borrow is live. See [tests/test_field_assign_plus.ion](../../../../tests/test_field_assign_plus.ion) and [tests/test_slice_get_ref_mut_error.ion](../../../../tests/test_slice_get_ref_mut_error.ion).
 
 ## Ownership move
 

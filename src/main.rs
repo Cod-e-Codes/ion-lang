@@ -4,6 +4,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
+fn print_usage() {
+    eprintln!("Usage: ion-compiler [--mode <single|multi>] [--output <name>] <input.ion>");
+    eprintln!("       ion-compiler --version");
+    eprintln!("       ion-compiler --help");
+    eprintln!("Compiles an Ion program entry file (must define fn main) to C code.");
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -12,10 +19,13 @@ fn main() {
         return;
     }
 
+    if args.len() >= 2 && (args[1] == "--help" || args[1] == "-h") {
+        print_usage();
+        return;
+    }
+
     if args.len() < 2 {
-        eprintln!("Usage: ion-compiler [--mode <single|multi>] [--output <name>] <input.ion>");
-        eprintln!("       ion-compiler --version");
-        eprintln!("Compiles an Ion source file to C code.");
+        print_usage();
         process::exit(1);
     }
 
@@ -27,6 +37,10 @@ fn main() {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "--help" | "-h" => {
+                print_usage();
+                return;
+            }
             "--mode" => {
                 if i + 1 < args.len() {
                     mode = args[i + 1].clone();
@@ -51,6 +65,7 @@ fn main() {
             }
             _ => {
                 eprintln!("Error: Unexpected argument: {}", args[i]);
+                print_usage();
                 process::exit(1);
             }
         }
@@ -87,6 +102,11 @@ fn main() {
     let (_result, errors) = checker.check_program_collecting(&merged_program);
     if !errors.is_empty() {
         eprintln!("{}", tc::format_type_errors(&errors));
+        process::exit(1);
+    }
+
+    if !compiler::program_has_entry_main(&merged_program) {
+        eprintln!("Error: MissingMain: program requires fn main() -> int");
         process::exit(1);
     }
 

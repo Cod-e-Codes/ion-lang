@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **CLI**: `ion-compiler --help` / `-h` prints usage and exits 0 (aligned with `ion-build`).
+- **Parser**: trailing `;` after a statement-form `match` is **optional** (ION_SPEC `match_stmt` needs none; existing `match { ... };` still parses). Rvalue `match` is unchanged.
+- **Driver**: `ion-compiler` and `ion-build` reject programs with no `fn main` after merge (empty or helper-only entry files fail with `MissingMain` instead of claiming a successful compile).
+- **Diagnostics**: invalid UTF-8 source fails at the file-read site with a clear path and byte offset (no Debug-formatted path noise).
+- **Docs**: ION_SPEC §5.3 and skills clarify that scalar `&mut` write-through is unsupported; mutate via `&mut Struct` fields, `&mut` callee parameters, or owner writes under the borrow checker.
+
 ## 0.1.4 - 2026-08-11
 
 - **Builtins**: `String::get(&String, int) -> Option<u8>` (non-panicking byte peek) and `Slice::get_ref(&[]T, int) -> Option<&T>` (local borrow mirroring `Vec::get_ref`, including array coercion). `Slice` is a lexer keyword for `Slice::` qualification. Indexed writes on a root owner conflict with a live `get_ref` borrow. Spec, skills, LSP completions, TextMate grammar, and integration tests updated.
