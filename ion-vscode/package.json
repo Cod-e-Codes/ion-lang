@@ -2,7 +2,7 @@
     "name": "ion-language",
     "displayName": "Ion Language",
     "description": "Language support for Ion",
-    "version": "0.1.2",
+    "version": "0.1.4",
     "engines": {
         "vscode": "^1.75.0"
     },
