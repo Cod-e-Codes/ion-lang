@@ -278,6 +278,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_empty_file_error.ion` - empty entry file rejected (`MissingMain`)
 - `test_no_main_error.ion` - helper-only entry file rejected (`MissingMain`)
 - `test_match_stmt_no_semi.ion` - statement-form `match` without trailing `;`
+- `test_lt_literal_lhs_with_call.ion` - `if 5 < x { f(x); }` / `<=` parse correctly (not struct-lit)
 - `test_io_print_int.ion` - `io::print_int` decimal output
 - `test_fmt_int_to_string.ion` - `fmt::int_to_string` decimal output (`0`, positive, negative, `int::MIN`)
 - `test_fmt_println_int.ion` - `fmt::println_int` via stdlib merge; codegen uses `io_print_int` in `fmt_print_int`

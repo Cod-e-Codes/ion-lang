@@ -2842,13 +2842,13 @@ impl Parser {
                             | TokenKind::Spawn
                             | TokenKind::Unsafe => true,
                             TokenKind::Ident(_) => {
-                                // `name = expr` or `name += expr` is a statement, not a struct field
+                                // Struct fields are `name: expr`. Calls (`f(`), assigns
+                                // (`x =`), etc. belong to a block body, not a struct lit.
+                                // Without this, `if 5 < x { f(x); }` misparses `x { f(...`
+                                // as a struct literal after the comparison.
                                 let after_ident = token_after_brace_idx + 1;
-                                after_ident < self.tokens.len()
-                                    && matches!(
-                                        self.tokens[after_ident].kind,
-                                        TokenKind::Equals | TokenKind::PlusEquals
-                                    )
+                                after_ident >= self.tokens.len()
+                                    || !matches!(self.tokens[after_ident].kind, TokenKind::Colon)
                             }
                             _ => false,
                         }
