@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.13 - 2026-08-12
 
 - **IR / Codegen**: unannotated `let n = Box::unwrap(boxed)` types `n` as `T` (for example `Node`), not default `int`. Annotated `let n: Node = ...` already lowered correctly.
 
