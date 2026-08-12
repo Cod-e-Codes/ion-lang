@@ -5,6 +5,8 @@
 - **Use-after-move**: moved values in branches, loop bodies, struct field partial move
 - **Reference escape**: `&` stored in struct, returned, sent on channel, captured by `spawn`
 - **Send**: non-Send types on channels or in spawn closures; `Box` and channel element variance
+- **Match on `&GenericEnum`**: peel `Ref` before building the type-param subst map in `add_pattern_bindings` (see `test_match_ref_generic_enum_arith.ion`); bare `if let Type::Generic` misses `Ref { Generic { … } }` and leaves bindings as `&T`
+- **`resolve_type_name` and `&Enum` params**: must recurse into `Ref` so `&Flag` becomes `Ref { Enum }` (parser stores enum names as `Struct`); otherwise calls get `expected &Flag, got &Flag` from Struct vs Enum mismatch
 - **MethodCall vs Call**: parser emits `Expr::MethodCall`; tc/IR/cgen must handle both
 - **Module visibility**: `pub` vs private across `import`
 

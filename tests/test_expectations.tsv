@@ -50,8 +50,11 @@ test_match_complex.ion	run	10
 test_generic_types.ion	run	0			
 test_box_basic.ion	run	0			
 test_vec_basic.ion	run	0			
-test_enum_generic.ion	run	0			
-test_generic_struct.ion	run	0			
+test_enum_generic.ion	run	0
+test_match_ref_generic_enum_arith.ion	run	55
+test_match_ref_generic_enum_arith.ion	cgen			Status_int match_val_0 = *s
+test_match_ref_generic_enum_arith.ion	cgen			Flag match_val_1 = *f
+test_generic_struct.ion	run	0
 test_string_from.ion	run	0
 test_string_call_arg_literal.ion	run	0			
 test_box_ops.ion	run	0			

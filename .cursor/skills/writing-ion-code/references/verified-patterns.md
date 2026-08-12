@@ -51,7 +51,7 @@ fn owned(s: String) -> int { return s.len(); }
 // owned("hello") is valid; literals coerce to owned String at call sites too.
 ```
 
-`Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). In `match Option::Some(x)`, `x` is `&T`: copy types bind by value; structs and enums with non-copy fields bind as a pointer. Inner `match x` on `&Enum` dispatches variants without deref. `Vec::set(&mut v, index, value)` returns `int` (0 = ok). Method syntax (`v.push(x)`, `v.get_ref(i)`) desugars to `Vec::` builtins with correct receiver borrows.
+`Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). In `match Option::Some(x)`, `x` is `&T`: copy types bind by value; structs and enums with non-copy fields bind as a pointer. Inner `match x` on `&Enum` dispatches variants without deref. Matching `&UserEnum<Concrete>` substitutes type parameters into arm bindings the same way as an owned match ([tests/test_match_ref_generic_enum_arith.ion](../../../../tests/test_match_ref_generic_enum_arith.ion)). `Vec::set(&mut v, index, value)` returns `int` (0 = ok). Method syntax (`v.push(x)`, `v.get_ref(i)`) desugars to `Vec::` builtins with correct receiver borrows.
 
 `String::get(&s, i)` returns `Option<u8>` without panicking (negative/OOB are `None`). Prefer it over `s[i]` when the index may be invalid. There is no `String::get_ref` / escaping `as_str`; byte peeks stay by-value.
 

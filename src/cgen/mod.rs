@@ -1193,6 +1193,35 @@ impl Codegen {
         self.lookup_var_type(name).as_ref().is_some_and(pointee)
     }
 
+    /// True when matching through `&Enum` / `&GenericEnum` (including parser
+    /// `Struct("Name")` for enum names that have not been rewritten to `Enum`).
+    fn is_ref_to_enum_scrutinee(
+        scrutinee_type: Option<&Type>,
+        is_enum_name: impl Fn(&str) -> bool,
+    ) -> bool {
+        match scrutinee_type {
+            Some(Type::Ref { inner, .. }) => match inner.as_ref() {
+                Type::Enum(_) | Type::Generic { .. } => true,
+                Type::Struct(name) => is_enum_name(name),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Whether match codegen must deref-copy the scrutinee (`T x = *p`).
+    /// Prefer the live binding type for `Var`s: `Vec::get_ref` copy payloads are
+    /// bound as owned `T` in C even when the Ion match still sees `&T`.
+    fn match_scrutinee_needs_deref(&self, expr: &IREexpr, scrutinee_type: Option<&Type>) -> bool {
+        let is_enum = |name: &str| self.enum_map.contains_key(name);
+        if let IREexpr::Var(name) = expr
+            && let Some(ty) = self.lookup_var_type(name)
+        {
+            return Self::is_ref_to_enum_scrutinee(Some(&ty), is_enum);
+        }
+        Self::is_ref_to_enum_scrutinee(scrutinee_type, is_enum)
+    }
+
     /// C expression for `ion_vec_t*` from a `&Vec<T>`, `&mut Vec<T>`, or owned `Vec<T>` IR arg.
     pub(crate) fn vec_ion_ptr_expr(&self, arg: &IREexpr, vec_code: &str) -> String {
         let stripped = vec_code.strip_prefix('&').unwrap_or(vec_code);
@@ -3055,13 +3084,7 @@ impl Codegen {
                         &match_var_name,
                         expr,
                     );
-                } else if matches!(
-                    scrutinee_type,
-                    Some(Type::Ref {
-                        inner,
-                        ..
-                    }) if matches!(**inner, Type::Enum(_))
-                ) {
+                } else if self.match_scrutinee_needs_deref(expr, scrutinee_type.as_ref()) {
                     self.write(&format!(
                         "{} {} = *",
                         monomorphized_enum_name, match_var_name
@@ -3985,13 +4008,7 @@ impl Codegen {
                 &match_var_name,
                 expr,
             );
-        } else if matches!(
-            scrutinee_type,
-            Some(Type::Ref {
-                inner,
-                ..
-            }) if matches!(**inner, Type::Enum(_))
-        ) {
+        } else if self.match_scrutinee_needs_deref(expr, scrutinee_type) {
             self.write(&format!(
                 "{} {} = *",
                 monomorphized_enum_name, match_var_name

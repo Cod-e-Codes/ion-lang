@@ -4733,9 +4733,14 @@ impl TypeChecker {
             } => {
                 // Find the variant and add bindings for its payloads
                 if let Some(variant_decl) = enum_decl.variants.iter().find(|v| v.name == *variant) {
-                    // Build substitution map for generic parameters
-                    let substitutions = if let Type::Generic { name: _, params } = expr_ty {
-                        // Map enum generic parameter names to concrete types
+                    // Build substitution map for generic parameters. Match through
+                    // &Status<int> passes Ref { Generic { ... } }; peel Ref so T
+                    // substitutes to int (owned Generic already matches directly).
+                    let concrete_enum_ty = match expr_ty {
+                        Type::Ref { inner, .. } => inner.as_ref(),
+                        other => other,
+                    };
+                    let substitutions = if let Type::Generic { params, .. } = concrete_enum_ty {
                         enum_decl
                             .generics
                             .iter()
