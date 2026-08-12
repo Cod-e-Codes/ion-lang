@@ -271,6 +271,7 @@ impl LoweringContext {
                 .function_returns
                 .get(&call.callee)
                 .and_then(|ret| ret.clone()),
+            Expr::StructLit(lit) => Some(Type::Struct(lit.type_name.clone())),
             Expr::TupleLit(t) => Some(Type::Tuple {
                 elements: t
                     .elements
@@ -1304,6 +1305,7 @@ fn infer_type_from_expr(expr: &Expr) -> Type {
             infer_type_from_call(&call_expr.callee, &call_expr.args).unwrap_or(Type::Int)
         }
         Expr::StringLit(_) => Type::String,
+        Expr::StructLit(lit) => Type::Struct(lit.type_name.clone()),
         Expr::TupleLit(t) => Type::Tuple {
             elements: t.elements.iter().map(infer_type_from_expr).collect(),
         },

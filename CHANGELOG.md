@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **IR / Codegen**: `Box::new(StructLit)` as a direct `let` initializer allocates `sizeof(Struct)` / `Struct*` (IR no longer types struct literals as `int`; `Box::new` prefers the let expected type like `Vec::new`).
+
 ## 0.1.9 - 2026-08-12
 
 - **Type checker**: recursive structs/enums no longer stack-overflow the compiler. Cycle-aware walks for no-escape, `Send`, `Eq`, and drop analysis; bare value cycles (`next: Node`, `next: Option<Node>`) are rejected as `InfiniteSize`, while `Box` / `Vec` / raw-pointer indirection remains allowed (and `Box<&T>` still fails no-escape).
