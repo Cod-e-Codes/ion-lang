@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Type checker**: `resolve_type_name` rewrites parser `Struct` names to `Enum` inside generic parameters (and other composite types). `Result<int, MyError>` from `stdlib/result.ion` type-checks; previously expected and actual printed identically and failed.
+
 ## 0.1.11 - 2026-08-12
 
 - **Codegen**: `Box::unwrap` copies the payload out, then calls `ion_box_free` on the box pointer (it does not drop `T`). Every `Box::unwrap` call site previously leaked the heap allocation.

@@ -8,6 +8,7 @@
 - **Recursive types**: `is_reference_containing` / `is_send` / `is_eq_type` / `type_needs_drop` need a visiting set; without one, `Box`/`Vec`/`Option<Box<…>>` self-reference stack-overflows at decl time. Representability (`InfiniteSize`) treats only `Box`/`Vec`/`RawPtr` as size boundaries — `Option<Node>` is still infinite size; `Option<Box<Node>>` is not. Do not “stop at Box” inside the no-escape walker or `Box<&T>` silently passes.
 - **Match on `&GenericEnum`**: peel `Ref` before building the type-param subst map in `add_pattern_bindings` (see `test_match_ref_generic_enum_arith.ion`); bare `if let Type::Generic` misses `Ref { Generic { … } }` and leaves bindings as `&T`
 - **`resolve_type_name` and `&Enum` params**: must recurse into `Ref` so `&Flag` becomes `Ref { Enum }` (parser stores enum names as `Struct`); otherwise calls get `expected &Flag, got &Flag` from Struct vs Enum mismatch
+- **`resolve_type_name` generic params**: must rewrite `Struct` to `Enum` inside `Generic` (and other composites). `Result<int, MyError>` vs `Result::Err(MyError::Bad)` otherwise prints `expected Result<int, MyError>, got Result<int, MyError>` (`test_result_custom_enum.ion`)
 - **MethodCall vs Call**: parser emits `Expr::MethodCall`; tc/IR/cgen must handle both
 - **Module visibility**: `pub` vs private across `import`
 

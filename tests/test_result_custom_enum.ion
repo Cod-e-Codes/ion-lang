@@ -1,0 +1,30 @@
+import "stdlib/result.ion" as result;
+
+enum MyError {
+    Bad;
+}
+
+fn f1(x: int) -> Result<int, MyError> {
+    if x < 0 {
+        return Result::Err(MyError::Bad);
+    }
+    return Result::Ok(x);
+}
+
+fn main() -> int {
+    match f1(-1) {
+        Result::Ok(_) => {
+            return 2;
+        }
+        Result::Err(_) => {
+            match f1(5) {
+                Result::Ok(v) => {
+                    return v - 5;
+                }
+                Result::Err(_) => {
+                    return 1;
+                }
+            }
+        }
+    }
+}
