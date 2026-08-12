@@ -119,6 +119,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_generic_types.ion` - Generic type system
 - `test_generic_struct.ion` - Generic struct types
 - `test_box_basic.ion` - Box<T> heap allocation
+- `test_box_new_struct_let_annotated.ion` - `let b: Box<Node> = Box::new(Node { ... })` multi-field unwrap (exit 10)
+- `test_box_new_struct_let.ion` - unannotated `let b = Box::new(Node { ... })` multi-field unwrap (exit 10)
 - `test_recursive_struct_box.ion` - linked list via `Option<Box<Node>>` (exit 3)
 - `test_recursive_struct_mutual_box.ion` - mutual recursion through Box (exit 30)
 - `test_recursive_struct_vec.ion` - self-referential `Vec<Forest>` (exit 2)

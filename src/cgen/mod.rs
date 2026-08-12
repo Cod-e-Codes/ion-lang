@@ -3164,7 +3164,8 @@ impl Codegen {
                 // Handle special built-in functions
                 let builtin_return_type = match resolved_callee.as_str() {
                     "Vec::new" | "Vec::with_capacity" => type_context.or(return_type.as_ref()),
-                    s if s.starts_with("Box::new") => return_type.as_ref().or(type_context),
+                    // Prefer let/field expected type over a wrong IR fallback (e.g. Box<int>).
+                    s if s.starts_with("Box::new") => type_context.or(return_type.as_ref()),
                     _ => return_type.as_ref(),
                 };
                 if let Some(code) =
