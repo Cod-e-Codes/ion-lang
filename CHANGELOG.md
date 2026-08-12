@@ -1,10 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.8 - 2026-08-11
 
 - **Type checker**: matching `&UserGenericEnum<Concrete>` substitutes type parameters into variant payload bindings (for example `Status::Ready(v)` on `&Status<int>` binds `v` as `int`, so `v + 0` type-checks). Previously the subst map only matched bare `Generic`, leaving `&T`.
 - **Type checker**: `resolve_type_name` recurses into `&T` so `&Flag` parameters resolve `Flag` as an enum (not a struct), matching `&f` arguments.
-- **Codegen**: match on `&Enum` / `&GenericEnum` deref-copies the scrutinee into a value temporary (`Status_int x = *s`, `Flag x = *f`), including when the param type still carries parser `Struct("Flag")` for an enum name.
+- **Codegen**: match on `&Enum` / `&GenericEnum` deref-copies the scrutinee into a value temporary (`Status_int x = *s`, `Flag x = *f`), including when the param type still carries parser `Struct("Flag")` for an enum name. Live binding types keep `Vec::get_ref` copy payloads from being double-dereferenced.
 
 ## 0.1.7 - 2026-08-11
 
