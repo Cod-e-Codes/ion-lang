@@ -68,6 +68,37 @@ jobs:
           test_array_to_slice_coercion 10
           EOF
 
+      - name: Generated C leak sanitizer (Linux)
+        shell: bash
+        env:
+          COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          CC: gcc
+          CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=address,undefined
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          cd tests
+          "$CC" $CFLAGS -c ../runtime/ion_runtime.c -I. -I.. -I../runtime -o .ion_test_runtime_lsan.o
+          while IFS=' ' read -r test expected; do
+            "$COMPILER" "$test.ion" >/dev/null
+            "$CC" $CFLAGS "$test.c" .ion_test_runtime_lsan.o -I. -I.. -I../runtime -lpthread $LDFLAGS -o "$test"
+            set +e
+            "./$test" >/dev/null
+            status=$?
+            set -e
+            if [ "$status" -ne "$expected" ]; then
+              echo "$test: expected exit $expected, got $status"
+              exit 1
+            fi
+            rm -f "$test.c" "$test"
+          done <<'EOF'
+          test_box_ops 0
+          test_box_new_struct_let 10
+          test_box_new_struct_let_annotated 10
+          test_box_unwrap_same_scope 3
+          EOF
+
       - name: Generated C thread sanitizer (Linux)
         shell: bash
         env:

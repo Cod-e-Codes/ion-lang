@@ -119,8 +119,9 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_generic_types.ion` - Generic type system
 - `test_generic_struct.ion` - Generic struct types
 - `test_box_basic.ion` - Box<T> heap allocation
-- `test_box_new_struct_let_annotated.ion` - `let b: Box<Node> = Box::new(Node { ... })` multi-field unwrap (exit 10)
+- `test_box_new_struct_let_annotated.ion` - `let b: Box<Node> = Box::new(Node { ... })` multi-field unwrap (exit 10); cgen asserts `ion_box_free(_box)`
 - `test_box_new_struct_let.ion` - unannotated `let b = Box::new(Node { ... })` multi-field unwrap (exit 10)
+- `test_box_unwrap_same_scope.ion` - unwrap then more work in the same function; moved box is not freed again (exit 3)
 - `test_recursive_struct_box.ion` - linked list via `Option<Box<Node>>` (exit 3)
 - `test_recursive_struct_mutual_box.ion` - mutual recursion through Box (exit 30)
 - `test_recursive_struct_vec.ion` - self-referential `Vec<Forest>` (exit 2)
@@ -129,7 +130,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_recursive_struct_option_infinite_error.ion` - `next: Option<Node>` → `InfiniteSize`
 - `test_recursive_struct_eq_error.ion` - recursive Box node rejected for `T: Eq`
 - `test_recursive_box_ref_error.ion` - `Box<&int>` field still `ReferenceEscape`
-- `test_box_ops.ion` - Box operations (new, unwrap)
+- `test_box_ops.ion` - Box operations (new, unwrap); cgen asserts `ion_box_free(_box)` and no `ion_box_free(boxed)`
 - `test_vec_basic.ion` - Vec<T> dynamic arrays
 - `test_vec_new.ion` - Vec::new() function
 - `test_vec_push_pop.ion` - Vec push and pop operations
@@ -382,7 +383,7 @@ Special cases (not in the manifest):
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
 - `ION_BUILD`: Path to the ion-build binary (default: `../target/release/ion-build`)
 - `CC`: C compiler to use (default: `gcc`)
-- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke and runs the full harness with `-Wall -Wextra -Werror` on Linux.
+- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`) and a leak-sanitizer step (`detect_leaks=1`) on `Box::unwrap` tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux.
 - `LDFLAGS`: Extra C linker flags for generated test executables (default: empty). Pair with `CFLAGS` for sanitizer runtime flags when needed.
 - `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 

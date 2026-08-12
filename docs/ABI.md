@@ -77,7 +77,8 @@ Stable beta expectations:
 Stable beta expectations:
 
 - `Box::new` allocates and owns a value.
-- `Box::unwrap` consumes the box and returns the owned payload.
+- `Box::unwrap` consumes the box, copies the payload out by value, and
+  `ion_box_free`s the allocation. It does not drop `T`; the caller owns the copy.
 - Dropping a `Box<T>` drops the payload and releases the allocation once.
 
 ## Arrays and slices

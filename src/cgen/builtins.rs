@@ -42,16 +42,23 @@ impl Codegen {
         }
 
         // Box::unwrap<T>(box: Box<T>) -> T
+        // Copy T out, then free the box allocation without dropping T.
         if callee == "Box::unwrap" && args.len() == 1 {
-            let mut code = String::new();
-            code.push_str("(*");
-            // Generate the argument expression
+            let inferred_inner = self.infer_irexpr_type(&args[0]).and_then(|ty| match ty {
+                Type::Box { inner } => Some(*inner),
+                _ => None,
+            });
+            let inner_type = return_type.cloned().or(inferred_inner).unwrap_or(Type::Int);
+            let inner_c_type = self.type_to_c(&inner_type);
             let mut arg_code = String::new();
             let old_output = std::mem::replace(&mut self.output, arg_code);
             self.generate_expr(&args[0]);
             arg_code = std::mem::replace(&mut self.output, old_output);
-            code.push_str(&arg_code);
-            code.push(')');
+            let code = format!(
+                "({{ {ty}* _box = {arg}; {ty} _val = *_box; ion_box_free(_box); _val; }})",
+                ty = inner_c_type,
+                arg = arg_code
+            );
             return Some(code);
         }
 

@@ -495,7 +495,7 @@ Each integer primitive exposes compile-time limits as `Type::MIN` and `Type::MAX
 
 Additional built-in generic types:
 
-- `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`)
+- `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`). `Box::unwrap` moves `T` out and frees the allocation without dropping `T`.
 - `Sender<T>` and `Receiver<T>` – move-only handles for the two ends of a bounded MPSC channel
 - `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::get_ref()`, `Vec::set()`)
 - `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::get()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
@@ -858,6 +858,7 @@ When a binding goes out of scope (e.g., block exit, function return, panic unwin
 - For structs, fields are dropped in declaration order.
 - For enums, the active variant’s payload is dropped.
 - For `Box<T>`, `T` is dropped, then the allocation is freed.
+- `Box::unwrap` moves `T` out first, then frees the allocation; it does not drop `T`.
 
 `defer` schedules an expression to be executed when the **current block** scope is left, in **last-in, first-out** order. On `return`, all enclosing block defers and drops run innermost-first before the function returns.
 
