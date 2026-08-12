@@ -5737,4 +5737,38 @@ fn bad_b() -> int {
                 .all(|e| matches!(e, TypeCheckError::UseAfterMove { .. }))
         );
     }
+
+    #[test]
+    fn result_err_with_user_enum_type_param_typechecks() {
+        let src = r#"
+enum Result<T, E> {
+    Ok(T);
+    Err(E);
+}
+enum MyError {
+    Bad;
+}
+fn f1(x: int) -> Result<int, MyError> {
+    if x < 0 {
+        return Result::Err(MyError::Bad);
+    }
+    return Result::Ok(x);
+}
+fn main() -> int {
+    match f1(5) {
+        Result::Ok(v) => { return v; }
+        Result::Err(_) => { return 1; }
+    }
+}
+"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = parser::Parser::new(tokens).parse().unwrap();
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        assert!(
+            result.is_ok(),
+            "Result<int, MyError> should type-check: {:?}",
+            result.err()
+        );
+    }
 }

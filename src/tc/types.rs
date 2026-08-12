@@ -51,7 +51,59 @@ impl TypeChecker {
                     let resolved = Self::substitute_type_params(&alias.target, &substitutions);
                     return self.resolve_type_name(&resolved);
                 }
-                Ok(ty.clone())
+                let resolved_params = params
+                    .iter()
+                    .map(|p| self.resolve_type_name(p))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Type::Generic {
+                    name: name.clone(),
+                    params: resolved_params,
+                })
+            }
+            Type::RawPtr { inner } => Ok(Type::RawPtr {
+                inner: Box::new(self.resolve_type_name(inner)?),
+            }),
+            Type::Box { inner } => Ok(Type::Box {
+                inner: Box::new(self.resolve_type_name(inner)?),
+            }),
+            Type::Vec { elem_type } => Ok(Type::Vec {
+                elem_type: Box::new(self.resolve_type_name(elem_type)?),
+            }),
+            Type::Array { inner, size } => Ok(Type::Array {
+                inner: Box::new(self.resolve_type_name(inner)?),
+                size: *size,
+            }),
+            Type::Slice { inner } => Ok(Type::Slice {
+                inner: Box::new(self.resolve_type_name(inner)?),
+            }),
+            Type::Channel { elem_type } => Ok(Type::Channel {
+                elem_type: Box::new(self.resolve_type_name(elem_type)?),
+            }),
+            Type::Sender { elem_type } => Ok(Type::Sender {
+                elem_type: Box::new(self.resolve_type_name(elem_type)?),
+            }),
+            Type::Receiver { elem_type } => Ok(Type::Receiver {
+                elem_type: Box::new(self.resolve_type_name(elem_type)?),
+            }),
+            Type::Tuple { elements } => {
+                let resolved = elements
+                    .iter()
+                    .map(|e| self.resolve_type_name(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Type::Tuple { elements: resolved })
+            }
+            Type::Fn {
+                params,
+                return_type,
+            } => {
+                let resolved_params = params
+                    .iter()
+                    .map(|p| self.resolve_type_name(p))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Type::Fn {
+                    params: resolved_params,
+                    return_type: Box::new(self.resolve_type_name(return_type)?),
+                })
             }
             _ => Ok(ty.clone()),
         }

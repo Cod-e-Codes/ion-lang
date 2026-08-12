@@ -37,6 +37,25 @@ match opt {
 
 Guard: `Option::Some(v) if v > 0 => { ... }`
 
+## Result with a local error enum
+
+`Result<T, E>` from `stdlib/result.ion` accepts a user-defined enum as `E` ([tests/test_result_custom_enum.ion](../../../../tests/test_result_custom_enum.ion)):
+
+```ion
+import "stdlib/result.ion" as result;
+
+enum MyError {
+    Bad;
+}
+
+fn f1(x: int) -> Result<int, MyError> {
+    if x < 0 {
+        return Result::Err(MyError::Bad);
+    }
+    return Result::Ok(x);
+}
+```
+
 ## Vec and String
 
 ```ion
