@@ -3166,6 +3166,7 @@ impl Codegen {
                     "Vec::new" | "Vec::with_capacity" => type_context.or(return_type.as_ref()),
                     // Prefer let/field expected type over a wrong IR fallback (e.g. Box<int>).
                     s if s.starts_with("Box::new") => type_context.or(return_type.as_ref()),
+                    "Box::unwrap" => type_context.or(return_type.as_ref()),
                     _ => return_type.as_ref(),
                 };
                 if let Some(code) =
@@ -6538,5 +6539,31 @@ fn main() -> int {
             ],
         );
         assert_eq!(cg.module_c_symbol("write"), "write");
+    }
+
+    #[test]
+    fn box_unwrap_frees_allocation_without_scope_drop() {
+        let src = r#"fn main() -> int {
+    let boxed: Box<int> = Box::new(42);
+    let y: int = Box::unwrap(boxed);
+    return y;
+}"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("ion_box_free(_box)"),
+            "expected unwrap to free the box allocation in:\n{c}"
+        );
+        assert!(
+            !c.contains("(*boxed)"),
+            "expected unwrap not to be a bare dereference in:\n{c}"
+        );
+        assert!(
+            !c.contains("ion_box_free(boxed)"),
+            "expected moved box not to be freed again at scope exit in:\n{c}"
+        );
     }
 }

@@ -1,0 +1,8 @@
+// Unwrap consumes the box; the binding's scope continues and must not free again.
+fn main() -> int {
+    let boxed: Box<int> = Box::new(1);
+    let n: int = Box::unwrap(boxed);
+    let other: Box<int> = Box::new(2);
+    let m: int = Box::unwrap(other);
+    return n + m;
+}

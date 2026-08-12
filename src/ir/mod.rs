@@ -1082,6 +1082,11 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                             .map(|arg_ty| Type::Box {
                                 inner: Box::new(arg_ty),
                             })
+                    } else if call_expr.callee == "Box::unwrap" && !call_expr.args.is_empty() {
+                        match ctx.resolve_expr_type(&call_expr.args[0]) {
+                            Some(Type::Box { inner }) => Some(*inner),
+                            _ => None,
+                        }
                     } else {
                         None
                     }
