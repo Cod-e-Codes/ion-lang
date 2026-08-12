@@ -241,11 +241,11 @@ let b: Box<int> = Box::new(42);
 let x: int = Box::unwrap(b);
 ```
 
-Boxing a struct literal as a `let` initializer is supported ([tests/test_box_new_struct_let_annotated.ion](../../../../tests/test_box_new_struct_let_annotated.ion), [tests/test_box_new_struct_let.ion](../../../../tests/test_box_new_struct_let.ion)):
+Boxing a struct literal as a `let` initializer is supported ([tests/test_box_new_struct_let_annotated.ion](../../../../tests/test_box_new_struct_let_annotated.ion), [tests/test_box_new_struct_let.ion](../../../../tests/test_box_new_struct_let.ion)). Unannotated unwrap of `Box<Struct>` is valid ([tests/test_box_unwrap_struct_let.ion](../../../../tests/test_box_unwrap_struct_let.ion)):
 
 ```ion
-let boxed: Box<Node> = Box::new(Node { a: 1, b: 2, c: 3, d: 4 });
-let n: Node = Box::unwrap(boxed);
+let boxed = Box::new(Node { a: 1, b: 2, c: 3, d: 4 });
+let n = Box::unwrap(boxed);
 ```
 
 Recursive owned types need indirection (`Box`, `Vec`, or a raw pointer). Bare nests (`next: Node`, `next: Option<Node>`) are infinite size. Linked lists use `Option<Box<Node>>` ([tests/test_recursive_struct_box.ion](../../../../tests/test_recursive_struct_box.ion)); declare a local `enum Option<T>` when constructing `Option::None` / `Option::Some` (same pattern as [tests/test_enum_generic.ion](../../../../tests/test_enum_generic.ion)).

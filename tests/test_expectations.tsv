@@ -68,6 +68,9 @@ test_box_new_struct_let_annotated.ion	cgen			ion_box_free(_box)
 test_box_new_struct_let.ion	cgen			ion_box_alloc(sizeof(Node))	
 test_box_new_struct_let.ion	cgen			Node*	
 test_box_new_struct_let.ion	cgen			ion_box_free(_box)	
+test_box_unwrap_struct_let.ion	run	10			
+test_box_unwrap_struct_let.ion	cgen			Node* _box	int\* _box
+test_box_unwrap_struct_let.ion	cgen			ion_box_free(_box)	
 test_box_unwrap_same_scope.ion	run	3			
 test_box_unwrap_same_scope.ion	cgen			ion_box_free(_box)	ion_box_free(boxed)
 test_vec_new.ion	run	0			
