@@ -1,0 +1,9 @@
+// Bare value nest has infinite size (no Box/Vec/raw pointer).
+struct Node {
+    value: int;
+    next: Node;
+}
+
+fn main() -> int {
+    return 0;
+}

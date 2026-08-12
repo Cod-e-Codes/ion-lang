@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 impl Codegen {
     pub(crate) fn needs_drop(&self, ty: &Type) -> bool {
@@ -6,26 +7,53 @@ impl Codegen {
     }
 
     pub(crate) fn type_needs_drop(&self, ty: &Type) -> bool {
+        self.type_needs_drop_rec(ty, &mut HashSet::new())
+    }
+
+    fn type_needs_drop_rec(&self, ty: &Type, visiting: &mut HashSet<String>) -> bool {
         if let Some((decl, substitutions)) = self.struct_decl_for_type(ty) {
-            return decl.fields.iter().any(|field| {
+            let name = match ty {
+                Type::Struct(n) => n.clone(),
+                Type::Generic { name, .. } => name.clone(),
+                _ => format!("{:?}", ty),
+            };
+            if !visiting.insert(name.clone()) {
+                // Coinductive for drop: cycle edge alone does not need drop;
+                // Box/Vec on the cycle already return true via the leaf match.
+                return false;
+            }
+            let result = decl.fields.iter().any(|field| {
                 let field_ty = Self::substitute_field_types(&field.ty, &substitutions);
-                self.type_needs_drop(&field_ty)
+                self.type_needs_drop_rec(&field_ty, visiting)
             });
+            visiting.remove(&name);
+            return result;
         }
         if let Some((decl, substitutions)) = self.enum_decl_for_type(ty) {
-            return decl.variants.iter().any(|variant| {
+            let name = match ty {
+                Type::Enum(n) => n.clone(),
+                Type::Struct(n) => n.clone(),
+                Type::Generic { name, .. } => name.clone(),
+                _ => format!("{:?}", ty),
+            };
+            if !visiting.insert(name.clone()) {
+                return false;
+            }
+            let result = decl.variants.iter().any(|variant| {
                 if let Some(named_fields) = &variant.named_fields {
                     named_fields.iter().any(|(_, field_ty)| {
                         let ft = Self::substitute_field_types(field_ty, &substitutions);
-                        self.type_needs_drop(&ft)
+                        self.type_needs_drop_rec(&ft, visiting)
                     })
                 } else {
                     variant.payload_types.iter().any(|payload_ty| {
                         let ft = Self::substitute_field_types(payload_ty, &substitutions);
-                        self.type_needs_drop(&ft)
+                        self.type_needs_drop_rec(&ft, visiting)
                     })
                 }
             });
+            visiting.remove(&name);
+            return result;
         }
         let resolved = resolve_type_alias(ty, &self.type_aliases);
         matches!(

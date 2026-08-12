@@ -414,6 +414,12 @@ fn diagnostic_from_tc_error(err: &TypeCheckError) -> (crate::ast::Span, String) 
         TypeCheckError::UnknownTraitBound { span, bound } => {
             (*span, format!("Unknown trait bound: '{bound}'"))
         }
+        TypeCheckError::InfiniteSize { span, type_name } => (
+            *span,
+            format!(
+                "Infinite size: recursive type '{type_name}' has infinite size; insert Box, Vec, or pointer indirection"
+            ),
+        ),
         TypeCheckError::Message(msg) => (crate::ast::Span::default(), msg.clone()),
     }
 }

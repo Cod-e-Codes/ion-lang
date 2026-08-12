@@ -345,64 +345,18 @@ impl Codegen {
             }
         }
 
+        // Forward-declare non-generic structs so Option<Box<Node>> can mention Node*
+        // before the Node body exists.
         for s in &program.structs {
             if s.generics.is_empty() {
-                self.write(&format!("typedef struct {} {{\n", s.name));
-                self.indent_level += 1;
-                for field in &s.fields {
-                    self.write_indent();
-                    let field_decl = match &field.ty {
-                        Type::Array { inner, size } => {
-                            let base_type = self.type_to_c(inner);
-                            format!("{} {}[{}]", base_type, field.name, size)
-                        }
-                        _ => {
-                            format!("{} {}", self.type_to_c(&field.ty), field.name)
-                        }
-                    };
-                    self.writeln(&format!("{};", field_decl));
-                }
-                self.indent_level -= 1;
-                self.writeln(&format!("}} {};", s.name));
-                self.writeln("");
+                self.writeln(&format!("typedef struct {} {};", s.name, s.name));
             }
         }
-
-        // Generate monomorphized struct/enum types for each generic instantiation
-        // Use self.generic_instantiations which includes resolved types from aliases
-        let mut instantiations_vec: Vec<_> = self.generic_instantiations.values().collect();
-        // Sort for deterministic output
-        instantiations_vec.sort_by_key(|(name, _)| name.clone());
-
-        // Collect declarations first to avoid borrow checker issues
-        let mut struct_instantiations: Vec<(StructDecl, Vec<Type>)> = Vec::new();
-        let mut enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
-
-        for (base_name, params) in instantiations_vec {
-            let base_name_clone = base_name.clone();
-            let params_clone = params.clone();
-
-            if let Some(decl) = self.struct_map.get(&base_name_clone) {
-                struct_instantiations.push((decl.clone(), params_clone));
-            } else if let Some(decl) = self.enum_map.get(&base_name_clone) {
-                enum_instantiations.push((decl.clone(), params_clone));
-            }
+        if program.structs.iter().any(|s| s.generics.is_empty()) {
+            self.writeln("");
         }
 
-        // Now generate without borrowing self.struct_map/self.enum_map
-        for (decl, params) in struct_instantiations {
-            self.generate_monomorphized_struct(&decl, &params);
-        }
-        for (decl, params) in enum_instantiations {
-            self.generate_monomorphized_enum(&decl, &params);
-            // Mark as generated
-            let key = mangle_type_name(&decl.name, &params);
-            self.generated_types.insert(key, true);
-        }
-
-        // Handle built-in generic enums like Option<T> that aren't in enum_map
-        // First, ensure Option template is in enum_map so match expressions can find variant indices
-        // Only add synthetic template if Option is not already user-declared
+        // Ensure Option template is available for monomorphization (builtin or user).
         if !self.enum_map.contains_key("Option") {
             let option_template = EnumDecl {
                 doc: None,
@@ -448,15 +402,92 @@ impl Codegen {
             self.enum_map.insert("Option".to_string(), option_template);
         }
 
-        // Collect Option types to generate first to avoid borrow checker issues
-        let mut option_types_to_generate: Vec<(String, Vec<Type>)> = Vec::new();
-        for (key, (base_name, params)) in &self.generic_instantiations {
-            if base_name == "Option" && !self.generated_types.contains_key(key) {
-                option_types_to_generate.push((key.clone(), params.clone()));
+        let mut instantiations_vec: Vec<_> = self.generic_instantiations.values().collect();
+        instantiations_vec.sort_by_key(|(name, _)| name.clone());
+
+        let mut struct_instantiations: Vec<(StructDecl, Vec<Type>)> = Vec::new();
+        let mut early_enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
+        let mut late_enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
+
+        for (base_name, params) in instantiations_vec {
+            let base_name_clone = base_name.clone();
+            let params_clone = params.clone();
+
+            if let Some(decl) = self.struct_map.get(&base_name_clone) {
+                struct_instantiations.push((decl.clone(), params_clone));
+            } else if let Some(decl) = self.enum_map.get(&base_name_clone) {
+                if params_complete_with_struct_forwards(&params_clone) {
+                    early_enum_instantiations.push((decl.clone(), params_clone));
+                } else {
+                    late_enum_instantiations.push((decl.clone(), params_clone));
+                }
             }
         }
-        for (key, params) in option_types_to_generate {
-            // Get Option template from enum_map (we already ensured it's there)
+
+        // Early enums: payloads only need pointers / primitives (e.g. Option<Box<Node>>).
+        for (decl, params) in &early_enum_instantiations {
+            self.generate_monomorphized_enum(decl, params);
+            let key = mangle_type_name(&decl.name, params);
+            self.generated_types.insert(key, true);
+        }
+
+        let mut early_option_types: Vec<(String, Vec<Type>)> = Vec::new();
+        let mut late_option_types: Vec<(String, Vec<Type>)> = Vec::new();
+        for (key, (base_name, params)) in &self.generic_instantiations {
+            if base_name == "Option" && !self.generated_types.contains_key(key) {
+                if params_complete_with_struct_forwards(params) {
+                    early_option_types.push((key.clone(), params.clone()));
+                } else {
+                    late_option_types.push((key.clone(), params.clone()));
+                }
+            }
+        }
+        for (key, params) in early_option_types {
+            if self.generated_types.contains_key(&key) {
+                continue;
+            }
+            let option_decl = self.enum_map.get("Option").unwrap().clone();
+            self.generate_monomorphized_enum(&option_decl, &params);
+            self.generated_types.insert(key, true);
+        }
+
+        for s in &program.structs {
+            if s.generics.is_empty() {
+                self.write(&format!("typedef struct {} {{\n", s.name));
+                self.indent_level += 1;
+                for field in &s.fields {
+                    self.write_indent();
+                    let field_decl = match &field.ty {
+                        Type::Array { inner, size } => {
+                            let base_type = self.type_to_c(inner);
+                            format!("{} {}[{}]", base_type, field.name, size)
+                        }
+                        _ => {
+                            format!("{} {}", self.type_to_c(&field.ty), field.name)
+                        }
+                    };
+                    self.writeln(&format!("{};", field_decl));
+                }
+                self.indent_level -= 1;
+                self.writeln(&format!("}} {};", s.name));
+                self.writeln("");
+            }
+        }
+
+        for (decl, params) in struct_instantiations {
+            self.generate_monomorphized_struct(&decl, &params);
+        }
+
+        // Late enums: payloads embed structs/enums by value (e.g. Option<Todo>).
+        for (decl, params) in &late_enum_instantiations {
+            self.generate_monomorphized_enum(decl, params);
+            let key = mangle_type_name(&decl.name, params);
+            self.generated_types.insert(key, true);
+        }
+        for (key, params) in late_option_types {
+            if self.generated_types.contains_key(&key) {
+                continue;
+            }
             let option_decl = self.enum_map.get("Option").unwrap().clone();
             self.generate_monomorphized_enum(&option_decl, &params);
             self.generated_types.insert(key, true);
@@ -3133,6 +3164,7 @@ impl Codegen {
                 // Handle special built-in functions
                 let builtin_return_type = match resolved_callee.as_str() {
                     "Vec::new" | "Vec::with_capacity" => type_context.or(return_type.as_ref()),
+                    s if s.starts_with("Box::new") => return_type.as_ref().or(type_context),
                     _ => return_type.as_ref(),
                 };
                 if let Some(code) =
@@ -3480,7 +3512,12 @@ impl Codegen {
         let resolved = resolve_type_alias(ty, &self.type_aliases);
         match resolved {
             Type::String | Type::Box { .. } | Type::Vec { .. } => "NULL".to_string(),
-            Type::Struct(_) | Type::Enum(_) | Type::Sender { .. } | Type::Receiver { .. } => {
+            Type::Struct(_)
+            | Type::Enum(_)
+            | Type::Generic { .. }
+            | Type::Tuple { .. }
+            | Type::Sender { .. }
+            | Type::Receiver { .. } => {
                 format!("({}){{0}}", self.type_to_c(&resolved))
             }
             _ => "0".to_string(),
@@ -5453,6 +5490,43 @@ fn substitute_generic_types(ty: &Type, substitutions: &HashMap<String, &Type>) -
             }
         }
         _ => ty.clone(),
+    }
+}
+
+/// True when monomorphized enum payloads can be emitted using only struct forward
+/// declarations (pointers / primitives). False when a payload embeds a struct/enum
+/// by value and needs the complete typedef first (`Option<Todo>` vs `Option<Box<Node>>`).
+fn params_complete_with_struct_forwards(params: &[Type]) -> bool {
+    params.iter().all(type_complete_with_struct_forwards)
+}
+
+fn type_complete_with_struct_forwards(ty: &Type) -> bool {
+    match ty {
+        Type::Void
+        | Type::Int
+        | Type::Bool
+        | Type::F32
+        | Type::F64
+        | Type::I8
+        | Type::I16
+        | Type::I32
+        | Type::I64
+        | Type::U8
+        | Type::U16
+        | Type::U32
+        | Type::U64
+        | Type::UInt
+        | Type::String
+        | Type::Str
+        | Type::Fn { .. }
+        | Type::Slice { .. } => true,
+        Type::Box { .. } | Type::Vec { .. } | Type::RawPtr { .. } | Type::Ref { .. } => true,
+        Type::Channel { elem_type } | Type::Sender { elem_type } | Type::Receiver { elem_type } => {
+            type_complete_with_struct_forwards(elem_type)
+        }
+        Type::Array { inner, .. } => type_complete_with_struct_forwards(inner),
+        Type::Tuple { elements } => elements.iter().all(type_complete_with_struct_forwards),
+        Type::Struct(_) | Type::Enum(_) | Type::Generic { .. } => false,
     }
 }
 

@@ -1,0 +1,31 @@
+// Recursive linked list via Box. Local Option enum so Option::None type-checks.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Node {
+    value: int;
+    next: Option<Box<Node>>;
+}
+
+fn main() -> int {
+    let empty: Option<Box<Node>> = Option::None;
+    let leaf: Node = Node {
+        value: 2,
+        next: empty,
+    };
+    let root: Node = Node {
+        value: 1,
+        next: Option::Some(Box::new(leaf)),
+    };
+    match root.next {
+        Option::Some(boxed) => {
+            let child: Node = Box::unwrap(boxed);
+            return root.value + child.value;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}

@@ -5,7 +5,7 @@ mod types;
 
 use crate::ast::*;
 use ownership::join_ownership_states;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 pub use types::type_to_string;
 pub(crate) use types::{fn_type_from_signature, types_equal};
@@ -168,6 +168,10 @@ pub enum TypeCheckError {
         bound: String,
         span: Span,
     },
+    InfiniteSize {
+        type_name: String,
+        span: Span,
+    },
     Message(String),
 }
 
@@ -227,6 +231,11 @@ impl std::fmt::Display for TypeCheckError {
                 f,
                 "line {}: UnknownTraitBound: unknown trait bound '{}'",
                 span.line, bound
+            ),
+            TypeCheckError::InfiniteSize { type_name, span } => write!(
+                f,
+                "line {}: InfiniteSize: recursive type '{}' has infinite size; insert Box, Vec, or pointer indirection",
+                span.line, type_name
             ),
             TypeCheckError::Message(msg) => write!(f, "{}", msg),
         }
@@ -850,6 +859,11 @@ impl TypeChecker {
                     });
                 }
             }
+            if let Err(e) =
+                self.check_type_representable(&Type::Struct(s.name.clone()), &s.name, s.span)
+            {
+                errors.push(e);
+            }
         }
 
         // Enforce no-escape rule on enum variant payloads
@@ -868,6 +882,27 @@ impl TypeChecker {
                         });
                     }
                 }
+                if let Some(ref named_fields) = variant.named_fields {
+                    for (field_name, field_ty) in named_fields {
+                        if self.is_reference_containing(field_ty) {
+                            errors.push(TypeCheckError::ReferenceEscape {
+                                description: format!(
+                                    "Enum '{}' variant '{}' field '{}' cannot have reference type '{}' (violates no-escape rule)",
+                                    e.name,
+                                    variant.name,
+                                    field_name,
+                                    type_to_string(field_ty)
+                                ),
+                                span: variant.span,
+                            });
+                        }
+                    }
+                }
+            }
+            if let Err(err) =
+                self.check_type_representable(&Type::Enum(e.name.clone()), &e.name, e.span)
+            {
+                errors.push(err);
             }
         }
 
@@ -4556,6 +4591,10 @@ impl TypeChecker {
     /// Check if a type contains any references (directly or nested).
     /// Used to enforce the no-escape rule.
     fn is_reference_containing(&self, ty: &Type) -> bool {
+        self.is_reference_containing_rec(ty, &mut HashSet::new())
+    }
+
+    fn is_reference_containing_rec(&self, ty: &Type, visiting: &mut HashSet<String>) -> bool {
         match ty {
             Type::Void
             | Type::Int
@@ -4572,54 +4611,205 @@ impl TypeChecker {
             | Type::U64
             | Type::UInt => false,
             Type::Ref { .. } => true,
-            Type::RawPtr { inner } => self.is_reference_containing(inner),
-            Type::Channel { elem_type } => self.is_reference_containing(elem_type),
+            Type::RawPtr { inner } => self.is_reference_containing_rec(inner, visiting),
+            Type::Channel { elem_type } => self.is_reference_containing_rec(elem_type, visiting),
             Type::Struct(name) => {
-                if let Some(decl) = self.structs.get(name) {
+                if !visiting.insert(name.clone()) {
+                    // Cycle edge: any embedded & was already found on the first visit.
+                    return false;
+                }
+                let result = if let Some(decl) = self.structs.get(name) {
                     decl.fields
                         .iter()
-                        .any(|f| self.is_reference_containing(&f.ty))
+                        .any(|f| self.is_reference_containing_rec(&f.ty, visiting))
                 } else {
                     false
-                }
+                };
+                visiting.remove(name);
+                result
             }
             Type::Enum(name) => {
-                if let Some(decl) = self.enums.get(name) {
+                if !visiting.insert(name.clone()) {
+                    return false;
+                }
+                let result = if let Some(decl) = self.enums.get(name) {
                     decl.variants.iter().any(|v| {
                         v.payload_types
                             .iter()
-                            .any(|ty| self.is_reference_containing(ty))
+                            .any(|ty| self.is_reference_containing_rec(ty, visiting))
                             || if let Some(ref named_fields) = v.named_fields {
                                 named_fields
                                     .iter()
-                                    .any(|(_, ty)| self.is_reference_containing(ty))
+                                    .any(|(_, ty)| self.is_reference_containing_rec(ty, visiting))
                             } else {
                                 false
                             }
                     })
                 } else {
                     false
-                }
+                };
+                visiting.remove(name);
+                result
             }
-            Type::Generic { name: _, params } => {
-                params.iter().any(|p| self.is_reference_containing(p))
-            }
-            Type::Box { inner } => self.is_reference_containing(inner),
-            Type::Vec { elem_type } => self.is_reference_containing(elem_type),
+            Type::Generic { name: _, params } => params
+                .iter()
+                .any(|p| self.is_reference_containing_rec(p, visiting)),
+            // Still walk inners so Box<&T> / Vec<&T> fail no-escape.
+            Type::Box { inner } => self.is_reference_containing_rec(inner, visiting),
+            Type::Vec { elem_type } => self.is_reference_containing_rec(elem_type, visiting),
             Type::String | Type::Str => false,
-            Type::Array { inner, .. } => self.is_reference_containing(inner),
-            // Slices are like references - they contain references and must obey no-escape
-            Type::Slice { .. } => true, // Slices are reference-like
-            Type::Sender { elem_type } => self.is_reference_containing(elem_type),
-            Type::Receiver { elem_type } => self.is_reference_containing(elem_type),
-            Type::Tuple { elements } => elements.iter().any(|e| self.is_reference_containing(e)),
+            Type::Array { inner, .. } => self.is_reference_containing_rec(inner, visiting),
+            Type::Slice { .. } => true,
+            Type::Sender { elem_type } => self.is_reference_containing_rec(elem_type, visiting),
+            Type::Receiver { elem_type } => self.is_reference_containing_rec(elem_type, visiting),
+            Type::Tuple { elements } => elements
+                .iter()
+                .any(|e| self.is_reference_containing_rec(e, visiting)),
             Type::Fn {
                 params,
                 return_type,
             } => {
-                params.iter().any(|p| self.is_reference_containing(p))
-                    || self.is_reference_containing(return_type)
+                params
+                    .iter()
+                    .any(|p| self.is_reference_containing_rec(p, visiting))
+                    || self.is_reference_containing_rec(return_type, visiting)
             }
+        }
+    }
+
+    /// Reject recursive types whose size cycle does not pass through Box, Vec, or a raw pointer.
+    fn check_type_representable(
+        &self,
+        ty: &Type,
+        type_name: &str,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        let mut visiting = HashSet::new();
+        if self.has_unindirected_cycle(ty, &mut visiting) {
+            Err(TypeCheckError::InfiniteSize {
+                type_name: type_name.to_string(),
+                span,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// True when expanding `ty` hits a struct/enum already on the path without passing
+    /// through Box / Vec / RawPtr. `Option<Node>` is a cycle; `Option<Box<Node>>` is not.
+    fn has_unindirected_cycle(&self, ty: &Type, visiting: &mut HashSet<String>) -> bool {
+        match ty {
+            Type::Box { .. } | Type::Vec { .. } | Type::RawPtr { .. } => false,
+            Type::Struct(name) => {
+                if !visiting.insert(name.clone()) {
+                    return true;
+                }
+                let result = if let Some(decl) = self.structs.get(name) {
+                    decl.fields
+                        .iter()
+                        .any(|f| self.has_unindirected_cycle(&f.ty, visiting))
+                } else {
+                    false
+                };
+                visiting.remove(name);
+                result
+            }
+            Type::Enum(name) => {
+                if !visiting.insert(name.clone()) {
+                    return true;
+                }
+                let result = if let Some(decl) = self.enums.get(name) {
+                    decl.variants.iter().any(|v| {
+                        v.payload_types
+                            .iter()
+                            .any(|p| self.has_unindirected_cycle(p, visiting))
+                            || v.named_fields.as_ref().is_some_and(|fields| {
+                                fields
+                                    .iter()
+                                    .any(|(_, p)| self.has_unindirected_cycle(p, visiting))
+                            })
+                    })
+                } else {
+                    false
+                };
+                visiting.remove(name);
+                result
+            }
+            Type::Generic { name, params } => {
+                // Box/Vec are dedicated AST nodes (indirection). User generics and
+                // Option/Result are Generic: walk type args, and if `name` is a
+                // declared struct/enum, walk its body so `next: Node<T>` is caught
+                // (params-only would miss that cycle).
+                let params_cycle = params
+                    .iter()
+                    .any(|p| self.has_unindirected_cycle(p, visiting));
+                if params_cycle {
+                    return true;
+                }
+                if let Some(decl) = self.structs.get(name) {
+                    if !visiting.insert(name.clone()) {
+                        return true;
+                    }
+                    let field_tys: Vec<Type> = decl.fields.iter().map(|f| f.ty.clone()).collect();
+                    let result = field_tys
+                        .iter()
+                        .any(|ty| self.has_unindirected_cycle(ty, visiting));
+                    visiting.remove(name);
+                    return result;
+                }
+                if let Some(decl) = self.enums.get(name) {
+                    if !visiting.insert(name.clone()) {
+                        return true;
+                    }
+                    let mut payload_tys: Vec<Type> = Vec::new();
+                    for v in &decl.variants {
+                        payload_tys.extend(v.payload_types.iter().cloned());
+                        if let Some(named_fields) = &v.named_fields {
+                            payload_tys.extend(named_fields.iter().map(|(_, ty)| ty.clone()));
+                        }
+                    }
+                    let result = payload_tys
+                        .iter()
+                        .any(|ty| self.has_unindirected_cycle(ty, visiting));
+                    visiting.remove(name);
+                    return result;
+                }
+                false
+            }
+            Type::Ref { inner, .. } => self.has_unindirected_cycle(inner, visiting),
+            Type::Channel { elem_type }
+            | Type::Sender { elem_type }
+            | Type::Receiver { elem_type } => self.has_unindirected_cycle(elem_type, visiting),
+            Type::Array { inner, .. } => self.has_unindirected_cycle(inner, visiting),
+            Type::Tuple { elements } => elements
+                .iter()
+                .any(|e| self.has_unindirected_cycle(e, visiting)),
+            Type::Fn {
+                params,
+                return_type,
+            } => {
+                params
+                    .iter()
+                    .any(|p| self.has_unindirected_cycle(p, visiting))
+                    || self.has_unindirected_cycle(return_type, visiting)
+            }
+            Type::Slice { .. }
+            | Type::Void
+            | Type::Int
+            | Type::Bool
+            | Type::F32
+            | Type::F64
+            | Type::I8
+            | Type::I16
+            | Type::I32
+            | Type::I64
+            | Type::U8
+            | Type::U16
+            | Type::U32
+            | Type::U64
+            | Type::UInt
+            | Type::String
+            | Type::Str => false,
         }
     }
 
@@ -4628,9 +4818,12 @@ impl TypeChecker {
     /// Used for:
     /// - Values captured into `spawn`
     /// - Types used as channel elements (`channel<T>`)
-    fn is_send(&self, ty: &Type) -> bool {
+    pub(crate) fn is_send(&self, ty: &Type) -> bool {
+        self.is_send_rec(ty, &mut HashSet::new())
+    }
+
+    fn is_send_rec(&self, ty: &Type, visiting: &mut HashSet<String>) -> bool {
         match ty {
-            // Primitives are Send
             Type::Void => true,
             Type::Int => true,
             Type::Bool => true,
@@ -4645,45 +4838,56 @@ impl TypeChecker {
             Type::U32 => true,
             Type::U64 => true,
             Type::UInt => true,
-            // References are NOT Send (they cannot escape their lexical scope)
             Type::Ref { .. } => false,
-            // Raw pointers are NOT Send (they escape to C code)
-            Type::RawPtr { inner } => self.is_send(inner),
-            // Channels are Send iff their element types are Send
-            Type::Channel { elem_type } => self.is_send(elem_type),
-            // Structs are Send iff all fields are Send
+            Type::RawPtr { inner } => self.is_send_rec(inner, visiting),
+            Type::Channel { elem_type } => self.is_send_rec(elem_type, visiting),
             Type::Struct(name) => {
-                if let Some(decl) = self.structs.get(name) {
-                    decl.fields.iter().all(|f| self.is_send(&f.ty))
+                if !visiting.insert(name.clone()) {
+                    // Coinductive: a cycle does not introduce non-Send by itself.
+                    return true;
+                }
+                let result = if let Some(decl) = self.structs.get(name) {
+                    decl.fields
+                        .iter()
+                        .all(|f| self.is_send_rec(&f.ty, visiting))
                 } else {
                     true
-                }
+                };
+                visiting.remove(name);
+                result
             }
             Type::Enum(name) => {
-                if let Some(decl) = self.enums.get(name) {
+                if !visiting.insert(name.clone()) {
+                    return true;
+                }
+                let result = if let Some(decl) = self.enums.get(name) {
                     decl.variants.iter().all(|v| {
-                        v.payload_types.iter().all(|ty| self.is_send(ty))
+                        v.payload_types
+                            .iter()
+                            .all(|ty| self.is_send_rec(ty, visiting))
                             && v.named_fields.as_ref().is_none_or(|named_fields| {
-                                named_fields.iter().all(|(_, ty)| self.is_send(ty))
+                                named_fields
+                                    .iter()
+                                    .all(|(_, ty)| self.is_send_rec(ty, visiting))
                             })
                     })
                 } else {
                     true
-                }
+                };
+                visiting.remove(name);
+                result
             }
-            Type::Generic { name: _, params } => params.iter().all(|p| self.is_send(p)),
-            Type::Box { inner } => self.is_send(inner),
-            Type::Vec { elem_type } => self.is_send(elem_type),
+            Type::Generic { name: _, params } => {
+                params.iter().all(|p| self.is_send_rec(p, visiting))
+            }
+            Type::Box { inner } => self.is_send_rec(inner, visiting),
+            Type::Vec { elem_type } => self.is_send_rec(elem_type, visiting),
             Type::String | Type::Str => true,
-            Type::Array { inner, .. } => self.is_send(inner),
-            // Slices are NOT Send (like references, they cannot escape their lexical scope)
+            Type::Array { inner, .. } => self.is_send_rec(inner, visiting),
             Type::Slice { .. } => false,
-            // Sender and Receiver are Send iff their element types are Send
-            Type::Sender { elem_type } => self.is_send(elem_type),
-            Type::Receiver { elem_type } => self.is_send(elem_type),
-            // Tuples are Send iff all elements are Send
-            Type::Tuple { elements } => elements.iter().all(|e| self.is_send(e)),
-            // Function pointers are Send (no captured stack state for named functions)
+            Type::Sender { elem_type } => self.is_send_rec(elem_type, visiting),
+            Type::Receiver { elem_type } => self.is_send_rec(elem_type, visiting),
+            Type::Tuple { elements } => elements.iter().all(|e| self.is_send_rec(e, visiting)),
             Type::Fn { .. } => true,
         }
     }

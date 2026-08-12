@@ -49,7 +49,7 @@ Any construct that would require reasoning about reference lifetimes beyond the 
 2. **Move by default**: Assignment, passing as arguments, and returning values **moves** ownership.
 3. **Lexical borrows**: `&T` and `&mut T` borrows are restricted to the current function’s stack frame.
 4. **Channel transfers**: Sending a value through a channel moves ownership into the channel.
-5. **No self-referential types**: Types cannot contain references to themselves or into their own fields.
+5. **No self-referential borrows**: Types cannot store `&T` / `&mut T` (or types that contain them) in their own fields. Recursive *owned* types are allowed when every size cycle passes through heap or pointer indirection (`Box<T>`, `Vec<T>`, or a raw pointer). A bare value cycle such as `struct Node { next: Node }` or `next: Option<Node>` is rejected as infinite size (insert `Box` / `Vec` / `*T`).
 
 The type checker tracks moves and borrows to prevent use-after-move and use-after-free.
 

@@ -1,0 +1,9 @@
+// Option without Box does not break a size cycle.
+struct Node {
+    value: int;
+    next: Option<Node>;
+}
+
+fn main() -> int {
+    return 0;
+}

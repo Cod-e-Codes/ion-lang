@@ -1,0 +1,12 @@
+// Box<&T> still violates no-escape even when the outer type is recursive-capable.
+struct Bad {
+    view: Box<&int>;
+}
+
+fn main() -> int {
+    let x: int = 1;
+    let _b: Bad = Bad {
+        view: Box::new(&x),
+    };
+    return 0;
+}

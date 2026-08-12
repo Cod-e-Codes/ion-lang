@@ -1,0 +1,35 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct A {
+    value: int;
+    other: Option<Box<B>>;
+}
+
+struct B {
+    value: int;
+    other: Option<Box<A>>;
+}
+
+fn main() -> int {
+    let empty: Option<Box<A>> = Option::None;
+    let b: B = B {
+        value: 20,
+        other: empty,
+    };
+    let a: A = A {
+        value: 10,
+        other: Option::Some(Box::new(b)),
+    };
+    match a.other {
+        Option::Some(boxed) => {
+            let inner: B = Box::unwrap(boxed);
+            return a.value + inner.value;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}

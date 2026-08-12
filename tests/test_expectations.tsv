@@ -245,4 +245,12 @@ test_trait_bound_unknown_error.ion	error		UnknownTraitBound
 test_empty_file_error.ion	error		MissingMain
 test_no_main_error.ion	error		MissingMain
 test_match_stmt_no_semi.ion	run	1
-test_lt_literal_lhs_with_call.ion	run	0
+test_lt_literal_lhs_with_call.ion	run	0			
+test_recursive_struct_box.ion	run	3			
+test_recursive_struct_mutual_box.ion	run	30			
+test_recursive_struct_vec.ion	run	2			
+test_recursive_struct_send_ok.ion	run	9			
+test_recursive_struct_infinite_error.ion	error		InfiniteSize		
+test_recursive_struct_option_infinite_error.ion	error		InfiniteSize		
+test_recursive_struct_eq_error.ion	error		TraitBoundNotSatisfied		
+test_recursive_box_ref_error.ion	error		ReferenceEscape		

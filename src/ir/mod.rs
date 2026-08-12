@@ -1075,6 +1075,16 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
         }
         Expr::Call(call_expr) => {
             let return_type = builtin_option_vec_return(&call_expr.callee, &call_expr.args, ctx)
+                .or_else(|| {
+                    if call_expr.callee.starts_with("Box::new") && !call_expr.args.is_empty() {
+                        ctx.resolve_expr_type(&call_expr.args[0])
+                            .map(|arg_ty| Type::Box {
+                                inner: Box::new(arg_ty),
+                            })
+                    } else {
+                        None
+                    }
+                })
                 .or_else(|| infer_type_from_call(&call_expr.callee, &call_expr.args));
             IREexpr::Call {
                 callee: call_expr.callee.clone(),
