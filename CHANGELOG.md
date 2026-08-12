@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.10 - 2026-08-12
 
 - **IR / Codegen**: `Box::new(StructLit)` as a direct `let` initializer allocates `sizeof(Struct)` / `Struct*` (IR no longer types struct literals as `int`; `Box::new` prefers the let expected type like `Vec::new`).
 
