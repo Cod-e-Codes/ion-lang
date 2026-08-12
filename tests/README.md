@@ -122,6 +122,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_box_basic.ion` - Box<T> heap allocation
 - `test_box_new_struct_let_annotated.ion` - `let b: Box<Node> = Box::new(Node { ... })` multi-field unwrap (exit 10); cgen asserts `ion_box_free(_box)`
 - `test_box_new_struct_let.ion` - unannotated `let b = Box::new(Node { ... })` multi-field unwrap (exit 10)
+- `test_box_unwrap_struct_let.ion` - unannotated `let n = Box::unwrap(boxed)` for `Box<Node>` (exit 10); cgen asserts `Node* _box` not `int* _box`
 - `test_box_unwrap_same_scope.ion` - unwrap then more work in the same function; moved box is not freed again (exit 3)
 - `test_recursive_struct_box.ion` - linked list via `Option<Box<Node>>` (exit 3)
 - `test_recursive_struct_mutual_box.ion` - mutual recursion through Box (exit 30)

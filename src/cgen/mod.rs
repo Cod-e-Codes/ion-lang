@@ -6566,4 +6566,44 @@ fn main() -> int {
             "expected moved box not to be freed again at scope exit in:\n{c}"
         );
     }
+
+    #[test]
+    fn box_unwrap_unannotated_struct_let_uses_node_not_int() {
+        let src = r#"
+struct Node {
+    a: int;
+    b: int;
+    c: int;
+    d: int;
+}
+
+fn main() -> int {
+    let boxed = Box::new(Node {
+        a: 1,
+        b: 2,
+        c: 3,
+        d: 4,
+    });
+    let n = Box::unwrap(boxed);
+    return n.a + n.b + n.c + n.d;
+}
+"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("Node* _box"),
+            "expected unwrap to use Node* _box in:\n{c}"
+        );
+        assert!(
+            !c.contains("int* _box"),
+            "expected unwrap not to lower T as int in:\n{c}"
+        );
+        assert!(
+            !c.contains("int n ="),
+            "expected unannotated let n to be Node, not int, in:\n{c}"
+        );
+    }
 }

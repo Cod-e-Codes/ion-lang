@@ -604,11 +604,15 @@ impl IRBuilder {
                     type_ann.clone()
                 } else if let Some(ref init_expr) = let_stmt.init {
                     match init_expr {
-                        Expr::Call(call_expr) => ctx
-                            .function_returns
-                            .get(&call_expr.callee)
-                            .and_then(|o| o.clone())
-                            .unwrap_or_else(|| infer_type_from_expr(init_expr)),
+                        Expr::Call(call_expr) => {
+                            call_ir_return_type(&call_expr.callee, &call_expr.args, ctx)
+                                .or_else(|| {
+                                    ctx.function_returns
+                                        .get(&call_expr.callee)
+                                        .and_then(|o| o.clone())
+                                })
+                                .unwrap_or_else(|| infer_type_from_expr(init_expr))
+                        }
                         Expr::FnLiteral(lit) => fn_type_from_expr_literal(lit),
                         Expr::Var(_var_expr) => Type::Int,
                         _ => infer_type_from_expr(init_expr),
@@ -1075,23 +1079,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             }
         }
         Expr::Call(call_expr) => {
-            let return_type = builtin_option_vec_return(&call_expr.callee, &call_expr.args, ctx)
-                .or_else(|| {
-                    if call_expr.callee.starts_with("Box::new") && !call_expr.args.is_empty() {
-                        ctx.resolve_expr_type(&call_expr.args[0])
-                            .map(|arg_ty| Type::Box {
-                                inner: Box::new(arg_ty),
-                            })
-                    } else if call_expr.callee == "Box::unwrap" && !call_expr.args.is_empty() {
-                        match ctx.resolve_expr_type(&call_expr.args[0]) {
-                            Some(Type::Box { inner }) => Some(*inner),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| infer_type_from_call(&call_expr.callee, &call_expr.args));
+            let return_type = call_ir_return_type(&call_expr.callee, &call_expr.args, ctx);
             IREexpr::Call {
                 callee: call_expr.callee.clone(),
                 args: call_expr
@@ -1353,6 +1341,25 @@ fn slice_elem_type_from_arg_expr(arg: &Expr, ctx: &LoweringContext) -> Option<Ty
         },
         _ => None,
     }
+}
+
+fn call_ir_return_type(callee: &str, args: &[Expr], ctx: &LoweringContext) -> Option<Type> {
+    builtin_option_vec_return(callee, args, ctx)
+        .or_else(|| {
+            if callee.starts_with("Box::new") && !args.is_empty() {
+                ctx.resolve_expr_type(&args[0]).map(|arg_ty| Type::Box {
+                    inner: Box::new(arg_ty),
+                })
+            } else if callee == "Box::unwrap" && !args.is_empty() {
+                match ctx.resolve_expr_type(&args[0]) {
+                    Some(Type::Box { inner }) => Some(*inner),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+        .or_else(|| infer_type_from_call(callee, args))
 }
 
 fn builtin_option_vec_return(callee: &str, args: &[Expr], ctx: &LoweringContext) -> Option<Type> {

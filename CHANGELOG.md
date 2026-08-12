@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **IR / Codegen**: unannotated `let n = Box::unwrap(boxed)` types `n` as `T` (for example `Node`), not default `int`. Annotated `let n: Node = ...` already lowered correctly.
+
 ## 0.1.12 - 2026-08-12
 
 - **Type checker**: `resolve_type_name` rewrites parser `Struct` names to `Enum` inside generic parameters (and other composite types). `Result<int, MyError>` from `stdlib/result.ion` type-checks; previously expected and actual printed identically and failed.

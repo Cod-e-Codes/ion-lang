@@ -1,0 +1,18 @@
+// Unannotated let: IR must type Box::unwrap as Node, not default int.
+struct Node {
+    a: int;
+    b: int;
+    c: int;
+    d: int;
+}
+
+fn main() -> int {
+    let boxed = Box::new(Node {
+        a: 1,
+        b: 2,
+        c: 3,
+        d: 4,
+    });
+    let n = Box::unwrap(boxed);
+    return n.a + n.b + n.c + n.d;
+}
