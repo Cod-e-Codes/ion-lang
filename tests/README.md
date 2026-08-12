@@ -119,6 +119,14 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_generic_types.ion` - Generic type system
 - `test_generic_struct.ion` - Generic struct types
 - `test_box_basic.ion` - Box<T> heap allocation
+- `test_recursive_struct_box.ion` - linked list via `Option<Box<Node>>` (exit 3)
+- `test_recursive_struct_mutual_box.ion` - mutual recursion through Box (exit 30)
+- `test_recursive_struct_vec.ion` - self-referential `Vec<Forest>` (exit 2)
+- `test_recursive_struct_send_ok.ion` - recursive Box node satisfies `T: Send` (exit 9)
+- `test_recursive_struct_infinite_error.ion` - bare `next: Node` → `InfiniteSize`
+- `test_recursive_struct_option_infinite_error.ion` - `next: Option<Node>` → `InfiniteSize`
+- `test_recursive_struct_eq_error.ion` - recursive Box node rejected for `T: Eq`
+- `test_recursive_box_ref_error.ion` - `Box<&int>` field still `ReferenceEscape`
 - `test_box_ops.ion` - Box operations (new, unwrap)
 - `test_vec_basic.ion` - Vec<T> dynamic arrays
 - `test_vec_new.ion` - Vec::new() function

@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 pub(crate) const KNOWN_TRAIT_BOUNDS: &[&str] = &["Copy", "Eq", "Send"];
 
@@ -60,6 +61,10 @@ impl TypeChecker {
 
     /// Types that support `==` and `!=` with correct semantics.
     pub(crate) fn is_eq_type(&self, ty: &Type) -> bool {
+        self.is_eq_type_rec(ty, &mut HashSet::new())
+    }
+
+    fn is_eq_type_rec(&self, ty: &Type, visiting: &mut HashSet<String>) -> bool {
         match ty {
             Type::Void => false,
             Type::Int
@@ -75,34 +80,52 @@ impl TypeChecker {
             | Type::U32
             | Type::U64
             | Type::UInt => true,
-            Type::Ref { inner, .. } => self.is_eq_type(inner),
+            Type::Ref { inner, .. } => self.is_eq_type_rec(inner, visiting),
             Type::RawPtr { .. } => false,
             Type::Channel { .. } | Type::Sender { .. } | Type::Receiver { .. } => false,
             Type::Struct(name) => {
-                if let Some(decl) = self.structs.get(name) {
-                    decl.fields.iter().all(|f| self.is_eq_type(&f.ty))
+                if !visiting.insert(name.clone()) {
+                    // Coinductive: cycle edge does not introduce non-Eq by itself.
+                    return true;
+                }
+                let result = if let Some(decl) = self.structs.get(name) {
+                    decl.fields
+                        .iter()
+                        .all(|f| self.is_eq_type_rec(&f.ty, visiting))
                 } else {
                     true
-                }
+                };
+                visiting.remove(name);
+                result
             }
             Type::Enum(name) => {
-                if let Some(decl) = self.enums.get(name) {
+                if !visiting.insert(name.clone()) {
+                    return true;
+                }
+                let result = if let Some(decl) = self.enums.get(name) {
                     decl.variants.iter().all(|v| {
-                        v.payload_types.iter().all(|ty| self.is_eq_type(ty))
+                        v.payload_types
+                            .iter()
+                            .all(|ty| self.is_eq_type_rec(ty, visiting))
                             && v.named_fields.as_ref().is_none_or(|named_fields| {
-                                named_fields.iter().all(|(_, ty)| self.is_eq_type(ty))
+                                named_fields
+                                    .iter()
+                                    .all(|(_, ty)| self.is_eq_type_rec(ty, visiting))
                             })
                     })
                 } else {
                     true
-                }
+                };
+                visiting.remove(name);
+                result
             }
-            Type::Generic { params, .. } => params.iter().all(|p| self.is_eq_type(p)),
+            Type::Generic { params, .. } => params.iter().all(|p| self.is_eq_type_rec(p, visiting)),
+            // Box/Vec do not support == (pointer identity is not value Eq).
             Type::Box { .. } | Type::Vec { .. } => false,
             Type::String | Type::Str => true,
-            Type::Array { inner, .. } => self.is_eq_type(inner),
+            Type::Array { inner, .. } => self.is_eq_type_rec(inner, visiting),
             Type::Slice { .. } => false,
-            Type::Tuple { elements } => elements.iter().all(|e| self.is_eq_type(e)),
+            Type::Tuple { elements } => elements.iter().all(|e| self.is_eq_type_rec(e, visiting)),
             Type::Fn { .. } => true,
         }
     }

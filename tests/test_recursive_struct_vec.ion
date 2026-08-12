@@ -1,0 +1,18 @@
+// Self-referential Vec of the same struct type.
+struct Forest {
+    id: int;
+    children: Vec<Forest>;
+}
+
+fn main() -> int {
+    let leaf: Forest = Forest {
+        id: 7,
+        children: Vec::new(),
+    };
+    let mut root: Forest = Forest {
+        id: 1,
+        children: Vec::new(),
+    };
+    root.children.push(leaf);
+    return root.id + root.children.len();
+}

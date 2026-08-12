@@ -222,6 +222,20 @@ let b: Box<int> = Box::new(42);
 let x: int = Box::unwrap(b);
 ```
 
+Recursive owned types need indirection (`Box`, `Vec`, or a raw pointer). Bare nests (`next: Node`, `next: Option<Node>`) are infinite size. Linked lists use `Option<Box<Node>>` ([tests/test_recursive_struct_box.ion](../../../../tests/test_recursive_struct_box.ion)); declare a local `enum Option<T>` when constructing `Option::None` / `Option::Some` (same pattern as [tests/test_enum_generic.ion](../../../../tests/test_enum_generic.ion)).
+
+```ion
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Node {
+    value: int;
+    next: Option<Box<Node>>;
+}
+```
+
 ## Arrays and slices
 
 Fixed arrays `[T; N]` and slices `[]T` / `&[]T` support bounds-checked indexing (panic on OOB). For non-panicking element access use `Slice::get_ref` (`Option<&T>`, local only), including after `&[T; N]` -> `&[]T` coercion. See [tests/test_slice_get_ref_from_array.ion](../../../../tests/test_slice_get_ref_from_array.ion).

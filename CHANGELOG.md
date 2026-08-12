@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Type checker**: recursive structs/enums no longer stack-overflow the compiler. Cycle-aware walks for no-escape, `Send`, `Eq`, and drop analysis; bare value cycles (`next: Node`, `next: Option<Node>`) are rejected as `InfiniteSize`, while `Box` / `Vec` / raw-pointer indirection remains allowed (and `Box<&T>` still fails no-escape).
+- **Codegen**: `Box::new` uses the argument's real type for `sizeof` / pointer type (no longer always `int`). Monomorphized `Option<Box<Struct>>` is emitted before the struct body (with a struct forward decl) so recursive boxes produce valid C.
+
 ## 0.1.8 - 2026-08-11
 
 - **Type checker**: matching `&UserGenericEnum<Concrete>` substitutes type parameters into variant payload bindings (for example `Status::Ready(v)` on `&Status<int>` binds `v` as `int`, so `v + 0` type-checks). Previously the subst map only matched bare `Generic`, leaving `&T`.
