@@ -2951,22 +2951,33 @@ impl Codegen {
                         }
                     }
                 } else {
-                    let use_arrow = if let Some(ty) = self.infer_irexpr_type(base) {
-                        matches!(
-                            ty,
-                            Type::Ref {
-                                inner,
-                                ..
-                            } if matches!(
-                                *inner,
-                                Type::Struct(_) | Type::Generic { .. } | Type::Tuple { .. }
-                            )
-                        )
-                    } else {
-                        *is_pointer
+                    // Reborrowed embedded struct fields are C places (struct
+                    // values at base->field), not pointers. Further field
+                    // access must use '.' even when Ion types the base as
+                    // &Struct (ION_SPEC §5.3 field reborrow).
+                    let use_arrow = match base.as_ref() {
+                        IREexpr::FieldAccess { .. } => false,
+                        _ => {
+                            if let Some(ty) = self.infer_irexpr_type(base) {
+                                matches!(
+                                    ty,
+                                    Type::Ref {
+                                        inner,
+                                        ..
+                                    } if matches!(
+                                        *inner,
+                                        Type::Struct(_)
+                                            | Type::Generic { .. }
+                                            | Type::Tuple { .. }
+                                    )
+                                )
+                            } else {
+                                *is_pointer
+                            }
+                        }
                     };
                     self.generate_expr(base);
-                    if use_arrow || *is_pointer {
+                    if use_arrow {
                         self.write("->");
                     } else {
                         self.write(".");
@@ -3166,6 +3177,18 @@ impl Codegen {
                             {
                                 self.write("(uint8_t*)");
                             }
+                        }
+                        // Non-copy field through &Struct / &mut Struct is already &Field in
+                        // Ion (ION_SPEC §5.3). C still loads the field (c->data as Vec*), so
+                        // take its address when the callee expects &T / &mut T (Vec**).
+                        if matches!(param_ty, Some(Type::Ref { .. }))
+                            && matches!(arg, IREexpr::FieldAccess { .. })
+                            && matches!(self.infer_irexpr_type(arg), Some(Type::Ref { .. }))
+                        {
+                            self.write("&(");
+                            self.generate_expr(arg);
+                            self.write(")");
+                            continue;
                         }
                         if matches!(param_ty, Some(Type::String)) {
                             self.generate_expr_with_type(arg, Some(&Type::String));

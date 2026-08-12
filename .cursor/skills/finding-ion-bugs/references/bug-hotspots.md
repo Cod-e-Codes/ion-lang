@@ -22,6 +22,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 - `Box`, `Vec`, `String` layout vs `runtime/ion_runtime.h`
 - **`String::len`**: null-check the `String*` value, not `&local` (`-Waddress` under CI `-Werror`)
 - **String literal call args**: parameters typed `String` need `ion_string_from_literal` at the call site, not only on `let s: String = "…"` (see `test_string_call_arg_literal.ion`)
+- **Reborrowed field → `&Vec` / `&String` param**: non-copy `FieldAccess` through `&Struct` is already `&T` in Ion but loads as `T*` in C; user calls need `&(base->field)` so arity matches `T**` (see `test_ref_struct_field_to_ref_vec_param.ion`). Nested embedded paths use `.` after the first hop (`&(w->inner.data)`). Builtins keep bare field loads via `vec_ion_ptr_expr`.
 - Single-file merge (`merge_modules`) vs `--mode multi` divergences
 - `extern "C"` calls only inside `unsafe` blocks in source; cgen must not strip guards
 

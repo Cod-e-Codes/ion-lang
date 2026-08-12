@@ -64,6 +64,11 @@ Stable beta expectations:
   passing the receiver to `ion_vec_push`, `ion_vec_get`, and related helpers.
   `Vec::get_ref` uses the same `ion_vec_t*` receiver but does not call
   `ion_vec_get`; it bounds-checks and takes the address of the slot in generated C.
+- Non-copy fields through `&Struct` / `&mut Struct` are already `&Field` in Ion.
+  When such a field is passed to a user parameter of type `&T` / `&mut T`, codegen
+  emits `&(base->field)` so the C argument is `T**` (matching the parameter), not
+  the bare field load `T*`. Nested paths through embedded structs use `.` after the
+  first hop (`&(w->inner.data)`), because the reborrowed place is a C struct value.
 
 ## `Box<T>`
 

@@ -203,6 +203,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_method_call_basic.ion` - Basic method call syntax (`vec.push()`, `s.len()`)
 - `test_method_call_mut.ion` - Mutable receiver method calls (`vec.pop()`, `vec.set()`)
 - `test_method_call_ref_param.ion` - Method-call syntax on `&T` / `&mut T` parameters (`out.push()`, `vec.get()`)
+- `test_ref_struct_field_to_ref_vec_param.ion` - Reborrowed `Vec` field through `&Struct` (and nested `a.b.c`) passed to a free `&Vec<T>` param; also method sugar on the field (exit 42)
 - `test_method_call_generic.ion` - Generic method calls with type inference
 - `test_method_call_chaining.ion` - Chained method calls (`vec.push().len()`)
 
