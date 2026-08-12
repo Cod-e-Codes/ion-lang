@@ -161,7 +161,7 @@ fn mark_active(c: &mut Customer) {
 
 ## Comparing borrowed structs
 
-Read fields through `&Struct` parameters. Ion does not allow reference fields in structs.
+Read fields through `&Struct` parameters. Ion does not allow reference fields in structs. Non-copy fields (for example `Vec<T>`) through `&Struct` are already `&T` and pass to `&T` parameters without an extra `&` ([tests/test_ref_struct_field_to_ref_vec_param.ion](../../../../tests/test_ref_struct_field_to_ref_vec_param.ion)).
 
 ```ion
 struct Customer {

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Codegen**: reborrowed non-copy struct fields passed to `&T` / `&mut T` parameters (for example `peek(c.data, 0)` with `c: &Container` and `data: Vec<int>`) emit `&(c->data)` so C pointer arity matches `Vec_T**`. Nested embedded paths use `.` after the first hop (`&(w->inner.data)`). Previously the bare field load (`Vec_T*`) compiled under default GCC flags and segfaulted at runtime.
+
 ## 0.1.6 - 2026-08-11
 
 - **Parser**: `if 5 < x { f(x); }` (literal on the left of `<`/`<=`, function call in the body) no longer misparses as a struct literal. Struct-vs-block lookahead after `{` requires `name:` for fields, so calls like `f(` stay block statements.

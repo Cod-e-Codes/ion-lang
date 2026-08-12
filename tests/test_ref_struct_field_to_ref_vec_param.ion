@@ -1,0 +1,69 @@
+// Reborrowed Vec field through &Struct passed to a free fn taking &Vec<T>
+// must emit &(c->data) so C arity matches Vec**. Also covers nested field
+// paths and method-call sugar on the field (builtin path).
+
+struct Container {
+    data: Vec<int>;
+}
+
+struct Wrapper {
+    inner: Container;
+}
+
+fn peek(v: &Vec<int>, i: int) -> int {
+    let mut result: int = -1;
+    match Vec::get_ref(v, i) {
+        Option::Some(x) => {
+            result = x + 0;
+        }
+        Option::None => {}
+    }
+    return result;
+}
+
+fn use_container(c: &Container) -> int {
+    return peek(c.data, 0);
+}
+
+fn use_wrapper(w: &Wrapper) -> int {
+    return peek(w.inner.data, 0);
+}
+
+fn method_on_field(c: &Container) -> int {
+    let mut result: int = -1;
+    match c.data.get_ref(0) {
+        Option::Some(x) => {
+            result = x + 0;
+        }
+        Option::None => {}
+    }
+    return result;
+}
+
+fn main() -> int {
+    let mut c: Container = Container {
+        data: Vec::new(),
+    };
+    Vec::push(&mut c.data, 42);
+    let a: int = use_container(&c);
+    let m: int = method_on_field(&c);
+
+    let mut w: Wrapper = Wrapper {
+        inner: Container {
+            data: Vec::new(),
+        },
+    };
+    Vec::push(&mut w.inner.data, 42);
+    let b: int = use_wrapper(&w);
+
+    if a != 42 {
+        return 1;
+    }
+    if b != 42 {
+        return 2;
+    }
+    if m != 42 {
+        return 3;
+    }
+    return 42;
+}
