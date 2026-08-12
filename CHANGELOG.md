@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Type checker**: matching `&UserGenericEnum<Concrete>` substitutes type parameters into variant payload bindings (for example `Status::Ready(v)` on `&Status<int>` binds `v` as `int`, so `v + 0` type-checks). Previously the subst map only matched bare `Generic`, leaving `&T`.
+- **Type checker**: `resolve_type_name` recurses into `&T` so `&Flag` parameters resolve `Flag` as an enum (not a struct), matching `&f` arguments.
+- **Codegen**: match on `&Enum` / `&GenericEnum` deref-copies the scrutinee into a value temporary (`Status_int x = *s`, `Flag x = *f`), including when the param type still carries parser `Struct("Flag")` for an enum name.
+
 ## 0.1.7 - 2026-08-11
 
 - **Codegen**: reborrowed non-copy struct fields passed to `&T` / `&mut T` parameters (for example `peek(c.data, 0)` with `c: &Container` and `data: Vec<int>`) emit `&(c->data)` so C pointer arity matches `Vec_T**`. Nested embedded paths use `.` after the first hop (`&(w->inner.data)`). Previously the bare field load (`Vec_T*`) compiled under default GCC flags and segfaulted at runtime.

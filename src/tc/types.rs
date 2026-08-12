@@ -19,6 +19,10 @@ impl TypeChecker {
                     Ok(ty.clone())
                 }
             }
+            Type::Ref { inner, mutable } => Ok(Type::Ref {
+                inner: Box::new(self.resolve_type_name(inner)?),
+                mutable: *mutable,
+            }),
             Type::Generic { name, params } => {
                 // Check if this is a generic type alias
                 if let Some(alias) = self.type_aliases.get(name)

@@ -101,6 +101,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 ### Enums, generics, and collections
 - `test_enum_basic.ion` - Enum declarations and literals
 - `test_enum_generic.ion` - Generic enum types
+- `test_match_ref_generic_enum_arith.ion` - Match on `&Status<int>` and non-generic `&Flag` with arithmetic on copy payloads (exit 55)
 - `test_match_basic.ion` - Pattern matching
 - `test_match_pattern_bindings.ion` - Pattern matching with bindings
 - `test_match_complex.ion` - Complex pattern matching scenarios

@@ -1,0 +1,48 @@
+// Match through &UserGenericEnum<Concrete> must substitute T into arm
+// bindings (v + 0 works). Non-generic &Enum keeps the same through-ref path.
+
+enum Status<T> {
+    Ready(T);
+    Empty;
+}
+
+enum Flag {
+    On(int);
+    Off;
+}
+
+fn describe(s: &Status<int>) -> int {
+    match s {
+        Status::Ready(v) => {
+            return v + 0;
+        }
+        Status::Empty => {
+            return -1;
+        }
+    }
+}
+
+fn describe_flag(f: &Flag) -> int {
+    match f {
+        Flag::On(v) => {
+            return v + 0;
+        }
+        Flag::Off => {
+            return -2;
+        }
+    }
+}
+
+fn main() -> int {
+    let s: Status<int> = Status::Ready(55);
+    let a: int = describe(&s);
+    let f: Flag = Flag::On(11);
+    let b: int = describe_flag(&f);
+    if a != 55 {
+        return 1;
+    }
+    if b != 11 {
+        return 2;
+    }
+    return 55;
+}
