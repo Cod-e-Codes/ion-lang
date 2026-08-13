@@ -267,6 +267,29 @@ impl TypeChecker {
             });
         }
 
+        // Slice::len<T>(s: &[]T) -> int
+        if callee == "Slice::len" {
+            if call_expr.args.len() != 1 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "1 argument".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            if self
+                .slice_elem_type_from_slice_arg(&call_expr.args[0])
+                .is_some()
+            {
+                return Ok(Some(Type::Int));
+            }
+            let slice_ty = self.check_expr(&call_expr.args[0])?;
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "&[]T".to_string(),
+                got: type_to_string(&slice_ty),
+                span: call_expr.args[0].span(),
+            });
+        }
+
         // Slice::get_ref<T>(s: &[]T, index: int) -> Option<&T>
         if callee == "Slice::get_ref" {
             if call_expr.args.len() != 2 {

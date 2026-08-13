@@ -1,0 +1,61 @@
+// Length-agnostic scan via Slice::len on &[]T; two caller array sizes.
+// Also checks that vec.len() still resolves to Vec::len, not Slice::len.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn sum_slice(s: &[]int) -> int {
+    let mut total: int = 0;
+    let mut i: int = 0;
+    let n: int = Slice::len(s);
+    while i < n {
+        match Slice::get_ref(s, i) {
+            Option::Some(x) => {
+                total = total + x;
+            }
+            Option::None => {
+                return -1;
+            }
+        };
+        i = i + 1;
+    }
+    return total;
+}
+
+fn len_via_method(s: &[]int) -> int {
+    return s.len();
+}
+
+fn main() -> int {
+    let a: [int; 2] = [10, 20];
+    let b: [int; 4] = [1, 2, 3, 4];
+    if sum_slice(&a) != 30 {
+        return 1;
+    }
+    if sum_slice(&b) != 10 {
+        return 2;
+    }
+    if Slice::len(&a) != 2 {
+        return 3;
+    }
+    if a.len() != 2 {
+        return 4;
+    }
+    if len_via_method(&b) != 4 {
+        return 5;
+    }
+
+    let mut v: Vec<int> = Vec::new();
+    v.push(7);
+    v.push(8);
+    v.push(9);
+    if v.len() != 3 {
+        return 6;
+    }
+    if Vec::len(&v) != 3 {
+        return 7;
+    }
+
+    return 0;
+}

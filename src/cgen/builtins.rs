@@ -572,6 +572,24 @@ impl Codegen {
             return Some(code);
         }
 
+        // Slice::len<T>(s: &[]T) -> int
+        if callee == "Slice::len" && args.len() == 1 {
+            if let Some((_, size, _)) = self.slice_arg_as_array(&args[0]) {
+                return Some(size.to_string());
+            }
+            let mut slice_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, slice_code);
+            self.generate_expr(&args[0]);
+            slice_code = std::mem::replace(&mut self.output, old_output);
+            let (slice_expr, by_ref) = self.slice_ion_access_from_code(&args[0], &slice_code);
+            let len_access = if by_ref {
+                format!("({slice_expr})->len")
+            } else {
+                format!("({slice_expr}).len")
+            };
+            return Some(format!("(int)({len_access})"));
+        }
+
         // Slice::get_ref<T>(s: &[]T, index: int) -> Option<&T> (stack-local, no move-out)
         if callee == "Slice::get_ref" && args.len() == 2 {
             let effective_return_type = return_type.cloned().or_else(|| {

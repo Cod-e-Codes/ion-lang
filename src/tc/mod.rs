@@ -722,6 +722,7 @@ impl TypeChecker {
             "Vec::get" => Some("fn Vec::get(vec: &Vec<T>, index: int) -> Option<T>"),
             "Vec::get_ref" => Some("fn Vec::get_ref(vec: &Vec<T>, index: int) -> Option<&T>"),
             "Vec::set" => Some("fn Vec::set(vec: &mut Vec<T>, index: int, value: T) -> int"),
+            "Slice::len" => Some("fn Slice::len(s: &[]T) -> int"),
             "Slice::get_ref" => Some("fn Slice::get_ref(s: &[]T, index: int) -> Option<&T>"),
             "String::new" => Some("fn String::new() -> String"),
             "String::from" => Some("fn String::from(s: &str) -> String"),
@@ -967,7 +968,7 @@ impl TypeChecker {
                     mutable: false,
                 }))
             }
-            ("Slice", "Slice::get_ref") => {
+            ("Slice", "Slice::get_ref") | ("Slice", "Slice::len") => {
                 let elem_type = match receiver_type {
                     Type::Slice { inner } => inner.clone(),
                     Type::Ref { inner, .. } => match **inner {

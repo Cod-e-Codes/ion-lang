@@ -151,9 +151,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_get_ref_scan_nested_vec.ion` - repeated `get_ref` scan over `Vec` of structs with nested `Vec` fields (no heap corruption)
 - `test_string_get.ion` - `String::get` byte peek and `None` on OOB/negative
 - `test_string_get_method.ion` - `s.get(i)` method desugar for `String::get`
-- `test_slice_get_ref_scan.ion` - read-only scan via `Slice::get_ref` over `&[]Product`
+- `test_slice_get_ref_scan.ion` - read-only scan via `Slice::get_ref` over `&[]Product`, loop bound from `Slice::len`
 - `test_slice_get_ref_oob.ion` - `Slice::get_ref` OOB/negative/`None` and in-range
 - `test_slice_get_ref_from_array.ion` - array method `arr.get_ref` and `Slice::get_ref(&arr, i)`
+- `test_slice_len.ion` - `Slice::len` / `s.len()` on `&[]T` with two array sizes; `vec.len()` still uses `Vec::len`
 - `test_vm_execute.ion` - VM-style interpreter loop: `get_ref` enum dispatch, struct field `+=`, method calls on `&mut VM` fields (exit 42)
 - `test_field_assign_plus.ion` - struct field assignment and `+=` on owned and `&mut` receivers (exit 42)
 - `test_vec_enum_push_set.ion` - `Vec` of enums: push, `get_ref` dispatch, and `set` round-trip (exit 50)
@@ -333,6 +334,7 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 - `test_vec_get_ref_mut_error.ion` - `Vec::set` while `get_ref` borrow is active (BorrowConflict)
 - `test_slice_get_ref_return_error.ion` - Returning `&T` from `Slice::get_ref` (ReferenceEscape)
 - `test_slice_get_ref_mut_error.ion` - Indexed write `arr[i] = ...` while `Slice::get_ref` borrow is active (BorrowConflict)
+- `test_slice_len_error.ion` - `Slice::len` on a non-slice argument (TypeMismatch)
 - `test_nested_struct_ref_error.ion` - Nested struct storing a reference field (ReferenceEscape)
 - `test_module_visibility.ion` - Module visibility violations
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls

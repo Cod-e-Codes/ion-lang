@@ -87,6 +87,10 @@ Fixed arrays `[T; N]` are inline values. Slices `[]T` are fat views carrying a
 data pointer and length. Safe indexing emits runtime bounds checks; indexing
 inside `unsafe` blocks may omit those checks.
 
+- `Slice::len` returns the fat-pointer element count as `int` (empty is `0`). Method
+  form `s.len()` desugars to `Slice::len`. `&[T; N]` may coerce to `&[]T` for this
+  builtin (codegen may emit the compile-time `N` instead of a field load). Field
+  access `s.len` is not a slice API; slices are not structs.
 - `Slice::get_ref` returns a stack-local `Option<&T>` the same way as
   `Vec::get_ref` (pointer into the slice/array buffer, or `None` on OOB). The
   root owner is shared-borrowed while the result is live. `&[T; N]` may coerce
