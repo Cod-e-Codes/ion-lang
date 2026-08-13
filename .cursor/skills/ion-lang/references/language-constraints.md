@@ -21,7 +21,7 @@ References `&T` and `&mut T` are stack-local views. **Rejected:**
 
 **Borrow conflicts** (ION_SPEC section 5.3): at most one `&mut T` or any number of `&T` on the same **root owner binding**. Lasting borrows come from `let r = &x`, `let r = &mut s.field`, etc., and end when the binding's scope ends; field and index paths borrow the root owner, not disjoint field slots. Ephemeral `&` / `&mut` in call arguments are checked but not stored. While a lasting borrow is active, the owner cannot be read, assigned, or moved (including copy types and other field paths). Mutation through `&mut` uses struct field paths or `&mut` callee parameters; there is no unary `*` and no assign-through a bound scalar `&mut T`.
 
-APIs that would return `&T` in Rust must use owned values, indices, or the patterns in [writing-ion-code/references/verified-patterns.md](../writing-ion-code/references/verified-patterns.md) (`Vec::get_ref` / `Slice::get_ref` / `String::get`).
+APIs that would return `&T` in Rust must use owned values, indices, or the patterns in [writing-ion-code/references/verified-patterns.md](../writing-ion-code/references/verified-patterns.md) (`Vec::get_ref` / `Slice::get_ref` / `String::get`). Prefer `Handle` + `Arena<T>` (`stdlib/handle.ion`) over a raw `int` when slots can be reused.
 
 ## Concurrency
 

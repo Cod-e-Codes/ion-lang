@@ -1,0 +1,52 @@
+// Remove, reuse the slot, old handle is Miss / contains false (ABA).
+import "stdlib/handle.ion" as handle;
+
+fn main() -> int {
+    let mut arena: Arena<int> = handle::new();
+    let h1: Handle = handle::insert(&mut arena, 10);
+
+    match handle::remove(&mut arena, handle::copy(&h1)) {
+        Take::Hit(v) => {
+            if v != 10 {
+                return 1;
+            }
+        }
+        Take::Miss => {
+            return 2;
+        }
+    }
+
+    let h3: Handle = handle::insert(&mut arena, 30);
+    if h3.index != h1.index {
+        return 3;
+    }
+    if h3.generation == h1.generation {
+        return 4;
+    }
+    if handle::contains(&arena, handle::copy(&h1)) {
+        return 5;
+    }
+    if !handle::contains(&arena, handle::copy(&h3)) {
+        return 6;
+    }
+
+    match handle::remove(&mut arena, handle::copy(&h1)) {
+        Take::Hit(_) => {
+            return 7;
+        }
+        Take::Miss => {}
+    }
+
+    match handle::remove(&mut arena, handle::copy(&h3)) {
+        Take::Hit(v3) => {
+            if v3 != 30 {
+                return 8;
+            }
+        }
+        Take::Miss => {
+            return 9;
+        }
+    }
+
+    return 42;
+}

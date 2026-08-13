@@ -14,7 +14,7 @@ use crate::ast::{
 };
 use crate::ir::*;
 use crate::types_util::{is_ref_to_vec, ref_to_vec_elem};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 enum BoundsCheck {
     Fixed(usize),
@@ -402,6 +402,8 @@ impl Codegen {
             self.enum_map.insert("Option".to_string(), option_template);
         }
 
+        self.emit_monomorphized_enum_forwards();
+
         let mut instantiations_vec: Vec<_> = self.generic_instantiations.values().collect();
         instantiations_vec.sort_by_key(|(name, _)| name.clone());
 
@@ -451,47 +453,23 @@ impl Codegen {
             self.generated_types.insert(key, true);
         }
 
-        for s in &program.structs {
-            if s.generics.is_empty() {
-                self.write(&format!("typedef struct {} {{\n", s.name));
-                self.indent_level += 1;
-                for field in &s.fields {
-                    self.write_indent();
-                    let field_decl = match &field.ty {
-                        Type::Array { inner, size } => {
-                            let base_type = self.type_to_c(inner);
-                            format!("{} {}[{}]", base_type, field.name, size)
-                        }
-                        _ => {
-                            format!("{} {}", self.type_to_c(&field.ty), field.name)
-                        }
-                    };
-                    self.writeln(&format!("{};", field_decl));
-                }
-                self.indent_level -= 1;
-                self.writeln(&format!("}} {};", s.name));
-                self.writeln("");
-            }
-        }
-
         for (decl, params) in struct_instantiations {
+            let key = mangle_type_name(&decl.name, &params);
             self.generate_monomorphized_struct(&decl, &params);
-        }
-
-        // Late enums: payloads embed structs/enums by value (e.g. Option<Todo>).
-        for (decl, params) in &late_enum_instantiations {
-            self.generate_monomorphized_enum(decl, params);
-            let key = mangle_type_name(&decl.name, params);
             self.generated_types.insert(key, true);
         }
+
+        self.emit_non_generic_struct_bodies(program);
+
+        let mut late_pending: Vec<(EnumDecl, Vec<Type>)> = late_enum_instantiations;
         for (key, params) in late_option_types {
             if self.generated_types.contains_key(&key) {
                 continue;
             }
             let option_decl = self.enum_map.get("Option").unwrap().clone();
-            self.generate_monomorphized_enum(&option_decl, &params);
-            self.generated_types.insert(key, true);
+            late_pending.push((option_decl, params));
         }
+        self.emit_enum_instantiations_ready_first(late_pending);
 
         // Collect and generate Vec type definitions
         let mut vec_types = std::collections::HashSet::new();
@@ -707,6 +685,8 @@ impl Codegen {
         self.generic_instantiations = generic_instantiations_map.clone();
 
         self.emit_vec_slice_tuple_typedefs(program);
+
+        self.emit_monomorphized_enum_forwards();
 
         // Emit struct type definitions first so functions can use them.
         for s in &program.structs {
@@ -1511,6 +1491,10 @@ impl Codegen {
     }
 
     fn emit_string_compare_operand(&mut self, expr: &IREexpr) {
+        if let IREexpr::StringLit(value) = expr {
+            self.write_ion_string_from_literal(value);
+            return;
+        }
         let needs_deref = match self.infer_irexpr_type(expr) {
             Some(Type::Ref { inner, .. }) => matches!(*inner, Type::String),
             _ => false,
@@ -2478,20 +2462,13 @@ impl Codegen {
                         // Special handling for Option<T> from Vec::get/Vec::pop
                         // These return void* that need to be cast to Option<T>*
                         if name == "Option" && params.len() == 1 {
-                            if let IREexpr::Call {
-                                callee,
-                                return_type,
-                                ..
-                            } = init
-                            {
+                            if let IREexpr::Call { callee, .. } = init {
                                 let needs_cast = callee == "Vec::pop"
                                     || callee == "Vec::get"
                                     || callee == "METHOD::pop"
                                     || callee == "METHOD::get"
                                     || callee.starts_with("ion_vec_pop")
-                                    || callee.starts_with("ion_vec_get")
-                                    || (return_type.is_some()
-                                        && matches!(return_type.as_ref().unwrap(), Type::Generic { name: n, params } if n == "Option" && params.len() == 1 && !matches!(&params[0], Type::Ref { .. })));
+                                    || callee.starts_with("ion_vec_get");
 
                                 if needs_cast {
                                     let mono_name = mangle_type_name("Option", params);
@@ -3883,20 +3860,18 @@ impl Codegen {
         enum_decl: Option<&EnumDecl>,
         scrutinee_type: Option<&Type>,
     ) -> (String, Vec<Type>) {
-        if enum_type == "Option" {
-            if let Some(Type::Generic { name, params }) = scrutinee_type
-                && name == "Option"
-                && params.len() == 1
-            {
-                return (mangle_type_name("Option", params), params.clone());
-            }
-            if let Some(inferred) = self.infer_irexpr_type(scrutinee)
-                && let Type::Generic { name, params } = &inferred
-                && name == "Option"
-                && params.len() == 1
-            {
-                return (mangle_type_name("Option", params), params.clone());
-            }
+        if let Some(Type::Generic { name, params }) = scrutinee_type
+            && name == enum_type
+            && !params.is_empty()
+        {
+            return (mangle_type_name(name, params), params.clone());
+        }
+        if let Some(inferred) = self.infer_irexpr_type(scrutinee)
+            && let Type::Generic { name, params } = &inferred
+            && name == enum_type
+            && !params.is_empty()
+        {
+            return (mangle_type_name(name, params), params.clone());
         }
 
         if let IREexpr::Call {
@@ -3957,10 +3932,10 @@ impl Codegen {
                 let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem));
                 return (mono_name, vec![elem]);
             } else if let Some(Type::Generic { name, params }) = return_type
-                && name == "Option"
-                && params.len() == 1
+                && name == enum_type
+                && !params.is_empty()
             {
-                let mono_name = mangle_type_name("Option", params);
+                let mono_name = mangle_type_name(name, params);
                 return (mono_name, params.clone());
             }
         }
@@ -4004,33 +3979,14 @@ impl Codegen {
         self.match_counter += 1;
 
         self.write_indent();
-        // Check if the expression is a call to Vec::pop or Vec::get (or METHOD::pop/get for method calls) that returns void*
-        // Also check if it's a Call expression that returns Option<T> - these runtime functions return void* that need casting
-        let needs_cast = if let IREexpr::Call {
-            callee,
-            return_type,
-            ..
-        } = expr
-        {
-            let is_vec_heap_option = callee == "Vec::pop"
+        // Vec::pop / Vec::get (and METHOD::pop/get) return heap Option as void*.
+        let needs_cast = if let IREexpr::Call { callee, .. } = expr {
+            callee == "Vec::pop"
                 || callee == "Vec::get"
                 || callee == "METHOD::pop"
                 || callee == "METHOD::get"
                 || callee.starts_with("ion_vec_pop")
-                || callee.starts_with("ion_vec_get");
-
-            // Stack-local Option<&T> from get_ref / Option<u8> from String::get are assigned directly.
-            let returns_heap_option = if let Some(Type::Generic { name, params }) = return_type {
-                name == "Option"
-                    && params.len() == 1
-                    && !matches!(params[0], Type::Ref { .. })
-                    && callee != "String::get"
-                    && callee != "METHOD::get"
-            } else {
-                false
-            };
-
-            is_vec_heap_option || returns_heap_option
+                || callee.starts_with("ion_vec_get")
         } else {
             false
         };
@@ -5395,6 +5351,122 @@ impl Codegen {
         self.writeln("");
     }
 
+    fn emit_struct_decl_body(&mut self, decl: &StructDecl) {
+        self.write(&format!("typedef struct {} {{\n", decl.name));
+        self.indent_level += 1;
+        for field in &decl.fields {
+            self.write_indent();
+            let field_decl = match &field.ty {
+                Type::Array { inner, size } => {
+                    let base_type = self.type_to_c(inner);
+                    format!("{} {}[{}]", base_type, field.name, size)
+                }
+                _ => {
+                    format!("{} {}", self.type_to_c(&field.ty), field.name)
+                }
+            };
+            self.writeln(&format!("{};", field_decl));
+        }
+        self.indent_level -= 1;
+        self.writeln(&format!("}} {};", decl.name));
+        self.writeln("");
+        self.generated_types.insert(decl.name.clone(), true);
+    }
+
+    fn emit_non_generic_struct_bodies(&mut self, program: &IRProgram) {
+        let mut pending: Vec<StructDecl> = program
+            .structs
+            .iter()
+            .filter(|s| s.generics.is_empty())
+            .cloned()
+            .collect();
+        let none: HashSet<String> = HashSet::new();
+        while !pending.is_empty() {
+            let mut rest = Vec::new();
+            let mut progressed = false;
+            for decl in pending {
+                if decl
+                    .fields
+                    .iter()
+                    .all(|field| type_ready_for_by_value(&field.ty, &self.generated_types, &none))
+                {
+                    self.emit_struct_decl_body(&decl);
+                    progressed = true;
+                } else {
+                    rest.push(decl);
+                }
+            }
+            if !progressed {
+                for decl in rest {
+                    self.emit_struct_decl_body(&decl);
+                }
+                break;
+            }
+            pending = rest;
+        }
+    }
+
+    fn emit_enum_instantiations_ready_first(&mut self, mut pending: Vec<(EnumDecl, Vec<Type>)>) {
+        let user_structs: HashSet<String> = self
+            .struct_map
+            .iter()
+            .filter(|(_, decl)| decl.generics.is_empty())
+            .map(|(name, _)| name.clone())
+            .collect();
+        while !pending.is_empty() {
+            let mut rest = Vec::new();
+            let mut progressed = false;
+            for (decl, params) in pending {
+                let key = mangle_type_name(&decl.name, &params);
+                if self.generated_types.contains_key(&key) {
+                    continue;
+                }
+                if params.iter().all(|param| {
+                    type_ready_for_by_value(param, &self.generated_types, &user_structs)
+                }) {
+                    self.generate_monomorphized_enum(&decl, &params);
+                    self.generated_types.insert(key, true);
+                    progressed = true;
+                } else {
+                    rest.push((decl, params));
+                }
+            }
+            if !progressed {
+                for (decl, params) in rest {
+                    let key = mangle_type_name(&decl.name, &params);
+                    if !self.generated_types.contains_key(&key) {
+                        self.generate_monomorphized_enum(&decl, &params);
+                        self.generated_types.insert(key, true);
+                    }
+                }
+                break;
+            }
+            pending = rest;
+        }
+    }
+
+    fn emit_monomorphized_enum_forwards(&mut self) {
+        let mut names: Vec<String> = self
+            .generic_instantiations
+            .iter()
+            .filter_map(|(key, (base_name, _))| {
+                if self.enum_map.contains_key(base_name) || base_name == "Option" {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        for name in &names {
+            self.writeln(&format!("typedef struct {name} {name};"));
+        }
+        if !names.is_empty() {
+            self.writeln("");
+        }
+    }
+
     fn generate_monomorphized_enum(&mut self, decl: &EnumDecl, params: &[Type]) {
         // Generate monomorphized enum: Option<int> -> Option_int
         let monomorphized_name = mangle_type_name(&decl.name, params);
@@ -5417,20 +5489,35 @@ impl Codegen {
 
         // Generate union members for each variant with payloads
         for (variant_idx, variant) in decl.variants.iter().enumerate() {
-            if !variant.payload_types.is_empty() {
-                self.write_indent();
-                self.write("struct {\n");
-                self.indent_level += 1;
+            let has_payloads = !variant.payload_types.is_empty() || variant.named_fields.is_some();
+            if !has_payloads {
+                continue;
+            }
+            self.write_indent();
+            self.write("struct {\n");
+            self.indent_level += 1;
+            if let Some(named_fields) = &variant.named_fields {
+                for (field_name, field_ty) in named_fields {
+                    self.write_indent();
+                    let substituted_ty = substitute_generic_types(field_ty, &substitutions);
+                    self.write(&format!(
+                        "{} {};",
+                        self.type_to_c(&substituted_ty),
+                        field_name
+                    ));
+                    self.writeln("");
+                }
+            } else {
                 for (i, payload_ty) in variant.payload_types.iter().enumerate() {
                     self.write_indent();
                     let substituted_ty = substitute_generic_types(payload_ty, &substitutions);
                     self.write(&format!("{} arg{};", self.type_to_c(&substituted_ty), i));
                     self.writeln("");
                 }
-                self.indent_level -= 1;
-                self.write_indent();
-                self.write(&format!("}} variant_{};\n", variant_idx));
             }
+            self.indent_level -= 1;
+            self.write_indent();
+            self.write(&format!("}} variant_{};\n", variant_idx));
         }
 
         self.indent_level -= 1;
@@ -5532,6 +5619,51 @@ fn type_complete_with_struct_forwards(ty: &Type) -> bool {
     }
 }
 
+fn type_ready_for_by_value(
+    ty: &Type,
+    generated: &HashMap<String, bool>,
+    user_structs: &HashSet<String>,
+) -> bool {
+    match ty {
+        Type::Void
+        | Type::Int
+        | Type::Bool
+        | Type::F32
+        | Type::F64
+        | Type::I8
+        | Type::I16
+        | Type::I32
+        | Type::I64
+        | Type::U8
+        | Type::U16
+        | Type::U32
+        | Type::U64
+        | Type::UInt
+        | Type::String
+        | Type::Str
+        | Type::Fn { .. }
+        | Type::Slice { .. }
+        | Type::Box { .. }
+        | Type::Vec { .. }
+        | Type::RawPtr { .. }
+        | Type::Ref { .. } => true,
+        Type::Channel { elem_type } | Type::Sender { elem_type } | Type::Receiver { elem_type } => {
+            type_ready_for_by_value(elem_type, generated, user_structs)
+        }
+        Type::Array { inner, .. } => type_ready_for_by_value(inner, generated, user_structs),
+        Type::Tuple { elements } => elements
+            .iter()
+            .all(|elem| type_ready_for_by_value(elem, generated, user_structs)),
+        Type::Struct(name) | Type::Enum(name) => {
+            generated.contains_key(name) || user_structs.contains(name)
+        }
+        Type::Generic { name, params } => {
+            let mangled = mangle_type_name(name, params);
+            generated.contains_key(&mangled) || (params.is_empty() && user_structs.contains(name))
+        }
+    }
+}
+
 fn collect_generic_instantiations(
     program: &IRProgram,
     instantiations: &mut std::collections::HashMap<String, (String, Vec<Type>)>,
@@ -5554,6 +5686,50 @@ fn collect_generic_instantiations(
         for field in &s.fields {
             collect_generic_from_type(&field.ty, instantiations);
         }
+    }
+
+    let known = known_type_names(program);
+    instantiations.retain(|_, (_, params)| params_are_bound(params, &known));
+}
+
+fn known_type_names(program: &IRProgram) -> HashSet<String> {
+    let mut names: HashSet<String> = ["Vec", "Box", "Option", "Result"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    for s in &program.structs {
+        names.insert(s.name.clone());
+    }
+    for e in &program.enums {
+        names.insert(e.name.clone());
+    }
+    names
+}
+
+fn params_are_bound(params: &[Type], known: &HashSet<String>) -> bool {
+    params.iter().all(|param| type_is_bound(param, known))
+}
+
+fn type_is_bound(ty: &Type, known: &HashSet<String>) -> bool {
+    match ty {
+        Type::Struct(name) | Type::Enum(name) => known.contains(name),
+        Type::Generic { name, params } if params.is_empty() => known.contains(name),
+        Type::Generic { params, .. } => params.iter().all(|p| type_is_bound(p, known)),
+        Type::Vec { elem_type }
+        | Type::Box { inner: elem_type }
+        | Type::Channel { elem_type }
+        | Type::Sender { elem_type }
+        | Type::Receiver { elem_type } => type_is_bound(elem_type, known),
+        Type::Ref { inner, .. }
+        | Type::RawPtr { inner }
+        | Type::Array { inner, .. }
+        | Type::Slice { inner } => type_is_bound(inner, known),
+        Type::Tuple { elements } => elements.iter().all(|e| type_is_bound(e, known)),
+        Type::Fn {
+            params,
+            return_type,
+        } => params.iter().all(|p| type_is_bound(p, known)) && type_is_bound(return_type, known),
+        _ => true,
     }
 }
 

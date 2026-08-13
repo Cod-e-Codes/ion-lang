@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.15 - 2026-08-13
+
+- **Stdlib**: `import "stdlib/handle.ion" as handle;` with `Handle`, `Arena<T>`, `insert` / `remove` / `contains` / `len`. Peek stays local via `Vec::get_ref` on `arena.slots` (no-escape). Not a compiler builtin. `handle::copy(&h)` reconstructs a `Handle` because user structs are not Copy.
+- **IR**: monomorphize imported generic functions (`handle::new` to `handle_new_int`); substitute generic struct field types so `Arena<int>.slots` is `Vec<Slot<int>>`.
+- **Type checker**: `Vec::len` / `Vec::capacity` accept `&mut Vec<T>` (reborrow as `&Vec<T>`). Match-arm result typing no longer re-checks a statement after it already moved the scrutinee.
+- **Codegen**: generic named-field enum variants emit union fields; emit generic struct instantiations and `Handle` before user structs that embed them by value.
+
 ## 0.1.14 - 2026-08-13
 
 - **Builtins**: `Slice::len(s: &[]T) -> int` (method form `s.len()`), including array-to-slice coercion. Field access `s.len` remains invalid. Spec, ABI, skills, LSP completions, and integration tests updated.

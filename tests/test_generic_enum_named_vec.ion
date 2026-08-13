@@ -1,0 +1,59 @@
+// Generic named-field enum in Vec: push, get_ref match, get + inner match.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum Cell<T> {
+    Full { generation: int, value: T };
+    Empty { generation: int, next: int };
+}
+
+fn main() -> int {
+    let mut cells: Vec<Cell<int>> = Vec::new();
+    cells.push(Cell::Full {
+        generation: 1,
+        value: 9,
+    });
+    match cells.get_ref(0) {
+        Option::Some(cell) => {
+            match cell {
+                Cell::Full { generation: g, value: v } => {
+                    if g != 1 {
+                        return 1;
+                    }
+                    if v != 9 {
+                        return 2;
+                    }
+                }
+                Cell::Empty { generation: _g, next: _n } => {
+                    return 3;
+                }
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    }
+    match cells.get(0) {
+        Option::Some(owned) => {
+            match owned {
+                Cell::Full { generation: g2, value: v2 } => {
+                    if g2 != 1 {
+                        return 5;
+                    }
+                    if v2 != 9 {
+                        return 6;
+                    }
+                }
+                Cell::Empty { generation: _g2, next: _n2 } => {
+                    return 7;
+                }
+            }
+        }
+        Option::None => {
+            return 8;
+        }
+    }
+    return 42;
+}

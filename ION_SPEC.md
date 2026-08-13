@@ -1069,7 +1069,7 @@ Note that:
 - `Vec::get_ref()` returns `Option<&T>`: a **local, stack-only borrow** of an in-place element. It does not move or hollow the slot. The result is only valid as a short-lived binding within the current function (for example in a `match` arm). Match arms bind the element as `&T`; for enum elements, an inner `match` on that binding dispatches variants directly (no unary `*` deref). Copy fields in struct or enum variant patterns bind as `T`; non-copy fields bind as `&T`. Codegen uses `T*` for types with owned fields and copies by value for copy types, so repeated scans over `Vec<struct-with-nested-Vec>` do not double-free nested fields. It cannot be returned, stored in structs or enums, sent on channels, or cross `spawn`. While an `&T` from `get_ref` is active, the root owner of the vector (the binding behind `&Vec<T>`) is shared-borrowed: `&mut Vec<T>` on that owner, `Vec::set`, `Vec::push`, and `Vec::pop` on the same vector are rejected until the borrow ends. Out-of-range or negative indices yield `Option::None`. Nested inspection (`order.lines` then `get_ref`) follows the same root-owner borrow rules as field paths (Section 5.3). Field paths through `&Struct` that are already references (for example `order.lines` when `order: &Order`) are passed to `Vec` methods without an extra `&`.
 - `Vec::set()` requires a mutable reference and returns an error code (0 for success, non-zero for failure). After shared borrows from `get_ref` end, `Vec::set` on the same index is allowed.
 
-For cross-function or long-lived access, Ion still favors an **index/handle style**: helpers return indices or keys and callers re-index within their own function bodies.
+For cross-function or long-lived access, Ion still favors an **index/handle style**: helpers return indices or keys and callers re-index within their own function bodies. When slots in a growable table can be reused, prefer `Handle` / `Arena<T>` in Section 8.6 over a raw `int` index.
 
 #### 8.3 `String`
 
@@ -1145,7 +1145,43 @@ enum IOError {
 
 File handles would typically be **not `Send`**, to avoid subtle platform-dependent behavior across threads.
 
-#### 8.6 Standard I/O Modules
+#### 8.6 `Handle` / `Arena<T>`
+
+Generational handles live in `stdlib/handle.ion` (a library, not compiler builtins). Import with `import "stdlib/handle.ion" as handle;`.
+
+```ion
+pub struct Handle { index: int; generation: int; }
+pub enum Slot<T> {
+    Occupied { generation: int, value: T };
+    Free { generation: int, next: int };
+}
+pub struct Arena<T> {
+    slots: Vec<Slot<T>>;
+    free_head: int;
+    live: int;
+}
+pub enum Take<T> { Hit(T); Miss; }
+
+pub fn invalid() -> Handle;
+pub fn copy(h: &Handle) -> Handle;
+pub fn new<T>() -> Arena<T>;
+pub fn len<T>(arena: &Arena<T>) -> int;
+pub fn contains<T>(arena: &Arena<T>, h: Handle) -> bool;
+pub fn insert<T>(arena: &mut Arena<T>, value: T) -> Handle;
+pub fn remove<T>(arena: &mut Arena<T>, h: Handle) -> Take<T>;
+```
+
+- `Handle` is two `int` fields (`Send`). Invalid is `index: -1, generation: 0`. Ion does not treat user structs as `Copy`; `copy(&h)` reconstructs from the fields when a by-value call would consume the only binding.
+- `insert` reuses `free_head` or `Vec::push`. `remove` bumps generation, links the slot into the free list, and returns `Take::Hit` with the owned value or `Take::Miss` for stale/OOB handles.
+- Peek cannot be a returning library function (no-escape). In the caller, `arena.slots.get_ref(h.index)` (or `Vec::get_ref` on an owned `Arena`) then match `Slot::Occupied` and compare `generation`. This is local only.
+- `slots` is public because peek cannot be a returning library function. Direct mutation of `slots` can break the free list.
+- There is no `Arena::get_ref` compiler builtin.
+- `Vec::new()` inside `new<T>` must be annotated (`let slots: Vec<Slot<T>> = Vec::new();`).
+- `Handle` is not phantom `Handle<T>`. Mixing two arenas with the same handle is a user error; `contains` still rejects stale generations.
+
+See [verified-patterns.md](.cursor/skills/writing-ion-code/references/verified-patterns.md) (Index and handle search) and [examples/handle_table/](examples/handle_table/).
+
+#### 8.7 Standard I/O Modules
 
 The stdlib provides safe wrappers in `stdlib/io.ion`, `stdlib/fmt.ion`, and `stdlib/fs.ion`:
 
@@ -1305,7 +1341,7 @@ Canonical idioms and copy-paste examples: [`.cursor/skills/writing-ion-code/refe
 
 | Topic | Where |
 |-------|--------|
-| Index/handle instead of returning `&T` | verified-patterns.md: Index and handle search |
+| Index/handle instead of returning `&T` | verified-patterns.md: Index and handle search; `stdlib/handle.ion`; `tests/test_handle_arena_*.ion`; `examples/handle_table/` |
 | `Vec::get` / `Vec::set` put-back | verified-patterns.md: Mutating Vec elements; `tests/test_vec_get_putback.ion` |
 | Owned API boundaries | verified-patterns.md: Owned API boundaries |
 | Compare via `&Struct` fields | verified-patterns.md: Comparing borrowed structs |

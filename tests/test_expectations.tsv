@@ -273,3 +273,10 @@ test_recursive_struct_infinite_error.ion	error		InfiniteSize
 test_recursive_struct_option_infinite_error.ion	error		InfiniteSize		
 test_recursive_struct_eq_error.ion	error		TraitBoundNotSatisfied		
 test_recursive_box_ref_error.ion	error		ReferenceEscape		
+test_vec_len_mut_param.ion	run	42			
+test_generic_enum_named_vec.ion	run	42			
+test_handle_arena_basic.ion	run	42			
+test_handle_arena_stale.ion	run	42			
+test_handle_arena_get_ref.ion	run	42			
+test_handle_arena_copy_struct.ion	run	42			
+test_handle_arena_escape_error.ion	error		ReferenceEscape		

@@ -28,7 +28,7 @@ Task progress:
 | [ION_SPEC.md](../../../ION_SPEC.md) | Grammar, semantics, stdlib API, known limitations |
 | [examples/](../../../examples/) | Working single-file programs |
 | [tests/](../../../tests/) | Edge cases, negative patterns, modules |
-| [stdlib/](../../../stdlib/) | `io`, `fmt`, `fs`, `result` APIs |
+| [stdlib/](../../../stdlib/) | `io`, `fmt`, `fs`, `result`, `handle` APIs |
 
 For ownership and no-escape rules, see [ion-lang/references/language-constraints.md](../ion-lang/references/language-constraints.md).
 
@@ -149,6 +149,7 @@ Import with paths like `import "stdlib/io.ion" as io;`:
 | `fmt.ion` | `int_to_string`, `print_int`, `println_int` |
 | `fs.ion` | `read_to_string_result(path: String) -> ReadResult` (POSIX/MinGW) |
 | `result.ion` | generic `Result<T, E>` for library authors |
+| `handle.ion` | `Handle`, `Arena<T>`, `insert` / `remove` / `contains` / `len`; peek via `Vec::get_ref` on `arena.slots` |
 
 No stdlib stdin/line input. For POSIX `read` on fd 0, see [examples/todo_demo/](../../../examples/todo_demo/).
 

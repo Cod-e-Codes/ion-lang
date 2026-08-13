@@ -1,0 +1,62 @@
+// insert, len, contains, remove Hit then Miss.
+import "stdlib/handle.ion" as handle;
+
+fn main() -> int {
+    let mut arena: Arena<int> = handle::new();
+    if handle::len(&arena) != 0 {
+        return 1;
+    }
+
+    let h1: Handle = handle::insert(&mut arena, 10);
+    let h2: Handle = handle::insert(&mut arena, 20);
+    if handle::len(&arena) != 2 {
+        return 2;
+    }
+    if !handle::contains(&arena, handle::copy(&h1)) {
+        return 3;
+    }
+    if !handle::contains(&arena, handle::copy(&h2)) {
+        return 4;
+    }
+
+    match handle::remove(&mut arena, handle::copy(&h1)) {
+        Take::Hit(v) => {
+            if v != 10 {
+                return 5;
+            }
+        }
+        Take::Miss => {
+            return 6;
+        }
+    }
+    if handle::contains(&arena, handle::copy(&h1)) {
+        return 7;
+    }
+    if handle::len(&arena) != 1 {
+        return 8;
+    }
+
+    match handle::remove(&mut arena, handle::copy(&h1)) {
+        Take::Hit(_) => {
+            return 9;
+        }
+        Take::Miss => {}
+    }
+
+    match handle::remove(&mut arena, handle::copy(&h2)) {
+        Take::Hit(v2) => {
+            if v2 != 20 {
+                return 10;
+            }
+        }
+        Take::Miss => {
+            return 11;
+        }
+    }
+
+    if handle::len(&arena) != 0 {
+        return 12;
+    }
+
+    return 42;
+}

@@ -113,7 +113,7 @@ See [tests/test_move_basic.ion](../../../../tests/test_move_basic.ion).
 
 ## Index and handle search
 
-When another language would return `&T`, return an index (`int`) or handle and re-index locally. Read-only scans use `Vec::get_ref` (does not hollow the vector). See [tests/test_vec_search_index_ok.ion](../../../../tests/test_vec_search_index_ok.ion) and [tests/test_vec_get_ref_scan.ion](../../../../tests/test_vec_get_ref_scan.ion).
+When another language would return `&T`, return an index (`int`) or handle and re-index locally. Read-only scans use `Vec::get_ref` (does not hollow the vector). When slots in a growable table can be reused, prefer `import "stdlib/handle.ion" as handle;` (`Handle` is index plus generation) over a raw `int`. Peek stays in the caller: `arena.slots.get_ref(h.index)` then match `Slot::Occupied`. See [tests/test_vec_search_index_ok.ion](../../../../tests/test_vec_search_index_ok.ion), [tests/test_vec_get_ref_scan.ion](../../../../tests/test_vec_get_ref_scan.ion), [tests/test_handle_arena_basic.ion](../../../../tests/test_handle_arena_basic.ion), and [examples/handle_table/](../../../../examples/handle_table/).
 
 ```ion
 enum Option<T> {
@@ -165,6 +165,35 @@ fn main() -> int {
         };
     }
     return 0;
+}
+```
+
+When the table reuses slots, store a `Handle` and peek locally:
+
+```ion
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn peek_hp(arena: &Arena<int>, h: Handle) -> int {
+    let mut found: int = -1;
+    match arena.slots.get_ref(h.index) {
+        Option::Some(slot) => {
+            match slot {
+                Slot::Occupied { generation: g, value: v } => {
+                    if g == h.generation {
+                        found = v;
+                    }
+                }
+                Slot::Free { generation: _g, next: _n } => {}
+            }
+        }
+        Option::None => {}
+    }
+    return found;
 }
 ```
 

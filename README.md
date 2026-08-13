@@ -20,7 +20,7 @@ Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 - **Control flow**: `if`/`while` (bool conditions), `loop { }`, `break`/`continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, `defer`
 - **Concurrency**: `channel<T>()` returns `(Sender<T>, Receiver<T>)`; `send(&tx, v)` and `recv(&mut rx)`; `spawn { ... }` with structural `Send`
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`
-- **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, and `stdlib/result.ion`
+- **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, `stdlib/result.ion`, and `stdlib/handle.ion`
 
 Known limitations: [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
 
@@ -190,6 +190,7 @@ On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows cha
 | [text_summary/](examples/text_summary/) | `fs` read, string iteration, counts |
 | [todo_demo/](examples/todo_demo/) | Interactive todo list (`Vec` of structs, stdin); see [todo_demo/README.md](examples/todo_demo/README.md) |
 | [data_lib/](examples/data_lib/) | Multi-module library; see [data_lib/README.md](examples/data_lib/README.md) |
+| [handle_table/](examples/handle_table/) | Generational `Arena<T>`: store `Handle`, peek via `Vec::get_ref` on `slots`, stale handle after reuse |
 
 ## Project Structure
 

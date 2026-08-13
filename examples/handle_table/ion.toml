@@ -1,0 +1,5 @@
+name = "handle_table"
+main = "handle_table.ion"
+output = "handle_table"
+mode = "single"
+out_dir = "target"
