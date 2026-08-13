@@ -1,0 +1,8 @@
+// Function parameters cannot take Box<&T> (no-escape).
+fn take(b: Box<&int>) -> int {
+    return 0;
+}
+
+fn main() -> int {
+    return 0;
+}

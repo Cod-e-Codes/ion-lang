@@ -1,0 +1,5 @@
+// Vec<&T> stores references on the heap (no-escape).
+fn main() -> int {
+    let v: Vec<&int> = Vec::new();
+    return 0;
+}

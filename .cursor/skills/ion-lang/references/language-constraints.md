@@ -15,6 +15,7 @@ References `&T` and `&mut T` are stack-local views. **Rejected:**
 
 - Returning references from functions
 - Storing references in struct fields or enum variants
+- Storing references in `Box`, `Vec`, or arrays (including locals and parameters)
 - Sending references through channels
 - Capturing references in `spawn` (non-`Send`)
 - Any pattern requiring cross-function lifetime reasoning

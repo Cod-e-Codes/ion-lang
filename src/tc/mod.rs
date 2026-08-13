@@ -1410,6 +1410,7 @@ impl TypeChecker {
         // Resolve type aliases for parameters
         for param in &function.params {
             let resolved_param_ty = self.resolve_type_name(&param.ty)?;
+            self.check_no_off_stack_reference(&resolved_param_ty, function.span)?;
             self.variables.insert(
                 param.name.clone(),
                 Self::new_variable_info(resolved_param_ty, function.span),
@@ -1580,6 +1581,7 @@ impl TypeChecker {
                     for (pattern, elem_ty) in patterns.iter().zip(elements.iter()) {
                         match pattern {
                             Pattern::Binding { name, .. } => {
+                                self.check_no_off_stack_reference(elem_ty, let_stmt.span)?;
                                 self.variables.insert(
                                     name.clone(),
                                     Self::new_variable_info(elem_ty.clone(), let_stmt.span),
@@ -1700,6 +1702,7 @@ impl TypeChecker {
 
                     // For minimal subset, infer type from init
                     let var_type = resolved_type_ann.as_ref().unwrap_or(&init_type).clone();
+                    self.check_no_off_stack_reference(&var_type, let_stmt.span)?;
 
                     // Then mark moves in the initializer expression
                     // This handles cases like `let y = x;` where `x` is moved to `y`
@@ -1742,6 +1745,7 @@ impl TypeChecker {
                             span: let_stmt.span,
                         });
                     }
+                    self.check_no_off_stack_reference(&resolved_type, let_stmt.span)?;
                     // Variable declared without init - store the type, state is Valid but uninitialized
                     self.variables.insert(
                         let_stmt.name.clone(),
@@ -3436,6 +3440,14 @@ impl TypeChecker {
                                 inferred_params[i] = Type::Struct(g.name.clone());
                             }
                         }
+                        let still_unresolved = matches!(&inferred_params[i], Type::Struct(n) if n == &g.name)
+                            || matches!(&inferred_params[i], Type::Generic { name, params } if name == &g.name && params.is_empty());
+                        if still_unresolved && !self.is_type_param(&g.name) {
+                            return Err(TypeCheckError::Message(format!(
+                                "line {}: cannot infer type parameter '{}' for '{}::{}'; add a type annotation",
+                                enum_lit.span.line, g.name, enum_lit.enum_name, enum_lit.variant
+                            )));
+                        }
                     }
                 }
 
@@ -4516,6 +4528,7 @@ impl TypeChecker {
                 self.current_return_type = Some(resolved_return.clone());
 
                 for (param, param_ty) in lit.params.iter().zip(resolved_params.iter()) {
+                    self.check_no_off_stack_reference(param_ty, lit.span)?;
                     self.variables.insert(
                         param.name.clone(),
                         Self::new_variable_info(param_ty.clone(), lit.span),
@@ -4971,6 +4984,53 @@ impl TypeChecker {
     /// Used to enforce the no-escape rule.
     fn is_reference_containing(&self, ty: &Type) -> bool {
         self.is_reference_containing_rec(ty, &mut HashSet::new())
+    }
+
+    /// True when a reference would live in a heap cell or similar aggregate (`Box`,
+    /// `Vec`, array, slice, channel), not as a stack-local `&T` / `Option<&T>`.
+    pub(crate) fn reference_stored_off_stack(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Box { inner } | Type::Vec { elem_type: inner } | Type::Array { inner, .. } => {
+                self.is_reference_containing(inner)
+            }
+            Type::Slice { inner } => self.is_reference_containing(inner),
+            Type::Channel { elem_type }
+            | Type::Sender { elem_type }
+            | Type::Receiver { elem_type } => self.is_reference_containing(elem_type),
+            Type::Generic { params, .. } => {
+                params.iter().any(|p| self.reference_stored_off_stack(p))
+            }
+            Type::Tuple { elements } => elements.iter().any(|e| self.reference_stored_off_stack(e)),
+            Type::Ref { inner, .. } | Type::RawPtr { inner } => {
+                self.reference_stored_off_stack(inner)
+            }
+            Type::Fn {
+                params,
+                return_type,
+            } => {
+                params.iter().any(|p| self.reference_stored_off_stack(p))
+                    || self.reference_stored_off_stack(return_type)
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn check_no_off_stack_reference(
+        &self,
+        ty: &Type,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        if self.reference_stored_off_stack(ty) {
+            Err(TypeCheckError::ReferenceEscape {
+                description: format!(
+                    "type '{}' stores a reference in Box, Vec, an array, or a channel (violates no-escape rule)",
+                    type_to_string(ty)
+                ),
+                span,
+            })
+        } else {
+            Ok(())
+        }
     }
 
     fn is_reference_containing_rec(&self, ty: &Type, visiting: &mut HashSet<String>) -> bool {

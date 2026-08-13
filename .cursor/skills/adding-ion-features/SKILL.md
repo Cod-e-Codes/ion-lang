@@ -77,7 +77,7 @@ Critical checks to preserve. Patterns below match **CLI stderr** (e.g. `UseAfter
 | Check | CLI stderr pattern |
 |-------|----------------|
 | Use after move | `UseAfterMove` |
-| Reference escape | `ReferenceEscape` |
+| Reference escape | `ReferenceEscape` (includes `Box<&T>` / `Vec<&T>` locals and params) |
 | Non-Send in channel/spawn | messages containing `Send` |
 | `if`/`while` non-bool | bool condition errors |
 | Module visibility | `Cannot access non-public` |

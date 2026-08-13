@@ -19,9 +19,11 @@ impl TypeChecker {
                 });
             }
             let value_ty = self.check_expr(&call_expr.args[0])?;
-            return Ok(Some(Type::Box {
+            let box_ty = Type::Box {
                 inner: Box::new(value_ty),
-            }));
+            };
+            self.check_no_off_stack_reference(&box_ty, call_expr.span)?;
+            return Ok(Some(box_ty));
         }
 
         // Box::unwrap<T>(box: Box<T>) -> T
