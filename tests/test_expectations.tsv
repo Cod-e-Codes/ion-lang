@@ -56,6 +56,8 @@ test_enum_unannotated_let.ion	cgen			Flag flag =	int flag =
 test_enum_unannotated_let.ion	cgen			Status status =	int status =
 test_enum_generic_unannotated_let.ion	run	42
 test_enum_generic_unannotated_let.ion	cgen			Option_int x =	^[[:space:]]*int x =
+test_option_none_unannotated_error.ion	error		cannot infer type parameter
+test_option_none_struct_field.ion	run	2
 test_unannotated_let_non_int.ion	run	5
 test_unannotated_let_non_int.ion	cgen			Point q =	^[[:space:]]*int q =
 test_unannotated_let_non_int.ion	cgen			Point n =	^[[:space:]]*int n =
@@ -283,6 +285,10 @@ test_recursive_struct_infinite_error.ion	error		InfiniteSize
 test_recursive_struct_option_infinite_error.ion	error		InfiniteSize		
 test_recursive_struct_eq_error.ion	error		TraitBoundNotSatisfied		
 test_recursive_box_ref_error.ion	error		ReferenceEscape		
+test_box_ref_let_error.ion	error		ReferenceEscape		
+test_box_ref_unannotated_let_error.ion	error		ReferenceEscape		
+test_box_ref_param_error.ion	error		ReferenceEscape		
+test_vec_ref_let_error.ion	error		ReferenceEscape		
 test_vec_len_mut_param.ion	run	42			
 test_generic_enum_named_vec.ion	run	42			
 test_handle_arena_basic.ion	run	42			

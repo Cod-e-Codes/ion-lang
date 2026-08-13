@@ -413,6 +413,9 @@ fn main() -> int {
 Do not write these expecting them to work:
 
 ```ion
+// Box of a reference
+let b: Box<&int> = Box::new(&x);
+
 // return reference
 fn bad() -> &int { ... }
 

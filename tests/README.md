@@ -110,6 +110,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_enum_basic.ion` - Enum declarations and literals
 - `test_enum_unannotated_let.ion` - unannotated `let flag = Flag::On` / `let status = Status::Ok { ... }` types as the enum, not default int (exit 7); cgen asserts `Flag flag =` / `Status status =`
 - `test_enum_generic_unannotated_let.ion` - unannotated `let x = Option::Some(42)` types as `Option<int>` (exit 42); cgen asserts `Option_int x =`
+- `test_option_none_unannotated_error.ion` - `let empty = Option::None` then use as `Option<Box<Node>>` needs a type annotation (`cannot infer type parameter`)
+- `test_option_none_struct_field.ion` - `Node { next: Option::None }` infers `T` from the field (exit 2)
 - `test_unannotated_let_non_int.ion` - unannotated `let q = p` / `let n = w.p` / `let v = origin()` keep struct types, not default int (exit 5); cgen asserts `Point q =` / `Point n =` / `Point v =`
 - `test_enum_generic.ion` - Generic enum types
 - `test_result_custom_enum.ion` - `Result<int, MyError>` via `stdlib/result.ion` (Ok and Err, exit 0)
@@ -150,6 +152,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_recursive_struct_option_infinite_error.ion` - `next: Option<Node>` → `InfiniteSize`
 - `test_recursive_struct_eq_error.ion` - recursive Box node rejected for `T: Eq`
 - `test_recursive_box_ref_error.ion` - `Box<&int>` field still `ReferenceEscape`
+- `test_box_ref_let_error.ion` - `let b: Box<&int> = Box::new(&x)` is `ReferenceEscape`
+- `test_box_ref_unannotated_let_error.ion` - `let b = Box::new(&x)` is `ReferenceEscape`
+- `test_box_ref_param_error.ion` - `fn take(b: Box<&int>)` is `ReferenceEscape`
+- `test_vec_ref_let_error.ion` - `let v: Vec<&int> = Vec::new()` is `ReferenceEscape`
 - `test_box_ops.ion` - Box operations (new, unwrap); cgen asserts `ion_box_free(_box)` and no `ion_box_free(boxed)`
 - `test_vec_basic.ion` - Vec<T> dynamic arrays
 - `test_vec_new.ion` - Vec::new() function

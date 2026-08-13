@@ -37,6 +37,7 @@ Concretely, references **MUST NOT**:
 
 - Be returned from functions
 - Be stored in struct fields or enum variants
+- Be stored on the heap or in an array (`Box<&T>`, `Vec<&T>`, `[ &T; N ]`), including as locals or parameters
 - Be captured by closures that may escape their defining scope
 - Be moved into channels
 - Cross thread boundaries (e.g., passed to `spawn`, stored in `Send` values)
@@ -670,6 +671,7 @@ Ion supports a **local, Hindley–Milner-inspired inference**:
 The inference engine is intentionally limited:
 
 - No higher-rank polymorphism.
+- Generic enum variants with no payload (`Option::None`) infer type arguments only from an adjacent expected type (a `let` annotation, a struct field, or a return type). They do not take `T` from a later statement; without that context the compiler requires an annotation.
 - Generic type parameters may declare optional **trait bounds** (`Copy`, `Eq`, `Send`). Bounds are checked at monomorphization: each concrete instantiation must satisfy every bound on the corresponding parameter. There are no user-defined traits; bounds name structural capabilities checked by the compiler (see Section 4.8).
 - Structural `Send` still applies per instantiation even without an explicit bound: for a generic type `Wrapper<T>`, each monomorphized `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`.
 
@@ -805,6 +807,7 @@ Each reference has a **borrow scope** equal to a syntactic region within a singl
 
 - References cannot be:
   - Stored in struct fields or enum variants.
+  - Stored in `Box<T>`, `Vec<T>`, or arrays, even as function-local bindings or parameters (`Box<&T>` / `Vec<&T>`).
   - Returned from functions.
   - Assigned into global or static variables.
   - Captured by function literals (closures) that may escape the current function.
@@ -857,7 +860,17 @@ fn read_twice(c: &Counter) -> int {
 } // borrows end here
 ```
 
-The type checker implements this by rejecting any attempt to **store or return** a type containing `&` or `&mut` outside the current function’s local variables. In particular, types such as `Option<&T>` or `Result<&T, E>` are only permitted as **local temporaries** within a function body; they cannot be returned, stored in longer-lived data structures, sent through channels, or cross thread boundaries. Standard library APIs are designed to avoid exposing such reference-carrying types across function boundaries.
+The type checker implements this by rejecting any attempt to **store or return** a type containing `&` or `&mut` outside the current function’s local variables. In particular, types such as `Option<&T>` or `Result<&T, E>` are only permitted as **local temporaries** within a function body; they cannot be returned, stored in longer-lived data structures, sent through channels, or cross thread boundaries. `Box<&T>` and `Vec<&T>` are not stack temporaries: boxing or pushing a reference copies the pointer onto the heap and is a compile-time error even as a local or parameter. Standard library APIs are designed to avoid exposing such reference-carrying types across function boundaries.
+
+**Example (invalid – boxing a reference):**
+
+```ion
+fn main() -> int {
+    let x: int = 1;
+    let b: Box<&int> = Box::new(&x); // ERROR: cannot store a reference in Box
+    return 0;
+}
+```
 
 #### 5.5 Destruction and `defer`
 
@@ -1236,6 +1249,7 @@ See [verified-patterns.md](.cursor/skills/writing-ion-code/references/verified-p
 
 - Returning references.
 - Storing references in structs or enums.
+- Storing references in `Box`, `Vec`, or arrays (`Box<&T>`), including as locals or parameters.
 - Channels of references.
 - Capturing references in escaping closures.
 - Moving non-`Send` values into `spawn`.

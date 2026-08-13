@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.18 - 2026-08-13
+
+- **Type checker**: `Box<&T>` / `Vec<&T>` (and arrays/channels of references) are `ReferenceEscape` as locals and parameters, not only as struct fields. This impacts any program that boxed or vectored a reference (`let b: Box<&int> = Box::new(&x)` previously compiled). Stack-local `Option<&T>` from `Vec::get_ref` is unchanged.
+- **Type checker**: unannotated `Option::None` (and other generic enum variants with no payload) reports that `T` cannot be inferred and needs a type annotation, instead of a later `Option<T>` vs `Option<Box<Node>>` mismatch. `Node { next: Option::None }` and annotated lets still infer from the adjacent expected type. This does not add later-use inference.
+- **Tests**: `test_box_ref_let_error.ion`, `test_box_ref_unannotated_let_error.ion`, `test_box_ref_param_error.ion`, `test_vec_ref_let_error.ion`, `test_option_none_unannotated_error.ion`, `test_option_none_struct_field.ion`.
+- **Docs**: ION_SPEC §1.2 / §4.4 / §5.4, bug hotspots, language constraints.
+
 ## 0.1.17 - 2026-08-13
 
 - **IR / Codegen**: lowering consumes checker `TypeInfo` keyed by stable `ExprId`s. Unannotated lets use the checker type, never a syntactic `int` fallback. This impacts any unannotated `let` whose checker type is not `int` (including `let x = y`, enum literals, `Box::unwrap`, field/call results), plus multi-file calls whose callee lives in another module. Annotated lets and same-file `String` literals already worked.

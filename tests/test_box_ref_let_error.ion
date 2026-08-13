@@ -1,0 +1,6 @@
+// Box<&T> as a local stores a reference on the heap (no-escape).
+fn main() -> int {
+    let x: int = 1;
+    let b: Box<&int> = Box::new(&x);
+    return 0;
+}

@@ -1,0 +1,16 @@
+// Unannotated Option::None does not infer T from a later use.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Node {
+    value: int;
+    next: Option<Box<Node>>;
+}
+
+fn main() -> int {
+    let empty = Option::None;
+    let leaf = Node { value: 2, next: empty };
+    return 0;
+}

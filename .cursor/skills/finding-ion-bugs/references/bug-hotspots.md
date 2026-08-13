@@ -3,9 +3,10 @@
 ## Type checker (`src/tc/`)
 
 - **Use-after-move**: moved values in branches, loop bodies, struct field partial move
-- **Reference escape**: `&` stored in struct, returned, sent on channel, captured by `spawn`
+- **Reference escape**: `&` stored in struct, returned, sent on channel, captured by `spawn`. Locals and params must also reject off-stack stores (`Box<&T>`, `Vec<&T>`); `is_reference_containing` on decls/returns is not enough (`test_box_ref_let_error.ion`). `Option<&T>` stack temporaries from `get_ref` stay legal.
 - **Send**: non-Send types on channels or in spawn closures; `Box` and channel element variance
 - **Recursive types**: `is_reference_containing` / `is_send` / `is_eq_type` / `type_needs_drop` need a visiting set; without one, `Box`/`Vec`/`Option<Box<…>>` self-reference stack-overflows at decl time. Representability (`InfiniteSize`) treats only `Box`/`Vec`/`RawPtr` as size boundaries — `Option<Node>` is still infinite size; `Option<Box<Node>>` is not. Do not “stop at Box” inside the no-escape walker or `Box<&T>` silently passes.
+- **Generic enum `None`**: `Option::None` has no payload, so `T` is inferred only from `expr_expected` / return type. Unannotated `let empty = Option::None` must error with cannot-infer, not a later `Option<T>` vs `Option<Box<Node>>` mismatch (`test_option_none_unannotated_error.ion`). Same-expression `Node { next: Option::None }` is fine (`test_option_none_struct_field.ion`).
 - **Match-arm result types**: `infer_block_result_type` reads recorded `TypeInfo` expr types plus control-flow shape (diverge vs value). It must not call `check_expr` again after `check_stmt` (`test_vec_get_putback_named.ion`).
 - **Match on `&GenericEnum`**: peel `Ref` before building the type-param subst map in `add_pattern_bindings` (see `test_match_ref_generic_enum_arith.ion`); bare `if let Type::Generic` misses `Ref { Generic { … } }` and leaves bindings as `&T`
 - **`resolve_type_name` and `&Enum` params**: must recurse into `Ref` so `&Flag` becomes `Ref { Enum }` (parser stores enum names as `Struct`); otherwise calls get `expected &Flag, got &Flag` from Struct vs Enum mismatch
