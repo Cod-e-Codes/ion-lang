@@ -149,7 +149,7 @@ Import with paths like `import "stdlib/io.ion" as io;`:
 | `fmt.ion` | `int_to_string`, `print_int`, `println_int` |
 | `fs.ion` | `read_to_string_result(path: String) -> ReadResult` (POSIX/MinGW) |
 | `result.ion` | generic `Result<T, E>` for library authors |
-| `handle.ion` | `Handle`, `Arena<T>`, `insert` / `remove` / `contains` / `len`; peek via `Vec::get_ref` on `arena.slots` |
+| `handle.ion` | `Handle`, `Arena<T>`, `copy` / `invalid` / `insert` / `remove` / `contains` / `len`; peek via `Vec::get_ref` on `arena.slots` |
 
 No stdlib stdin/line input. For POSIX `read` on fd 0, see [examples/todo_demo/](../../../examples/todo_demo/).
 

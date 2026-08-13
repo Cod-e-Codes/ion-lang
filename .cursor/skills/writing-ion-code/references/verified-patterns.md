@@ -168,7 +168,7 @@ fn main() -> int {
 }
 ```
 
-When the table reuses slots, store a `Handle` and peek locally:
+When the table reuses slots, store a `Handle` and peek locally. Annotate `let mut arena: Arena<int> = handle::new();`. Use `handle::copy(&h)` before a by-value `contains` / `remove` / peek. Through `&mut World`, `world.entities` is already `&mut Arena`; on an owned `World`, pass `&mut world.entities`.
 
 ```ion
 import "stdlib/handle.ion" as handle;
@@ -196,6 +196,8 @@ fn peek_hp(arena: &Arena<int>, h: Handle) -> int {
     return found;
 }
 ```
+
+That peek binds `v` because `int` is Copy. For `T` with owned fields, match `value: _` and use `remove` for the owned value.
 
 ## Mutating Vec elements
 

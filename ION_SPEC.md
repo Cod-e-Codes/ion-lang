@@ -1173,7 +1173,8 @@ pub fn remove<T>(arena: &mut Arena<T>, h: Handle) -> Take<T>;
 
 - `Handle` is two `int` fields (`Send`). Invalid is `index: -1, generation: 0`. Ion does not treat user structs as `Copy`; `copy(&h)` reconstructs from the fields when a by-value call would consume the only binding.
 - `insert` reuses `free_head` or `Vec::push`. `remove` bumps generation, links the slot into the free list, and returns `Take::Hit` with the owned value or `Take::Miss` for stale/OOB handles.
-- Peek cannot be a returning library function (no-escape). In the caller, `arena.slots.get_ref(h.index)` (or `Vec::get_ref` on an owned `Arena`) then match `Slot::Occupied` and compare `generation`. This is local only.
+- Peek cannot be a returning library function (no-escape). In the caller, `arena.slots.get_ref(h.index)` then match `Slot::Occupied` and compare `generation`. Through `&Arena` / `&World`, `slots` is already a ref; do not wrap it in another `&`. Bind `Occupied.value` only when `T` is Copy; otherwise `value: _` and use `remove` for the owned value.
+- Annotate `let mut arena: Arena<int> = handle::new();`. Through `&mut World`, `world.entities` is already `&mut Arena` (call `insert(world.entities, v)`). On an owned `World`, pass `&mut world.entities`.
 - `slots` is public because peek cannot be a returning library function. Direct mutation of `slots` can break the free list.
 - There is no `Arena::get_ref` compiler builtin.
 - `Vec::new()` inside `new<T>` must be annotated (`let slots: Vec<Slot<T>> = Vec::new();`).
