@@ -51,6 +51,11 @@ test_generic_types.ion	run	0
 test_box_basic.ion	run	0			
 test_vec_basic.ion	run	0			
 test_enum_generic.ion	run	0
+test_enum_unannotated_let.ion	run	7
+test_enum_unannotated_let.ion	cgen			Flag flag =	int flag =
+test_enum_unannotated_let.ion	cgen			Status status =	int status =
+test_enum_generic_unannotated_let.ion	run	42
+test_enum_generic_unannotated_let.ion	cgen			Option_int x =	^[[:space:]]*int x =
 test_result_custom_enum.ion	run	0
 test_match_ref_generic_enum_arith.ion	run	55
 test_match_ref_generic_enum_arith.ion	cgen			Status_int match_val_0 = *s
@@ -84,6 +89,7 @@ test_vec_get_multi_option.ion	run	0
 test_vec_get_multi_option.ion	cgen			Option_Customer
 test_vec_get_multi_option.ion	cgen			Option_String
 test_vec_get_putback.ion	run	0			
+test_vec_get_putback_named.ion	run	0			
 test_vec_get_ref_scan.ion	run	0			
 test_vec_get_ref_oob.ion	run	0			
 test_vec_get_ref_set_after.ion	run	0			

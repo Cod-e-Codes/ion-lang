@@ -1,8 +1,20 @@
-// Ion Language Showcase
+// Ion language showcase: current idioms.
 
-// ============================================
-// 1. STRUCTS - Custom data types
-// ============================================
+import "stdlib/result.ion" as result;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum DemoErr {
+    Bad;
+}
+
+enum Status {
+    Ok { value: int };
+    Err { code: int };
+}
 
 struct Point {
     x: int;
@@ -14,69 +26,39 @@ struct Pair<T> {
     second: T;
 }
 
-// ============================================
-// 2. ENUMS - Tagged unions with pattern matching
-// ============================================
-
-enum Option<T> {
-    Some(T);
-    None;
+struct Node {
+    value: int;
+    next: Option<Box<Node>>;
 }
-
-enum Result<T, E> {
-    Ok(T);
-    Err(E);
-}
-
-enum Status {
-    Ok { value: int };
-    Err { code: int };
-}
-
-// ============================================
-// 3. FUNCTIONS - Multiple arguments and returns
-// ============================================
 
 fn add(x: int, y: int) -> int {
     return x + y;
-}
-
-fn multiply(x: int, y: int) -> int {
-    return x * y;
-}
-
-fn create_point(x: int, y: int) -> Point {
-    return Point { x: x, y: y };
 }
 
 fn get_first<T>(pair: Pair<T>) -> T {
     return pair.first;
 }
 
-// ============================================
-// 4. HEAP ALLOCATION - Box<T>
-// ============================================
-
-fn box_example() -> int {
-    let value: int = 42;
-    let boxed: Box<int> = Box::new(value);
-    let unwrapped: int = Box::unwrap(boxed);
-    return unwrapped;
+fn classify(x: int) -> Result<int, DemoErr> {
+    if x < 0 {
+        return Result::Err(DemoErr::Bad);
+    }
+    return Result::Ok(x);
 }
 
-// ============================================
-// 5. DYNAMIC ARRAYS - Vec<T>
-// ============================================
+fn box_example() -> int {
+    let boxed = Box::new(Point { x: 10, y: 32 });
+    let p = Box::unwrap(boxed);
+    return p.x + p.y;
+}
 
 fn vec_example() -> int {
     let mut numbers: Vec<int> = Vec::new();
-
     numbers.push(10);
     numbers.push(20);
     numbers.push(30);
 
-    let len: int = numbers.len();
-    if len != 3 {
+    if numbers.len() != 3 {
         return 1;
     }
 
@@ -89,7 +71,7 @@ fn vec_example() -> int {
         Option::None => {
             return 3;
         }
-    };
+    }
 
     numbers.set(1, 25);
 
@@ -102,7 +84,7 @@ fn vec_example() -> int {
         Option::None => {
             return 5;
         }
-    };
+    }
 
     return 0;
 }
@@ -117,69 +99,105 @@ fn for_loop_example() -> int {
     for v in values {
         sum += v;
     }
-
     if sum != 6 {
         return 1;
     }
-
     return 0;
 }
-
-// ============================================
-// 6. STRINGS - Heap-allocated UTF-8 strings
-// ============================================
 
 fn string_example() -> int {
     let mut greeting: String = String::new();
     greeting.push_str("Hello");
     greeting.push_str(", ");
     greeting.push_str("Ion");
-    String::push_byte(&mut greeting, 33 as u8);
+    greeting.push_byte(33 as u8);
 
-    let len: int = greeting.len();
-    if len != 11 {
+    if greeting.len() != 11 {
         return 1;
     }
 
     let message: String = "Welcome to Ion";
-    let msg_len: int = message.len();
-    if msg_len != 14 {
+    if message.len() != 14 {
         return 2;
+    }
+
+    match greeting.get(0) {
+        Option::Some(b) => {
+            if b != 72 as u8 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    }
+
+    match greeting.get(99) {
+        Option::Some(_) => {
+            return 5;
+        }
+        Option::None => {}
     }
 
     return 0;
 }
 
-// ============================================
-// 7. CONTROL FLOW - if/else and while loops
-// ============================================
+fn sum_slice(s: &[]int) -> int {
+    let mut total: int = 0;
+    let mut i: int = 0;
+    let n: int = s.len();
+    while i < n {
+        match s.get_ref(i) {
+            Option::Some(x) => {
+                total += x;
+            }
+            Option::None => {
+                return -1;
+            }
+        }
+        i += 1;
+    }
+    return total;
+}
+
+fn slice_example() -> int {
+    let a: [int; 2] = [10, 20];
+    let b: [int; 4] = [1, 2, 3, 4];
+    if sum_slice(&a) != 30 {
+        return 1;
+    }
+    if sum_slice(&b) != 10 {
+        return 2;
+    }
+    if Slice::len(&a) != 2 {
+        return 3;
+    }
+    if a.len() != 2 {
+        return 4;
+    }
+    return 0;
+}
 
 fn if_example() -> int {
     let cap: int = 10;
-
     if cap < 10 {
         return 1;
     }
-
     let len: int = 5;
     if len == 0 {
         return 2;
     }
-
     return 0;
 }
 
 fn while_example() -> int {
     let mut x: int = 0;
-
     while x < 3 {
         x += 1;
     }
-
     if x != 3 {
         return 1;
     }
-
     return 0;
 }
 
@@ -196,12 +214,8 @@ fn control_flow_example() -> int {
     return 0;
 }
 
-// ============================================
-// 8. PATTERN MATCHING - Exhaustive enum matching
-// ============================================
-
 fn pattern_matching_example() -> int {
-    let opt: Option<int> = Option::Some(42);
+    let opt = Option::Some(42);
 
     match opt {
         Option::Some(v) if v == 42 => {}
@@ -211,10 +225,9 @@ fn pattern_matching_example() -> int {
         Option::None => {
             return 2;
         }
-    };
+    }
 
-    let result: Result<int, int> = Result::Ok(100);
-    match result {
+    match classify(100) {
         Result::Ok(value) => {
             if value != 100 {
                 return 3;
@@ -223,26 +236,51 @@ fn pattern_matching_example() -> int {
         Result::Err(_) => {
             return 4;
         }
-    };
+    }
 
-    let status: Status = Status::Ok { value: 7 };
+    match classify(-1) {
+        Result::Ok(_) => {
+            return 5;
+        }
+        Result::Err(_) => {}
+    }
+
+    let status = Status::Ok { value: 7 };
     match status {
         Status::Ok { value: v } => {
             if v != 7 {
-                return 5;
+                return 6;
             }
         }
         Status::Err { code: _c } => {
-            return 6;
+            return 7;
         }
-    };
+    }
 
     return 0;
 }
 
-// ============================================
-// 9. REFERENCES - No-escape borrowing
-// ============================================
+fn recursive_box_example() -> int {
+    let empty: Option<Box<Node>> = Option::None;
+    let leaf: Node = Node {
+        value: 2,
+        next: empty,
+    };
+    let boxed = Box::new(Node {
+        value: 1,
+        next: Option::Some(Box::new(leaf)),
+    });
+    let n = Box::unwrap(boxed);
+    match n.next {
+        Option::Some(child_box) => {
+            let child = Box::unwrap(child_box);
+            return n.value + child.value;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}
 
 fn reference_example() -> int {
     let mut x: int = 10;
@@ -253,74 +291,52 @@ fn reference_example() -> int {
         let _ref_x: &mut int = &mut x;
     }
 
-    // Method calls borrow the receiver automatically
     let mut values: Vec<int> = Vec::new();
     values.push(x);
     values.push(y);
     if values.len() != 2 {
         return 1;
     }
-
     return 0;
 }
 
-// ============================================
-// 10. GENERICS - Type parameterization
-// ============================================
-
 fn generic_example() -> int {
     let int_pair: Pair<int> = Pair { first: 10, second: 20 };
-
     if int_pair.first != 10 {
         return 1;
     }
-
     if get_first(int_pair) != 10 {
         return 2;
     }
 
-    let opt_int: Option<int> = Option::Some(42);
-
+    let opt_int = Option::Some(42);
     match opt_int {
         Option::Some(_) => {}
         Option::None => {
             return 3;
         }
-    };
+    }
 
     let mut vec: Vec<int> = Vec::new();
     vec.push(1);
     vec.push(2);
-
-    let vec_len: int = vec.len();
-    if vec_len != 2 {
+    if vec.len() != 2 {
         return 4;
     }
-
     return 0;
 }
-
-// ============================================
-// 11. TUPLES - Literals, field access, destructuring
-// ============================================
 
 fn tuple_example() -> int {
     let t: (int, int) = (3, 4);
     if t.0 != 3 || t.1 != 4 {
         return 1;
     }
-
     let (a, b) = t;
     if a != 3 || b != 4 {
         return 2;
     }
-
     return 0;
 }
-
-// ============================================
-// 12. SPAWN AND CHANNELS - OS threads, move-only captures
-// ============================================
 
 fn spawn_channel_example() -> int {
     let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
@@ -339,13 +355,8 @@ fn spawn_channel_example() -> int {
     if result != 99 {
         return 1;
     }
-
     return 0;
 }
-
-// ============================================
-// 13. FN LITERALS - Capture-free function pointers
-// ============================================
 
 fn fn_literal_example() -> int {
     let twice: fn(int) -> int = fn(x: int) -> int {
@@ -357,60 +368,11 @@ fn fn_literal_example() -> int {
     return 0;
 }
 
-// ============================================
-// 14. COMPLEX EXAMPLE - Combining features
-// ============================================
-
-fn complex_example() -> int {
-    let mut numbers: Vec<int> = Vec::new();
-
-    numbers.push(1);
-    numbers.push(3);
-    numbers.push(5);
-
-    let len: int = numbers.len();
-    if len != 3 {
-        return 1;
-    }
-
-    match numbers.get_ref(0) {
-        Option::Some(value) => {
-            if value != 1 {
-                return 2;
-            }
-        }
-        Option::None => {
-            return 3;
-        }
-    };
-
-    match numbers.get_ref(1) {
-        Option::Some(value) => {
-            if value != 3 {
-                return 4;
-            }
-        }
-        Option::None => {
-            return 5;
-        }
-    };
-
-    let mut description: String = "Numbers: ";
-    description.push_str("(");
-
-    let desc_len: int = description.len();
-    if desc_len < 8 {
-        return 6;
-    }
-
-    return 0;
+enum Op {
+    Push { val: int };
+    Add;
+    Halt;
 }
-
-// ============================================
-// 15. BYTECODE VM - get_ref dispatch, field mutation, method calls
-// ============================================
-
-enum Op { Push { val: int }; Add; Halt; }
 
 struct BytecodeVM {
     ip: int;
@@ -429,21 +391,33 @@ fn run_bytecode(vm: &mut BytecodeVM) -> int {
                     }
                     Op::Add => {
                         let b = match vm.stack.pop() {
-                            Option::Some(v) => { v; }
-                            Option::None => { return 0; }
+                            Option::Some(v) => {
+                                v;
+                            }
+                            Option::None => {
+                                return 0;
+                            }
                         };
                         let a = match vm.stack.pop() {
-                            Option::Some(v) => { v; }
-                            Option::None => { return 0; }
+                            Option::Some(v) => {
+                                v;
+                            }
+                            Option::None => {
+                                return 0;
+                            }
                         };
                         vm.stack.push(a + b);
                         vm.ip += 1;
                     }
-                    Op::Halt => { break; }
-                };
+                    Op::Halt => {
+                        break;
+                    }
+                }
             }
-            Option::None => { break; }
-        };
+            Option::None => {
+                break;
+            }
+        }
     }
     return 0;
 }
@@ -465,14 +439,12 @@ fn bytecode_vm_example() -> int {
                 return 1;
             }
         }
-        Option::None => { return 2; }
-    };
+        Option::None => {
+            return 2;
+        }
+    }
     return 0;
 }
-
-// ============================================
-// MAIN - Run all examples
-// ============================================
 
 fn main() -> int {
     let x: int = 10;
@@ -485,49 +457,41 @@ fn main() -> int {
     if box_example() != 42 {
         return 1;
     }
-
     if vec_example() != 0 {
         return 2;
     }
-
     if string_example() != 0 {
         return 3;
     }
-
     if control_flow_example() != 0 {
         return 4;
     }
-
     if pattern_matching_example() != 0 {
         return 5;
     }
-
     if reference_example() != 0 {
         return 6;
     }
-
     if generic_example() != 0 {
         return 7;
     }
-
     if tuple_example() != 0 {
         return 8;
     }
-
     if spawn_channel_example() != 0 {
         return 9;
     }
-
     if fn_literal_example() != 0 {
         return 10;
     }
-
-    if complex_example() != 0 {
-        return 11;
-    }
-
     if bytecode_vm_example() != 0 {
         return 12;
+    }
+    if slice_example() != 0 {
+        return 13;
+    }
+    if recursive_box_example() != 3 {
+        return 14;
     }
 
     return 0;

@@ -202,6 +202,7 @@ pub struct IRMatchArm {
 struct LoweringContext {
     var_types: HashMap<String, Type>,
     struct_decls: HashMap<String, StructDecl>,
+    enum_param_counts: HashMap<String, usize>,
     tuple_temp_counter: usize,
     fn_literal_counter: Rc<Cell<usize>>,
     function_returns: HashMap<String, Option<Type>>,
@@ -211,6 +212,7 @@ impl LoweringContext {
     fn from_params(
         params: &[IRParam],
         struct_decls: HashMap<String, StructDecl>,
+        enum_param_counts: HashMap<String, usize>,
         fn_literal_counter: Rc<Cell<usize>>,
         function_returns: HashMap<String, Option<Type>>,
     ) -> Self {
@@ -221,6 +223,7 @@ impl LoweringContext {
         Self {
             var_types,
             struct_decls,
+            enum_param_counts,
             tuple_temp_counter: 0,
             fn_literal_counter,
             function_returns,
@@ -246,6 +249,7 @@ impl LoweringContext {
                 lookup_merged(&self.function_returns, &call.callee).and_then(|ret| ret.clone())
             }
             Expr::StructLit(lit) => Some(Type::Struct(lit.type_name.clone())),
+            Expr::EnumLit(lit) => Some(self.enum_lit_type(lit)),
             Expr::TupleLit(t) => Some(Type::Tuple {
                 elements: t
                     .elements
@@ -262,6 +266,30 @@ impl LoweringContext {
 
     fn record_binding(&mut self, name: &str, ty: &Type) {
         self.var_types.insert(name.to_string(), ty.clone());
+    }
+
+    fn enum_lit_type(&self, lit: &EnumLitExpr) -> Type {
+        let n_params = self
+            .enum_param_counts
+            .get(&lit.enum_name)
+            .copied()
+            .unwrap_or(0);
+        if n_params > 0 && lit.args.len() == n_params {
+            let params = lit
+                .args
+                .iter()
+                .map(|a| {
+                    self.resolve_expr_type(a)
+                        .unwrap_or_else(|| infer_type_from_expr(a))
+                })
+                .collect();
+            Type::Generic {
+                name: lit.enum_name.clone(),
+                params,
+            }
+        } else {
+            Type::Enum(lit.enum_name.clone())
+        }
     }
 }
 
@@ -393,10 +421,17 @@ impl IRBuilder {
             .iter()
             .map(|s| (s.name.clone(), s.clone()))
             .collect();
+        let enum_param_counts: HashMap<String, usize> = ast
+            .enums
+            .iter()
+            .map(|e| (e.name.clone(), e.generics.len()))
+            .collect();
         let functions = ast
             .functions
             .iter()
-            .map(|f| builder.build_function(f, &function_returns, &struct_decls))
+            .map(|f| {
+                builder.build_function(f, &function_returns, &struct_decls, &enum_param_counts)
+            })
             .collect();
         let mut program = IRProgram {
             structs: ast.structs.clone(),
@@ -414,6 +449,7 @@ impl IRBuilder {
         function: &FnDecl,
         function_returns: &HashMap<String, Option<Type>>,
         struct_decls: &HashMap<String, StructDecl>,
+        enum_param_counts: &HashMap<String, usize>,
     ) -> IRFunction {
         let params: Vec<IRParam> = function
             .params
@@ -429,6 +465,7 @@ impl IRBuilder {
         let mut ctx = LoweringContext::from_params(
             &params,
             struct_decls.clone(),
+            enum_param_counts.clone(),
             fn_literal_counter,
             function_returns.clone(),
         );
@@ -587,7 +624,10 @@ impl IRBuilder {
                         }
                         Expr::FnLiteral(lit) => fn_type_from_expr_literal(lit),
                         Expr::Var(_var_expr) => Type::Int,
-                        _ => infer_type_from_expr(init_expr),
+                        Expr::EnumLit(lit) => ctx.enum_lit_type(lit),
+                        _ => ctx
+                            .resolve_expr_type(init_expr)
+                            .unwrap_or_else(|| infer_type_from_expr(init_expr)),
                     }
                 } else {
                     Type::Int
@@ -1011,6 +1051,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     let mut arm_ctx = LoweringContext {
                         var_types: ctx.var_types.clone(),
                         struct_decls: ctx.struct_decls.clone(),
+                        enum_param_counts: ctx.enum_param_counts.clone(),
                         tuple_temp_counter: ctx.tuple_temp_counter,
                         fn_literal_counter: ctx.fn_literal_counter.clone(),
                         function_returns: ctx.function_returns.clone(),
@@ -1246,6 +1287,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             let mut lit_ctx = LoweringContext::from_params(
                 &lit_params,
                 ctx.struct_decls.clone(),
+                ctx.enum_param_counts.clone(),
                 ctx.fn_literal_counter.clone(),
                 ctx.function_returns.clone(),
             );
@@ -1272,6 +1314,7 @@ fn infer_type_from_expr(expr: &Expr) -> Type {
         }
         Expr::StringLit(_) => Type::String,
         Expr::StructLit(lit) => Type::Struct(lit.type_name.clone()),
+        Expr::EnumLit(lit) => Type::Enum(lit.enum_name.clone()),
         Expr::TupleLit(t) => Type::Tuple {
             elements: t.elements.iter().map(infer_type_from_expr).collect(),
         },

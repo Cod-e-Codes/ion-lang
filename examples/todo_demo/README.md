@@ -1,6 +1,6 @@
 # todo_demo
 
-Interactive todo list: `Vec<Todo>`, struct + `String`, move-only rebuild updates, stdin commands.
+Interactive todo list: `Vec<Todo>`, index search with `get_ref`, `get`/`set` put-back for `done`, stdin commands.
 
 ## Build and run
 

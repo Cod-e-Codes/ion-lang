@@ -3443,6 +3443,11 @@ impl TypeChecker {
                     // `check_stmt` already validated moves, and re-checking a
                     // match whose scrutinee was marked moved (owned enum after
                     // `Vec::get`) would spuriously report UseAfterMove.
+                    // Locals introduced in the arm are not in `after_bindings`;
+                    // `check_stmt` may have moved them (`let row = ...; Vec::set(..., row)`).
+                    // Reset those to Valid so the last-expr re-walk does not
+                    // report a false UseAfterMove. `check_stmt` already caught
+                    // real use-after-move on those names.
                     let after_bindings = self.variables.clone();
                     for stmt in &arm.body.statements {
                         self.check_stmt(stmt)?;
@@ -3450,6 +3455,11 @@ impl TypeChecker {
                     for (name, info) in &after_bindings {
                         if let Some(cur) = self.variables.get_mut(name) {
                             cur.state = info.state;
+                        }
+                    }
+                    for (name, info) in self.variables.iter_mut() {
+                        if !after_bindings.contains_key(name) {
+                            info.state = OwnershipState::Valid;
                         }
                     }
                     match self.infer_block_result_type(&arm.body, arm.span)? {

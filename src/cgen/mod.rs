@@ -3203,7 +3203,10 @@ impl Codegen {
                             // For &mut int, fall through to generate &var normally
                         }
                         if let IREexpr::StringLit(value) = arg {
-                            if matches!(param_ty, Some(Type::String)) {
+                            if matches!(param_ty, Some(Type::String))
+                                || (param_ty.is_none()
+                                    && !self.extern_functions.contains_key(&func_name))
+                            {
                                 self.write_ion_string_from_literal(value);
                                 continue;
                             }
@@ -6780,6 +6783,76 @@ fn main() -> int {
         assert!(
             !c.contains("int n ="),
             "expected unannotated let n to be Node, not int, in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn enum_unannotated_let_uses_enum_not_int() {
+        let src = r#"
+enum Flag {
+    Off;
+    On;
+}
+
+fn main() -> int {
+    let x = Flag::On;
+    match x {
+        Flag::On => {
+            return 1;
+        }
+        Flag::Off => {
+            return 0;
+        }
+    }
+}
+"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("Flag x ="),
+            "expected unannotated let x to be Flag, not int, in:\n{c}"
+        );
+        assert!(
+            !c.contains("int x ="),
+            "expected unannotated enum let not to lower as int in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn generic_enum_unannotated_let_uses_option_int_not_int() {
+        let src = r#"
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let x = Option::Some(42);
+    match x {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}
+"#;
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = crate::parser::Parser::new(tokens).parse().unwrap();
+        let ir = crate::ir::IRBuilder::build(&program);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("Option_int x ="),
+            "expected unannotated let x to be Option_int, not int, in:\n{c}"
+        );
+        assert!(
+            !c.contains("    int x ="),
+            "expected unannotated Option::Some let not to lower as int in:\n{c}"
         );
     }
 }

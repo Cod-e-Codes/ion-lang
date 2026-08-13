@@ -1370,7 +1370,7 @@ import "stdlib/io.ion" as io;
 
 // Returns zero on success.
 fn main() -> int {
-    io::println(String::from("hi"));
+    io::println("hi");
     return 0;
 }
 ```

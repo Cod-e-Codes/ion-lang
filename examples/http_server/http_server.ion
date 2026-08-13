@@ -41,7 +41,7 @@ fn read_line() -> String {
             return text;
         }
         if ch != 13 as u8 {
-            String::push_byte(&mut text, ch);
+            text.push_byte(ch);
         }
     }
 
@@ -56,7 +56,7 @@ fn trim_line(s: String) -> String {
             continue;
         }
         skipping = false;
-        String::push_byte(&mut out, ch);
+        out.push_byte(ch);
     }
     return out;
 }
@@ -73,7 +73,7 @@ fn create_sockaddr_in(port: u16) -> SockAddrIn {
 }
 
 fn http_body() -> String {
-    return String::from("<html><head><title>Ion HTTP Server</title></head><body><h1>Hello from Ion!</h1><p>This is a simple HTTP server written in Ion.</p></body></html>");
+    return "<html><head><title>Ion HTTP Server</title></head><body><h1>Hello from Ion!</h1><p>This is a simple HTTP server written in Ion.</p></body></html>";
 }
 
 fn dispatch_peer(peer_fd: int) {
@@ -94,9 +94,10 @@ fn send_string_bytes(fd: int, text: String) {
 
 fn handle_client(client_fd: int) -> int {
     let mut buffer: [u8; 128] = [0; 128];
+    let buf_len: int = buffer.len();
 
     unsafe {
-        let received: int = recv_sys(&client_fd, &mut buffer[0], 128, 0);
+        let received: int = recv_sys(&client_fd, &mut buffer[0], buf_len, 0);
         if received < 1 {
             close(&client_fd);
             return 0;
@@ -169,11 +170,12 @@ fn listen_and_serve(fd_tx: Sender<int>, stopped_tx: Sender<int>) {
 }
 
 fn wait_for_quit() {
-    let trimmed: String = trim_line(read_line());
-    if trimmed == String::from("quit") {
-        return;
+    loop {
+        let trimmed: String = trim_line(read_line());
+        if trimmed == String::from("quit") {
+            break;
+        }
     }
-    wait_for_quit();
 }
 
 fn main() -> int {
@@ -187,7 +189,7 @@ fn main() -> int {
     let mut fd_rx_mut: Receiver<int> = fd_rx;
     let server_fd: int = recv(&mut fd_rx_mut);
 
-    io::println(String::from("listening on http://127.0.0.1:8080 (type quit)"));
+    io::println("listening on http://127.0.0.1:8080 (type quit)");
 
     wait_for_quit();
 

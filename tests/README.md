@@ -20,6 +20,14 @@ Or from the project root:
 cd tests && ./test_runner.sh
 ```
 
+To run a subset, pass stems (with or without `.ion`). Matching is exact or substring; every matching manifest row runs (`run`, `error`, `cgen`):
+
+```bash
+cd tests && ./test_runner.sh test_enum_unannotated_let.ion
+cd tests && ./test_runner.sh test_enum_unannotated
+./test_runner.sh --help
+```
+
 On Windows, use Git Bash, not WSL bash. WSL often cannot run `ion-compiler.exe`.
 
 The harness defaults to `../target/release/ion-compiler`. Rebuild it after compiler changes:
@@ -100,6 +108,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 
 ### Enums, generics, and collections
 - `test_enum_basic.ion` - Enum declarations and literals
+- `test_enum_unannotated_let.ion` - unannotated `let flag = Flag::On` / `let status = Status::Ok { ... }` types as the enum, not default int (exit 7); cgen asserts `Flag flag =` / `Status status =`
+- `test_enum_generic_unannotated_let.ion` - unannotated `let x = Option::Some(42)` types as `Option<int>` (exit 42); cgen asserts `Option_int x =`
 - `test_enum_generic.ion` - Generic enum types
 - `test_result_custom_enum.ion` - `Result<int, MyError>` via `stdlib/result.ion` (Ok and Err, exit 0)
 - `test_match_ref_generic_enum_arith.ion` - Match on `&Status<int>` and non-generic `&Flag` with arithmetic on copy payloads (exit 55)
@@ -150,6 +160,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_get_struct.ion` - `Vec::get` with struct elements containing `String`
 - `test_vec_get_multi_option.ion` - `match Vec::get` picks `Option<T>` per vector element type
 - `test_vec_get_putback.ion` - put-back scan after `Vec::get` move-out preserves vector length
+- `test_vec_get_putback_named.ion` - put-back via `let row` then `Vec::set(..., row)` as the last match-arm statement
 - `test_vec_get_ref_scan.ion` - read-only scan via `Vec::get_ref` without hollowing the vector
 - `test_vec_get_ref_oob.ion` - `Vec::get_ref` on empty index, OOB, and valid index
 - `test_vec_get_ref_set_after.ion` - `Vec::set` after `get_ref` borrow ends

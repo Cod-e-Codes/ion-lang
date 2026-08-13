@@ -183,7 +183,7 @@ On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows cha
 | [spawn_channel/](examples/spawn_channel/) | `spawn` with cross-thread channels |
 | [channel_worker/](examples/channel_worker/) | Channel worker |
 | [worker_pool/](examples/worker_pool/) | Three workers with per-worker job/result channels |
-| [showcase/](examples/showcase/) | Mixed language features (includes bytecode VM dispatch) |
+| [showcase/](examples/showcase/) | Mixed language features (Slice, recursive Box, stdlib Result, bytecode VM) |
 | [bytecode_vm/](examples/bytecode_vm/) | Stack VM: `get_ref` enum dispatch, field `+=`, method calls on `&mut` struct fields |
 | [access_log/](examples/access_log/) | Log parsing, spawn, channels, fmt/io |
 | [http_server/](examples/http_server/) | Sockets FFI, spawn per client, stdin `quit` to stop; see [http_server/README.md](examples/http_server/README.md) |
@@ -191,6 +191,7 @@ On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows cha
 | [todo_demo/](examples/todo_demo/) | Interactive todo list (`Vec` of structs, stdin); see [todo_demo/README.md](examples/todo_demo/README.md) |
 | [data_lib/](examples/data_lib/) | Multi-module library; see [data_lib/README.md](examples/data_lib/README.md) |
 | [handle_table/](examples/handle_table/) | Generational `Arena<T>`: store `Handle`, peek via `Vec::get_ref` on `slots`, stale handle after reuse |
+| [trait_bounds/](examples/trait_bounds/) | Built-in `Copy` / `Eq` / `Send` bounds; fn-pointer monomorphization |
 
 ## Project Structure
 

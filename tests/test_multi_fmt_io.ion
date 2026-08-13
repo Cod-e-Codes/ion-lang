@@ -4,5 +4,6 @@ import "../stdlib/io.ion" as io;
 fn main() -> int {
     let s: String = fmt::int_to_string(42);
     io::println(s);
+    io::println("ok");
     return 42;
 }

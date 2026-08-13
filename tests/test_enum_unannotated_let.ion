@@ -1,0 +1,31 @@
+// Unannotated let: IR must type Enum::Variant as the enum, not default int.
+enum Flag {
+    Off;
+    On;
+}
+
+enum Status {
+    Ok { value: int };
+    Err { code: int };
+}
+
+fn main() -> int {
+    let flag = Flag::On;
+    let status = Status::Ok { value: 6 };
+
+    match flag {
+        Flag::Off => {
+            return 1;
+        }
+        Flag::On => {}
+    }
+
+    match status {
+        Status::Ok { value: v } => {
+            return v + 1;
+        }
+        Status::Err { code: _c } => {
+            return 2;
+        }
+    }
+}
