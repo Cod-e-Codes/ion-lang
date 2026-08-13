@@ -1119,12 +1119,13 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             };
             let is_string =
                 string_methods.contains(&method_call.method.as_str()) && receiver_is_string;
-            let is_slice = method_call.method == "get_ref" && receiver_is_slice;
+            let is_slice = (method_call.method == "get_ref" || method_call.method == "len")
+                && receiver_is_slice;
             let is_vec = vec_methods.contains(&method_call.method.as_str())
                 && !receiver_is_string
                 && !is_slice;
             let callee = if is_slice {
-                "Slice::get_ref".to_string()
+                format!("Slice::{}", method_call.method)
             } else if is_vec {
                 format!("Vec::{}", method_call.method)
             } else if is_string {
@@ -1431,6 +1432,9 @@ fn infer_type_from_call(callee: &str, args: &[Expr]) -> Option<Type> {
             name: "Option".to_string(),
             params: vec![Type::U8],
         });
+    }
+    if callee == "Slice::len" {
+        return Some(Type::Int);
     }
     if callee == "Slice::get_ref" {
         return None; // needs context for T

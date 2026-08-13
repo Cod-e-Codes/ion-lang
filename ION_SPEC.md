@@ -105,7 +105,7 @@ The following keywords are reserved and cannot be used as identifiers:
 
 `fn`, `let`, `mut`, `struct`, `enum`, `type`, `if`, `else`, `while`, `for`, `loop`, `match`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `send`, `recv`, `true`, `false`, `import`, `as`, `pub`, `extern`, `unsafe`.
 
-Built-in type names `Box`, `Vec`, `String`, and `Slice` are tokenized as keywords for generic syntax (`Box<T>`, etc.) and builtin method qualification (`Slice::get_ref`); they are not reserved as identifiers elsewhere.
+Built-in type names `Box`, `Vec`, `String`, and `Slice` are tokenized as keywords for generic syntax (`Box<T>`, etc.) and builtin method qualification (`Slice::len`, `Slice::get_ref`); they are not reserved as identifiers elsewhere.
 
 Note: The `as` keyword is used both for module aliases (`import "file.ion" as name;`) and for type casting (`expr as Type`).
 
@@ -500,7 +500,7 @@ Additional built-in generic types:
 - `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::get_ref()`, `Vec::set()`)
 - `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::get()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
 - `[T; N]` – fixed-size array of `N` elements of type `T`
-- `[]T` – dynamically sized slice (fat pointer) of type `T`
+- `[]T` – dynamically sized slice (fat pointer) of type `T` (`Slice::len()`, `Slice::get_ref()`)
 - `(T1, T2, ...)` – fixed-size tuple value type (see §4.1.3)
 
 #### 4.1.1 Array Safety
@@ -540,7 +540,7 @@ let x = arr[10]; // Runtime panic: "Array index out of bounds"
 Dynamically sized slices `[]T` (and `&[]T`) have the following safety properties:
 
 - **Bounds checking**: Slice indexing `s[i]` performs runtime bounds checking by default
-  - If `i < 0` or `i >= s.len`, the program panics with an error message via `ion_panic()`
+  - If `i < 0` or `i >= Slice::len(s)`, the program panics with an error message via `ion_panic()`
   - The panic prints "Slice index out of bounds" to stderr and aborts the program
   - Bounds checking can be disabled in `unsafe` blocks for performance-critical code
 - **Fat pointer representation**: Slices are `(data, len)` pairs at runtime
@@ -548,7 +548,7 @@ Dynamically sized slices `[]T` (and `&[]T`) have the following safety properties
 **Safe slice access:**
 ```ion
 fn first(s: &[]int) -> int {
-    return s[0]; // OK: bounds checked against s.len at runtime
+    return s[0]; // OK: bounds checked against the slice length at runtime
 }
 ```
 
@@ -576,6 +576,14 @@ fn main() -> int {
     return sum(&arr); // &[int; 3] coerced to &[]int at the call site
 }
 ```
+
+**Length:**
+
+```ion
+// Slice::len(s: &[]T) -> int
+```
+
+`Slice::len` returns the number of elements in the slice as `int`. Method form `s.len()` desugars to `Slice::len`; fixed arrays may use `arr.len()` or `Slice::len(&arr)` via array-to-slice coercion. Field access `s.len` is invalid: slices are not structs. An empty slice has length `0`. The call does not register a lasting borrow.
 
 **Non-panicking element borrow:**
 

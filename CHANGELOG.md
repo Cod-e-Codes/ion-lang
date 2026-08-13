@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.14 - 2026-08-13
+
+- **Builtins**: `Slice::len(s: &[]T) -> int` (method form `s.len()`), including array-to-slice coercion. Field access `s.len` remains invalid. Spec, ABI, skills, LSP completions, and integration tests updated.
+
 ## 0.1.13 - 2026-08-12
 
 - **IR / Codegen**: unannotated `let n = Box::unwrap(boxed)` types `n` as `T` (for example `Node`), not default `int`. Annotated `let n: Node = ...` already lowered correctly.

@@ -1,0 +1,4 @@
+// Slice::len requires &[]T, not a scalar.
+fn main() -> int {
+    return Slice::len(0);
+}

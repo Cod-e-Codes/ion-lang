@@ -3829,8 +3829,8 @@ impl Codegen {
                 }
                 _ => false,
             };
-            if method_name == "get_ref" && receiver_is_slice {
-                return "Slice::get_ref".to_string();
+            if (method_name == "get_ref" || method_name == "len") && receiver_is_slice {
+                return format!("Slice::{method_name}");
             }
             if string_methods.contains(&method_name) && receiver_is_string {
                 return format!("String::{method_name}");
