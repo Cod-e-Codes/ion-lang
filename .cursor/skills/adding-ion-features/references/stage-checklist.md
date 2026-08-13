@@ -12,6 +12,7 @@
 - [ ] Types defined before parser branches that construct them (lexer first if new tokens needed)
 - [ ] `Clone`/`Debug` derives consistent with siblings
 - [ ] Span info preserved if used by LSP (check existing nodes)
+- [ ] New expression structs include `id: ExprId` (parser sets `UNASSIGNED`; numbering assigns uniqueness)
 
 ## Parser (`src/parser/mod.rs`)
 
@@ -37,7 +38,8 @@
 ## IR (`src/ir/mod.rs`)
 
 - [ ] New `Inst` or expr variants
-- [ ] `IRBuilder` covers all AST paths for the feature
+- [ ] `IRBuilder::build(program, &TypeInfo)` covers all AST paths for the feature
+- [ ] Unannotated lets / calls read `TypeInfo`; do not add a syntactic `int` fallback
 
 ## Codegen (`src/cgen/`)
 
@@ -60,5 +62,6 @@
 ## LSP (`src/lsp/`)
 
 - [ ] Parser errors surface in diagnostics
+- [ ] Buffer AST is numbered after `load_imports`, then merged (do not re-number the merge)
 - [ ] New keywords in `src/lsp/util.rs` `KEYWORDS` and TextMate grammar
 - [ ] Rebuild: `cargo build --release --bin ion-lsp`

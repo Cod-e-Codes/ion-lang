@@ -488,6 +488,7 @@ impl Parser {
         let span = fn_span.merge(&end_span);
 
         Ok(FnLiteralExpr {
+            id: ExprId::UNASSIGNED,
             params,
             return_type,
             body,
@@ -1365,6 +1366,7 @@ impl Parser {
         let span = match_token_span.merge(&end_span);
 
         Ok(MatchExpr {
+            id: ExprId::UNASSIGNED,
             expr: Box::new(expr),
             arms,
             span,
@@ -1812,12 +1814,14 @@ impl Parser {
             match &lhs {
                 Expr::Var(_) | Expr::Index(_) | Expr::FieldAccess(_) => {
                     let add_expr = Expr::BinOp(BinOpExpr {
+                        id: ExprId::UNASSIGNED,
                         op: BinOp::Add,
                         left: Box::new(lhs.clone()),
                         right: Box::new(rhs),
                         span,
                     });
                     Ok(Expr::Assign(AssignExpr {
+                        id: ExprId::UNASSIGNED,
                         target: Box::new(lhs),
                         value: Box::new(add_expr),
                         span,
@@ -1842,6 +1846,7 @@ impl Parser {
             match &lhs {
                 Expr::Var(_) | Expr::Index(_) | Expr::FieldAccess(_) => {
                     Ok(Expr::Assign(AssignExpr {
+                        id: ExprId::UNASSIGNED,
                         target: Box::new(lhs),
                         value: Box::new(rhs),
                         span,
@@ -1871,6 +1876,7 @@ impl Parser {
                 let right = self.parse_logical_and()?;
                 let span = expr.span().merge(&right.span());
                 expr = Expr::BinOp(BinOpExpr {
+                    id: ExprId::UNASSIGNED,
                     op: BinOp::Or,
                     left: Box::new(expr),
                     right: Box::new(right),
@@ -1898,6 +1904,7 @@ impl Parser {
                 let right = self.parse_comparison()?;
                 let span = expr.span().merge(&right.span());
                 expr = Expr::BinOp(BinOpExpr {
+                    id: ExprId::UNASSIGNED,
                     op: BinOp::And,
                     left: Box::new(expr),
                     right: Box::new(right),
@@ -1933,6 +1940,7 @@ impl Parser {
                 let right = self.parse_equality()?;
                 let span = expr.span().merge(&right.span());
                 expr = Expr::BinOp(BinOpExpr {
+                    id: ExprId::UNASSIGNED,
                     op: bin_op,
                     left: Box::new(expr),
                     right: Box::new(right),
@@ -1966,6 +1974,7 @@ impl Parser {
                 let right = self.parse_bitwise_or()?;
                 let span = expr.span().merge(&right.span());
                 expr = Expr::BinOp(BinOpExpr {
+                    id: ExprId::UNASSIGNED,
                     op: bin_op,
                     left: Box::new(expr),
                     right: Box::new(right),
@@ -1993,6 +2002,7 @@ impl Parser {
                 let right = self.parse_bitwise_xor()?;
                 let span = expr.span().merge(&right.span());
                 expr = Expr::BinOp(BinOpExpr {
+                    id: ExprId::UNASSIGNED,
                     op: BinOp::BitOr,
                     left: Box::new(expr),
                     right: Box::new(right),
@@ -2020,6 +2030,7 @@ impl Parser {
                 let right = self.parse_bitwise_and()?;
                 let span = expr.span().merge(&right.span());
                 expr = Expr::BinOp(BinOpExpr {
+                    id: ExprId::UNASSIGNED,
                     op: BinOp::BitXor,
                     left: Box::new(expr),
                     right: Box::new(right),
@@ -2054,6 +2065,7 @@ impl Parser {
                 let right = self.parse_shift()?;
                 let span = expr.span().merge(&right.span());
                 expr = Expr::BinOp(BinOpExpr {
+                    id: ExprId::UNASSIGNED,
                     op: BinOp::BitAnd,
                     left: Box::new(expr),
                     right: Box::new(right),
@@ -2087,6 +2099,7 @@ impl Parser {
                 let right = self.parse_additive()?;
                 let span = expr.span().merge(&right.span());
                 expr = Expr::BinOp(BinOpExpr {
+                    id: ExprId::UNASSIGNED,
                     op: bin_op,
                     left: Box::new(expr),
                     right: Box::new(right),
@@ -2115,6 +2128,7 @@ impl Parser {
             let end_span = operand.span();
             let span = start_span.merge(&end_span);
             let expr = Expr::UnOp(UnOpExpr {
+                id: ExprId::UNASSIGNED,
                 op: UnOp::Not,
                 operand: Box::new(operand),
                 span,
@@ -2137,6 +2151,7 @@ impl Parser {
             let span = start_span.merge(&end_span);
 
             let expr = Expr::Ref(RefExpr {
+                id: ExprId::UNASSIGNED,
                 mutable: is_mut,
                 inner: Box::new(inner),
                 span,
@@ -2150,6 +2165,7 @@ impl Parser {
             let end_span = operand.span();
             let span = start_span.merge(&end_span);
             let expr = Expr::UnOp(UnOpExpr {
+                id: ExprId::UNASSIGNED,
                 op: UnOp::Neg,
                 operand: Box::new(operand),
                 span,
@@ -2180,6 +2196,7 @@ impl Parser {
                 let span = start_span.merge(&end_span);
 
                 expr = Expr::Cast(CastExpr {
+                    id: ExprId::UNASSIGNED,
                     expr: Box::new(expr),
                     target_type,
                     span,
@@ -2205,6 +2222,7 @@ impl Parser {
                 let span = start_span.merge(&end_span);
 
                 expr = Expr::Index(IndexExpr {
+                    id: ExprId::UNASSIGNED,
                     target: Box::new(expr),
                     index: Box::new(index_expr),
                     span,
@@ -2341,6 +2359,7 @@ impl Parser {
                         let span = start_span.merge(&end_span);
 
                         expr = Expr::MethodCall(MethodCallExpr {
+                            id: ExprId::UNASSIGNED,
                             receiver: Box::new(expr),
                             method: field_name,
                             method_span,
@@ -2355,6 +2374,7 @@ impl Parser {
                         let span = start_span.merge(&end_span);
 
                         expr = Expr::FieldAccess(FieldAccessExpr {
+                            id: ExprId::UNASSIGNED,
                             base: Box::new(expr),
                             field: field_name,
                             field_span: method_span,
@@ -2393,6 +2413,7 @@ impl Parser {
             let right = self.parse_multiplicative()?;
             let span = expr.span().merge(&right.span());
             expr = Expr::BinOp(BinOpExpr {
+                id: ExprId::UNASSIGNED,
                 op,
                 left: Box::new(expr),
                 right: Box::new(right),
@@ -2426,6 +2447,7 @@ impl Parser {
             let right = self.parse_unary()?;
             let span = expr.span().merge(&right.span());
             expr = Expr::BinOp(BinOpExpr {
+                id: ExprId::UNASSIGNED,
                 op,
                 left: Box::new(expr),
                 right: Box::new(right),
@@ -2504,6 +2526,7 @@ impl Parser {
                 let call_span = span.merge(&end_span);
 
                 return Ok(Expr::Call(CallExpr {
+                    id: ExprId::UNASSIGNED,
                     callee,
                     args,
                     span: call_span,
@@ -2515,23 +2538,43 @@ impl Parser {
         match kind {
             TokenKind::Integer(value) => {
                 self.advance();
-                Ok(Expr::Lit(LitExpr { value, span }))
+                Ok(Expr::Lit(LitExpr {
+                    id: ExprId::UNASSIGNED,
+                    value,
+                    span,
+                }))
             }
             TokenKind::True => {
                 self.advance();
-                Ok(Expr::BoolLiteral(BoolLiteralExpr { value: true, span }))
+                Ok(Expr::BoolLiteral(BoolLiteralExpr {
+                    id: ExprId::UNASSIGNED,
+                    value: true,
+                    span,
+                }))
             }
             TokenKind::False => {
                 self.advance();
-                Ok(Expr::BoolLiteral(BoolLiteralExpr { value: false, span }))
+                Ok(Expr::BoolLiteral(BoolLiteralExpr {
+                    id: ExprId::UNASSIGNED,
+                    value: false,
+                    span,
+                }))
             }
             TokenKind::FloatLiteral(value) => {
                 self.advance();
-                Ok(Expr::FloatLiteral(FloatLiteralExpr { value, span }))
+                Ok(Expr::FloatLiteral(FloatLiteralExpr {
+                    id: ExprId::UNASSIGNED,
+                    value,
+                    span,
+                }))
             }
             TokenKind::StringLit(value) => {
                 self.advance();
-                Ok(Expr::StringLit(StringLitExpr { value, span }))
+                Ok(Expr::StringLit(StringLitExpr {
+                    id: ExprId::UNASSIGNED,
+                    value,
+                    span,
+                }))
             }
             TokenKind::Fn => {
                 let next_is_lparen = if self.current + 1 < self.tokens.len() {
@@ -2590,6 +2633,7 @@ impl Parser {
                         let call_span = span.merge(&end_span);
 
                         Ok(Expr::Call(CallExpr {
+                            id: ExprId::UNASSIGNED,
                             callee: "channel".to_string(),
                             args,
                             span: call_span,
@@ -2758,6 +2802,7 @@ impl Parser {
                     let lit_span = span.merge(&end_span);
 
                     Ok(Expr::EnumLit(EnumLitExpr {
+                        id: ExprId::UNASSIGNED,
                         enum_name,
                         enum_name_span: span,
                         variant: variant_name,
@@ -2818,6 +2863,7 @@ impl Parser {
                     let call_span = span.merge(&end_span);
 
                     Ok(Expr::Call(CallExpr {
+                        id: ExprId::UNASSIGNED,
                         callee,
                         args,
                         span: call_span,
@@ -2868,7 +2914,11 @@ impl Parser {
                     if !is_struct_literal {
                         // This is likely a variable followed by a block, not a struct literal
                         self.advance(); // consume identifier
-                        return Ok(Expr::Var(VarExpr { name, span }));
+                        return Ok(Expr::Var(VarExpr {
+                            id: ExprId::UNASSIGNED,
+                            name,
+                            span,
+                        }));
                     }
 
                     // Struct literal
@@ -2913,6 +2963,7 @@ impl Parser {
                     let lit_span = span.merge(&end_span);
 
                     Ok(Expr::StructLit(StructLitExpr {
+                        id: ExprId::UNASSIGNED,
                         type_name: name,
                         fields,
                         span: lit_span,
@@ -2945,6 +2996,7 @@ impl Parser {
                         name
                     };
                     Ok(Expr::Var(VarExpr {
+                        id: ExprId::UNASSIGNED,
                         name: var_name,
                         span,
                     }))
@@ -2962,6 +3014,7 @@ impl Parser {
                 let end_span = value.span();
                 let span = start_span.merge(&end_span);
                 Ok(Expr::Send(SendExpr {
+                    id: ExprId::UNASSIGNED,
                     channel: Box::new(channel),
                     value: Box::new(value),
                     span,
@@ -2977,6 +3030,7 @@ impl Parser {
                 let end_span = channel.span();
                 let span = start_span.merge(&end_span);
                 Ok(Expr::Recv(RecvExpr {
+                    id: ExprId::UNASSIGNED,
                     channel: Box::new(channel),
                     span,
                 }))
@@ -3004,6 +3058,7 @@ impl Parser {
                     self.expect(TokenKind::RParen)?;
                     let end_span = elements.last().map(|e| e.span()).unwrap_or(start_span);
                     return Ok(Expr::TupleLit(TupleLitExpr {
+                        id: ExprId::UNASSIGNED,
                         elements,
                         span: start_span.merge(&end_span),
                     }));
@@ -3021,6 +3076,7 @@ impl Parser {
                     self.advance(); // consume ]
                     let end_span = Span::from_token(self.previous());
                     return Ok(Expr::ArrayLiteral(ArrayLiteralExpr {
+                        id: ExprId::UNASSIGNED,
                         elements: Vec::new(),
                         repeat: None,
                         span: start_span.merge(&end_span),
@@ -3057,6 +3113,7 @@ impl Parser {
                     self.expect(TokenKind::RBracket)?; // consume ]
                     let end_span = Span::from_token(self.previous());
                     Ok(Expr::ArrayLiteral(ArrayLiteralExpr {
+                        id: ExprId::UNASSIGNED,
                         elements: Vec::new(),
                         repeat: Some((Box::new(first_expr), count)),
                         span: start_span.merge(&end_span),
@@ -3076,6 +3133,7 @@ impl Parser {
                     self.expect(TokenKind::RBracket)?; // consume ]
                     let end_span = Span::from_token(self.previous());
                     Ok(Expr::ArrayLiteral(ArrayLiteralExpr {
+                        id: ExprId::UNASSIGNED,
                         elements,
                         repeat: None,
                         span: start_span.merge(&end_span),
@@ -3146,6 +3204,7 @@ impl Parser {
         let member_span = Span::from_token(&self.tokens[self.current]);
         self.advance(); // MIN or MAX
         Ok(Some(Expr::TypeConst(TypeConstExpr {
+            id: ExprId::UNASSIGNED,
             type_name: type_name.to_string(),
             member: member_name,
             span: span.merge(&member_span),

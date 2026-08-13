@@ -82,11 +82,11 @@ fn type_check(
     compiler: &compiler::Compiler,
     ast: &crate::ast::Program,
     main_path: &Path,
-) -> Result<(), BuildError> {
+) -> Result<tc::TypeInfo, BuildError> {
     let mut checker = tc::TypeChecker::new();
     checker.set_module_exports(compiler.get_module_exports().clone());
     let merged = compiler.merge_modules(ast, main_path);
-    let (_result, errors) = checker.check_program_collecting(&merged);
+    let (result, errors) = checker.check_program_collecting(&merged);
     if !errors.is_empty() {
         return Err(BuildError::TypeCheck(tc::format_type_errors(&errors)));
     }
@@ -95,7 +95,7 @@ fn type_check(
             "Error: MissingMain: program requires fn main() -> int".to_string(),
         ));
     }
-    Ok(())
+    Ok(result.type_info)
 }
 
 fn build_single(
@@ -109,11 +109,12 @@ fn build_single(
         Some(project.root.clone()),
     );
     let ast = compiler.parse_module(main_path)?;
-    type_check(&compiler, &ast, main_path)?;
+    let type_info = type_check(&compiler, &ast, main_path)?;
 
     let merged = compiler.merge_modules(&ast, main_path);
-    let ir = ir::IRBuilder::build(&merged);
+    let ir = ir::IRBuilder::build(&merged, &type_info);
     let mut codegen = cgen::Codegen::new();
+    codegen.set_type_info(&type_info);
     let source_label = portable_source_label(main_path);
     let c_code = codegen.generate(&ir, &source_label);
 
@@ -161,7 +162,7 @@ fn build_multi(
         Some(project.root.clone()),
     );
     let ast = compiler.parse_module(main_path)?;
-    type_check(&compiler, &ast, main_path)?;
+    let type_info = type_check(&compiler, &ast, main_path)?;
 
     let modules = compiler.get_modules();
     let module_aliases = compiler.import_aliases_from_main(main_path, &ast);
@@ -183,7 +184,7 @@ fn build_multi(
     let mut compile_jobs = Vec::new();
 
     for (module_path, module_program) in modules {
-        let ir = ir::IRBuilder::build(module_program);
+        let ir = ir::IRBuilder::build(module_program, &type_info);
         let file_stem = module_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -207,6 +208,7 @@ fn build_multi(
         }
 
         let mut codegen = cgen::Codegen::new();
+        codegen.set_type_info(&type_info);
         let source_ion = portable_source_label(module_path);
         let c_code = codegen.generate_module_source(
             &ir,

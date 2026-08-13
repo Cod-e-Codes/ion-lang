@@ -290,7 +290,7 @@ impl IonLanguageServer {
 
         let mut parser = parser::Parser::with_source(tokens, &text);
         match parser.parse() {
-            Ok(ast) => {
+            Ok(mut ast) => {
                 let mut checker = tc::TypeChecker::new();
                 let mut dependencies = Vec::new();
                 let program = if let Ok(file_path) = uri.to_file_path() {
@@ -312,8 +312,11 @@ impl IonLanguageServer {
                         module_paths.insert(import.alias.clone(), path);
                     }
                     checker.set_module_paths(module_paths);
+                    compiler.number_program(&mut ast);
                     compiler.merge_modules(&ast, &file_path)
                 } else {
+                    let mut next = 1;
+                    crate::ast::number_program(&mut ast, &mut next);
                     ast.clone()
                 };
 

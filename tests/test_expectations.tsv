@@ -56,6 +56,10 @@ test_enum_unannotated_let.ion	cgen			Flag flag =	int flag =
 test_enum_unannotated_let.ion	cgen			Status status =	int status =
 test_enum_generic_unannotated_let.ion	run	42
 test_enum_generic_unannotated_let.ion	cgen			Option_int x =	^[[:space:]]*int x =
+test_unannotated_let_non_int.ion	run	5
+test_unannotated_let_non_int.ion	cgen			Point q =	^[[:space:]]*int q =
+test_unannotated_let_non_int.ion	cgen			Point n =	^[[:space:]]*int n =
+test_unannotated_let_non_int.ion	cgen			Point v =	^[[:space:]]*int v =
 test_result_custom_enum.ion	run	0
 test_match_ref_generic_enum_arith.ion	run	55
 test_match_ref_generic_enum_arith.ion	cgen			Status_int match_val_0 = *s

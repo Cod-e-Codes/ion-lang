@@ -88,9 +88,10 @@ Add new `TypeCheckError` variants only when existing ones can't express the fail
 
 ### IR and codegen
 
-- `IRBuilder::build` - keep lowering deterministic
+- `IRBuilder::build(program, &TypeInfo)` - keep lowering deterministic; types come from the checker, not a second inference pass
+- New expression forms get `ExprId`s from `ast::number_program` (parser leaves `UNASSIGNED`). Checker-only synthetics (for-loop desugar, method receiver `&`) use the checker's synthetic id counter
 - `cgen` - generated C must compile with `gcc` + `runtime/ion_runtime.c` (or precompiled `.o` via `test_runner.sh`) + `-lpthread`
-- Multi-file: test with `--mode multi` if imports or visibility involved
+- Multi-file: test with `--mode multi` if imports or visibility involved; pass the same `TypeInfo` into per-module IR and cgen
 - Warning hygiene under `-Wall -Wextra -Werror`: enum literals use compound initializers (not `_new` helpers); unused locals/params use `(void)` silences via binding read tracking (`scope_mark_binding_read`, `emit_frame_cleanup`), with immediate `(void)` for `_`-prefixed or borrow bindings at registration
 
 ### Project build (`src/build/`)

@@ -11,6 +11,7 @@ pub struct Compiler {
     module_exports: HashMap<String, ModuleExports>, // Maps import alias to exports
     stdlib_paths: Vec<PathBuf>,
     project_root: Option<PathBuf>,
+    next_expr_id: u32,
 }
 
 #[derive(Debug)]
@@ -56,6 +57,7 @@ impl Compiler {
             module_exports: HashMap::new(),
             stdlib_paths: Vec::new(),
             project_root: None,
+            next_expr_id: 1,
         }
     }
 
@@ -66,6 +68,7 @@ impl Compiler {
             module_exports: HashMap::new(),
             stdlib_paths,
             project_root,
+            next_expr_id: 1,
         }
     }
 
@@ -128,7 +131,8 @@ impl Compiler {
 
         // Parse
         let mut parser = Parser::with_source(tokens, &content);
-        let program = parser.parse().map_err(CompileError::ParseError)?;
+        let mut program = parser.parse().map_err(CompileError::ParseError)?;
+        crate::ast::number_program(&mut program, &mut self.next_expr_id);
 
         // Recursively parse imports and build export maps
         self.register_imports(&canonical_path, &program.imports)?;
@@ -207,6 +211,11 @@ impl Compiler {
         }
 
         errors
+    }
+
+    /// Number expressions in an already-parsed program (LSP buffer AST).
+    pub fn number_program(&mut self, program: &mut Program) {
+        crate::ast::number_program(program, &mut self.next_expr_id);
     }
 
     /// Get all parsed modules

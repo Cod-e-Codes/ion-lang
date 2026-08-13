@@ -13,6 +13,7 @@ use crate::ast::{
     TypeParam, UnOp,
 };
 use crate::ir::*;
+use crate::tc::TypeInfo;
 use crate::types_util::{is_ref_to_vec, ref_to_vec_elem};
 use std::collections::{HashMap, HashSet};
 
@@ -62,7 +63,10 @@ pub struct Codegen {
     current_return_type: Option<Type>, // Current function's return type (for array return handling)
     function_return_types: HashMap<String, Option<Type>>, // Map function names to their return types
     function_param_types: HashMap<String, Vec<Type>>,     // Map function names to parameter types
-    in_unsafe_block: bool,                                // Track if we're in an unsafe block
+    /// Compilation-wide callee env from TypeInfo (Ion names, alias::name, prefix_name).
+    compilation_param_types: HashMap<String, Vec<Type>>,
+    compilation_return_types: HashMap<String, Option<Type>>,
+    in_unsafe_block: bool,   // Track if we're in an unsafe block
     temp_var_counter: usize, // Counter for unique temporary variable names
     current_function_params: HashMap<String, Type>, // Track current function parameter types for field access
     spawn_counter: usize,
@@ -107,6 +111,8 @@ impl Codegen {
             current_return_type: None,
             function_return_types: HashMap::new(),
             function_param_types: HashMap::new(),
+            compilation_param_types: HashMap::new(),
+            compilation_return_types: HashMap::new(),
             in_unsafe_block: false,
             temp_var_counter: 0,
             current_function_params: HashMap::new(),
@@ -127,6 +133,26 @@ impl Codegen {
             pending_field_nulls: Vec::new(),
             pending_field_null_set: std::collections::HashSet::new(),
         }
+    }
+
+    pub fn set_type_info(&mut self, types: &TypeInfo) {
+        self.compilation_param_types = types.function_params.clone();
+        self.compilation_return_types = types.function_returns.clone();
+    }
+
+    fn lookup_param_types(&self, resolved_callee: &str, func_name: &str) -> Option<&Vec<Type>> {
+        self.function_param_types
+            .get(resolved_callee)
+            .or_else(|| self.function_param_types.get(func_name))
+            .or_else(|| self.compilation_param_types.get(resolved_callee))
+            .or_else(|| self.compilation_param_types.get(func_name))
+            .or_else(|| self.extern_functions.get(func_name))
+    }
+
+    fn lookup_return_type(&self, callee: &str) -> Option<&Option<Type>> {
+        self.function_return_types
+            .get(callee)
+            .or_else(|| self.compilation_return_types.get(callee))
     }
 
     fn resolve_c_function_name(&self, callee: &str) -> String {
@@ -2323,17 +2349,15 @@ impl Codegen {
                     });
                     // If not set, look up the function's return type
                     if from_call.is_none() {
-                        self.function_return_types
-                            .get(callee)
-                            .and_then(|ret_ty_opt| {
-                                ret_ty_opt.as_ref().and_then(|rt| {
-                                    if let Type::Array { inner, .. } = rt {
-                                        Some(self.type_to_c(inner))
-                                    } else {
-                                        None
-                                    }
-                                })
+                        self.lookup_return_type(callee).and_then(|ret_ty_opt| {
+                            ret_ty_opt.as_ref().and_then(|rt| {
+                                if let Type::Array { inner, .. } = rt {
+                                    Some(self.type_to_c(inner))
+                                } else {
+                                    None
+                                }
                             })
+                        })
                     } else {
                         from_call
                     }
@@ -3163,11 +3187,7 @@ impl Codegen {
                         if i > 0 {
                             self.write(", ");
                         }
-                        let param_types = self
-                            .function_param_types
-                            .get(&resolved_callee)
-                            .or_else(|| self.function_param_types.get(&func_name))
-                            .or_else(|| self.extern_functions.get(&func_name));
+                        let param_types = self.lookup_param_types(&resolved_callee, &func_name);
                         let param_ty = param_types.and_then(|pts| pts.get(i).cloned());
                         // If this is an extern function expecting int by value, convert &int (immutable) arguments to int
                         // For &int -> int: just use the inner expression (the variable itself)
@@ -6070,9 +6090,7 @@ mod tests {
     return fn(x: int) -> int { return x + 1; };
 }
 fn main() -> int { return 0; }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let make_inc = ir.functions.iter().find(|f| f.name == "make_inc").unwrap();
         assert!(
             matches!(make_inc.return_type, Some(Type::Fn { .. })),
@@ -6095,12 +6113,11 @@ fn pack(items: Vec<Item>) -> (Vec<Item>, int) {
     for item in items {
         if !item.done { open = open + 1; }
     }
-    return (Vec::new(), open);
+    let empty: Vec<Item> = Vec::new();
+    return (empty, open);
 }
 fn main() -> int { return 0; }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6116,9 +6133,7 @@ fn main() -> int { return 0; }"#;
     let t: (int, int) = get();
     return t.0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6133,9 +6148,7 @@ fn main() -> int { return 0; }"#;
     let ch: channel<int>;
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6150,9 +6163,7 @@ fn main() -> int { return 0; }"#;
     let x: int = 1;
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6172,9 +6183,7 @@ fn main() -> int {
     let x: Option = Option::Some(42);
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6200,9 +6209,7 @@ fn main() -> int {
 fn main() -> int {
     return ignore(1);
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6226,9 +6233,7 @@ fn main() -> int {
     }
     return 1;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         let outer = c
@@ -6269,9 +6274,7 @@ fn main() -> int {
     };
     return 1;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         let outer = c
@@ -6314,9 +6317,7 @@ fn main() -> int {
         },
     };
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         let ok_arm = c
@@ -6356,9 +6357,7 @@ fn main() -> int {
         },
     };
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         let binding_arm = c
@@ -6407,9 +6406,7 @@ fn main() -> int {
     };
     return n;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         let divergent_arm = c
@@ -6445,9 +6442,7 @@ fn log_line() {
         let _result: int = write(1, "x", 1);
     }
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert_eq!(
@@ -6466,9 +6461,7 @@ fn main() -> int {
     Vec::push(&mut items, item);
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6485,9 +6478,7 @@ fn main() -> int {
     Vec::push(&mut names, String::from("a"));
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6519,9 +6510,7 @@ fn main() -> int {
     };
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6538,9 +6527,7 @@ fn main() -> int {
     String::push_str(&mut s, part);
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6557,13 +6544,11 @@ fn take(board: Board) -> Vec<Item> {
     return board.items;
 }
 fn main() -> int {
-    let board: Board = Board { items: 0 };
+    let board: Board = Board { items: Vec::new() };
     let taken: Vec<Item> = take(board);
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6578,13 +6563,11 @@ fn main() -> int {
 struct Batch { items: Vec<Item>; }
 fn take(items: Vec<Item>) -> int { return 0; }
 fn main() -> int {
-    let batch: Batch = Batch { items: 0 };
+    let batch: Batch = Batch { items: Vec::new() };
     let _x: int = take(batch.items);
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6606,9 +6589,7 @@ fn main() -> int {
     let t: (Vec<Item>, int) = pair(items, 1);
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6642,10 +6623,10 @@ fn revenue(orders: &Vec<Order>, customer_id: int) -> int {
         match Vec::get_ref(orders, i) {
             Option::Some(order) => {
                 if order.customer_id == customer_id {
-                    let line_len: int = Vec::len(&order.lines);
+                    let line_len: int = Vec::len(order.lines);
                     let mut j: int = 0;
                     while j < line_len {
-                        match Vec::get_ref(&order.lines, j) {
+                        match Vec::get_ref(order.lines, j) {
                             Option::Some(line) => {
                                 sum = sum + line.price_cents * line.qty;
                             }
@@ -6677,9 +6658,7 @@ fn main() -> int {
     }
     return 0;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6727,9 +6706,7 @@ fn main() -> int {
     let y: int = Box::unwrap(boxed);
     return y;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6767,9 +6744,7 @@ fn main() -> int {
     return n.a + n.b + n.c + n.d;
 }
 "#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6806,9 +6781,7 @@ fn main() -> int {
     }
 }
 "#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6841,9 +6814,7 @@ fn main() -> int {
     }
 }
 "#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = crate::parser::Parser::new(tokens).parse().unwrap();
-        let ir = crate::ir::IRBuilder::build(&program);
+        let ir = crate::ir::lower_checked(src);
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
@@ -6853,6 +6824,38 @@ fn main() -> int {
         assert!(
             !c.contains("    int x ="),
             "expected unannotated Option::Some let not to lower as int in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn multi_file_imported_string_param_wraps_literal() {
+        let src = r#"
+fn println(s: String) -> int {
+    return 0;
+}
+fn main() -> int {
+    println("hi");
+    return 0;
+}
+"#;
+        let mut ir = crate::ir::lower_checked(src);
+        ir.functions.retain(|f| f.name == "main");
+        let mut types = crate::tc::TypeInfo::default();
+        types
+            .function_params
+            .insert("println".to_string(), vec![Type::String]);
+        types
+            .function_params
+            .insert("io::println".to_string(), vec![Type::String]);
+        types
+            .function_params
+            .insert("io_println".to_string(), vec![Type::String]);
+        let mut cg = Codegen::new();
+        cg.set_type_info(&types);
+        let c = cg.generate_module_source(&ir, "app", "test.ion", &[], "app");
+        assert!(
+            c.contains("ion_string_from_literal"),
+            "expected imported String param to wrap literal in:\n{c}"
         );
     }
 }
