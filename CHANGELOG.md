@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.17 - 2026-08-13
+
+- **IR / Codegen**: lowering consumes checker `TypeInfo` keyed by stable `ExprId`s. Unannotated lets use the checker type, never a syntactic `int` fallback. This impacts any unannotated `let` whose checker type is not `int` (including `let x = y`, enum literals, `Box::unwrap`, field/call results), plus multi-file calls whose callee lives in another module. Annotated lets and same-file `String` literals already worked.
+- **Type checker**: match-arm result typing reads recorded expression types from the first walk. It no longer re-checks the last statement (the 0.1.15/0.1.16 ownership snapshot/reset is gone). Named types stored in `TypeInfo` are canonical (`Struct("Flag")` becomes `Enum("Flag")`).
+- **Tests**: `test_unannotated_let_non_int.ion` covers Var copy, field access, and call-result lets.
+- **Docs**: compiler pipeline, bug hotspots, adding-ion-features, and LSP skill note that IR takes `TypeInfo` and that the buffer AST is numbered after imports; ION_SPEC §10.3 records that lowering uses checker types.
+
 ## 0.1.16 - 2026-08-13
 
 - **IR / Codegen**: unannotated `let x = Enum::Variant` types `x` as the enum, not default `int`. Tuple payloads whose count matches the enum's type parameters (for example `Option::Some(42)`) lower as `Option<int>` / `Option_int`. This impacts any unannotated `let flag = Flag::On` or `let x = Option::Some(...)`: previously ion-compiler succeeded and gcc saw `int x`. Annotated `let x: Flag = ...` already lowered correctly.

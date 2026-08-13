@@ -1320,6 +1320,7 @@ stronger contract.
 - LSP go-to-definition for type names in type annotations (no source spans on `Type` AST nodes)
 - Function types: capture-free fn literals implemented; no capturing closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
 - Tuple values: no nested tuples, `==` on tuples, struct fields holding tuples, or generic `(T1, T2)` parameters. Flat tuples may hold owned heap types (for example `(Vec<T>, int)`).
+- Tooling: IR lowering uses types computed by the type checker (`TypeInfo`). Missing a type after a successful check is a compiler bug, not a language fallback to `int`.
 
 ### 11. Future Work (Non-Normative)
 

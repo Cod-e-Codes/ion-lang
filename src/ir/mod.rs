@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::tc::collect_captured_vars;
+use crate::tc::{TypeInfo, collect_captured_vars};
 use crate::types_util::{infer_generic_substitutions, ref_to_vec_elem};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -206,6 +206,7 @@ struct LoweringContext {
     tuple_temp_counter: usize,
     fn_literal_counter: Rc<Cell<usize>>,
     function_returns: HashMap<String, Option<Type>>,
+    types: TypeInfo,
 }
 
 impl LoweringContext {
@@ -215,6 +216,7 @@ impl LoweringContext {
         enum_param_counts: HashMap<String, usize>,
         fn_literal_counter: Rc<Cell<usize>>,
         function_returns: HashMap<String, Option<Type>>,
+        types: TypeInfo,
     ) -> Self {
         let mut var_types = HashMap::new();
         for p in params {
@@ -227,69 +229,20 @@ impl LoweringContext {
             tuple_temp_counter: 0,
             fn_literal_counter,
             function_returns,
+            types,
         }
     }
 
-    fn field_type(&self, base_ty: &Type, field: &str) -> Option<Type> {
-        ir_field_type(base_ty, field, &self.struct_decls)
+    fn expr_type(&self, expr: &Expr) -> Type {
+        self.types.resolve(&self.types.expr_type(expr))
     }
 
     fn resolve_expr_type(&self, expr: &Expr) -> Option<Type> {
-        match expr {
-            Expr::Var(v) => self.var_types.get(&v.name).cloned(),
-            Expr::Ref(r) => self.resolve_expr_type(&r.inner).map(|inner_ty| Type::Ref {
-                inner: Box::new(inner_ty),
-                mutable: r.mutable,
-            }),
-            Expr::FieldAccess(acc) => {
-                let base_ty = self.resolve_expr_type(&acc.base)?;
-                self.field_type(&base_ty, &acc.field)
-            }
-            Expr::Call(call) => {
-                lookup_merged(&self.function_returns, &call.callee).and_then(|ret| ret.clone())
-            }
-            Expr::StructLit(lit) => Some(Type::Struct(lit.type_name.clone())),
-            Expr::EnumLit(lit) => Some(self.enum_lit_type(lit)),
-            Expr::TupleLit(t) => Some(Type::Tuple {
-                elements: t
-                    .elements
-                    .iter()
-                    .map(|e| {
-                        self.resolve_expr_type(e)
-                            .unwrap_or_else(|| infer_type_from_expr(e))
-                    })
-                    .collect(),
-            }),
-            _ => Some(infer_type_from_expr(expr)),
-        }
+        Some(self.expr_type(expr))
     }
 
     fn record_binding(&mut self, name: &str, ty: &Type) {
         self.var_types.insert(name.to_string(), ty.clone());
-    }
-
-    fn enum_lit_type(&self, lit: &EnumLitExpr) -> Type {
-        let n_params = self
-            .enum_param_counts
-            .get(&lit.enum_name)
-            .copied()
-            .unwrap_or(0);
-        if n_params > 0 && lit.args.len() == n_params {
-            let params = lit
-                .args
-                .iter()
-                .map(|a| {
-                    self.resolve_expr_type(a)
-                        .unwrap_or_else(|| infer_type_from_expr(a))
-                })
-                .collect();
-            Type::Generic {
-                name: lit.enum_name.clone(),
-                params,
-            }
-        } else {
-            Type::Enum(lit.enum_name.clone())
-        }
     }
 }
 
@@ -409,13 +362,14 @@ pub struct IRStructLitField {
 pub struct IRBuilder;
 
 impl IRBuilder {
-    pub fn build(ast: &Program) -> IRProgram {
+    pub fn build(ast: &Program, types: &TypeInfo) -> IRProgram {
         let builder = IRBuilder;
-        let function_returns: HashMap<String, Option<Type>> = ast
-            .functions
-            .iter()
-            .map(|f| (f.name.clone(), f.return_type.clone()))
-            .collect();
+        let mut function_returns = types.function_returns.clone();
+        for f in &ast.functions {
+            function_returns
+                .entry(f.name.clone())
+                .or_insert_with(|| f.return_type.clone());
+        }
         let struct_decls: HashMap<String, StructDecl> = ast
             .structs
             .iter()
@@ -430,7 +384,13 @@ impl IRBuilder {
             .functions
             .iter()
             .map(|f| {
-                builder.build_function(f, &function_returns, &struct_decls, &enum_param_counts)
+                builder.build_function(
+                    f,
+                    &function_returns,
+                    &struct_decls,
+                    &enum_param_counts,
+                    types,
+                )
             })
             .collect();
         let mut program = IRProgram {
@@ -450,13 +410,14 @@ impl IRBuilder {
         function_returns: &HashMap<String, Option<Type>>,
         struct_decls: &HashMap<String, StructDecl>,
         enum_param_counts: &HashMap<String, usize>,
+        types: &TypeInfo,
     ) -> IRFunction {
         let params: Vec<IRParam> = function
             .params
             .iter()
             .map(|p| IRParam {
                 name: p.name.clone(),
-                ty: p.ty.clone(),
+                ty: types.resolve(&p.ty),
             })
             .collect();
 
@@ -468,6 +429,7 @@ impl IRBuilder {
             enum_param_counts.clone(),
             fn_literal_counter,
             function_returns.clone(),
+            types.clone(),
         );
         let entry = Self::lower_ast_block("entry", &function.body, &mut ctx);
         let blocks = vec![entry];
@@ -476,7 +438,7 @@ impl IRBuilder {
             name: function.name.clone(),
             generics: TypeParam::names(&function.generics),
             params,
-            return_type: function.return_type.clone(),
+            return_type: function.return_type.as_ref().map(|t| types.resolve(t)),
             blocks,
         }
     }
@@ -566,10 +528,9 @@ impl IRBuilder {
                     && let Some(ref init) = let_stmt.init
                 {
                     let tuple_ty = if let Some(ref type_ann) = let_stmt.type_ann {
-                        type_ann.clone()
+                        ctx.types.resolve(type_ann)
                     } else {
-                        ctx.resolve_expr_type(init)
-                            .unwrap_or_else(|| infer_type_from_expr(init))
+                        ctx.expr_type(init)
                     };
                     if let Type::Tuple { elements } = tuple_ty
                         && patterns.len() == elements.len()
@@ -601,36 +562,12 @@ impl IRBuilder {
                     }
                 }
 
-                // If there is an explicit type annotation, use it.
-                // Otherwise, try to infer the type from the initializer expression.
-                // For variables (Expr::Var), we can't infer from the variable name itself,
-                // but if it's a simple assignment like `let x = y;`, the type checker has
-                // already verified the types match, so we should preserve the type.
-                // However, since we don't have access to the type checker's context here,
-                // we'll use a heuristic: if the init is a variable and we can't infer,
-                // we'll need to rely on type annotations or let the type checker handle it.
                 let ty = if let Some(ref type_ann) = let_stmt.type_ann {
-                    type_ann.clone()
+                    ctx.types.resolve(type_ann)
                 } else if let Some(ref init_expr) = let_stmt.init {
-                    match init_expr {
-                        Expr::Call(call_expr) => {
-                            call_ir_return_type(&call_expr.callee, &call_expr.args, ctx)
-                                .or_else(|| {
-                                    ctx.function_returns
-                                        .get(&call_expr.callee)
-                                        .and_then(|o| o.clone())
-                                })
-                                .unwrap_or_else(|| infer_type_from_expr(init_expr))
-                        }
-                        Expr::FnLiteral(lit) => fn_type_from_expr_literal(lit),
-                        Expr::Var(_var_expr) => Type::Int,
-                        Expr::EnumLit(lit) => ctx.enum_lit_type(lit),
-                        _ => ctx
-                            .resolve_expr_type(init_expr)
-                            .unwrap_or_else(|| infer_type_from_expr(init_expr)),
-                    }
+                    ctx.expr_type(init_expr)
                 } else {
-                    Type::Int
+                    Type::Void
                 };
 
                 ctx.record_binding(&let_stmt.name, &ty);
@@ -719,15 +656,16 @@ impl IRBuilder {
                 let container_var = format!("__for_container_{}", for_stmt.span.start);
                 let index_var = format!("__for_i_{}", for_stmt.span.start);
 
-                let container_ty = ctx
-                    .resolve_expr_type(&for_stmt.iterable)
-                    .unwrap_or_else(|| infer_type_from_expr(&for_stmt.iterable));
+                let container_ty = ctx.expr_type(&for_stmt.iterable);
 
                 let elem_type = match &container_ty {
                     Type::Vec { elem_type } => (**elem_type).clone(),
                     Type::String => Type::U8,
                     Type::Array { inner, .. } => (**inner).clone(),
-                    _ => Type::Int,
+                    _ => panic!(
+                        "compiler bug: for-iterable type is not Vec/String/Array: {:?}",
+                        container_ty
+                    ),
                 };
 
                 let use_container_copy = !matches!(container_ty, Type::Array { .. });
@@ -916,21 +854,12 @@ impl IRBuilder {
 
 fn resolve_recv_elem_type(channel: &Expr, ctx: &LoweringContext) -> Type {
     let receiver_type = match channel {
-        Expr::Ref(r) => ctx.resolve_expr_type(&r.inner),
-        _ => ctx.resolve_expr_type(channel),
+        Expr::Ref(r) => ctx.expr_type(&r.inner),
+        _ => ctx.expr_type(channel),
     };
     match receiver_type {
-        Some(Type::Receiver { elem_type }) => (*elem_type).clone(),
-        _ => Type::Int,
-    }
-}
-
-fn infer_send_value_type(expr: &Expr) -> Type {
-    match expr {
-        Expr::Lit(_) => Type::Int,
-        Expr::BoolLiteral(_) => Type::Bool,
-        Expr::FloatLiteral(_) => Type::F64,
-        _ => Type::Int,
+        Type::Receiver { elem_type } => (*elem_type).clone(),
+        other => panic!("compiler bug: recv channel is not Receiver: {:?}", other),
     }
 }
 
@@ -968,9 +897,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             operand: Box::new(build_expr_with_ctx(&un_op_expr.operand, ctx)),
         },
         Expr::Send(send_expr) => {
-            let value_type = ctx
-                .resolve_expr_type(&send_expr.value)
-                .unwrap_or_else(|| infer_send_value_type(&send_expr.value));
+            let value_type = ctx.expr_type(&send_expr.value);
             IREexpr::Send {
                 channel: Box::new(build_expr_with_ctx(&send_expr.channel, ctx)),
                 value: Box::new(build_expr_with_ctx(&send_expr.value, ctx)),
@@ -1055,6 +982,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                         tuple_temp_counter: ctx.tuple_temp_counter,
                         fn_literal_counter: ctx.fn_literal_counter.clone(),
                         function_returns: ctx.function_returns.clone(),
+                        types: ctx.types.clone(),
                     };
                     if let Some(ref ty) = scrutinee_ty {
                         record_match_arm_bindings(&arm.pattern, ty, &mut arm_ctx);
@@ -1092,7 +1020,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             }
         }
         Expr::Call(call_expr) => {
-            let return_type = call_ir_return_type(&call_expr.callee, &call_expr.args, ctx);
+            let return_type = Some(ctx.expr_type(expr));
             IREexpr::Call {
                 callee: call_expr.callee.clone(),
                 args: call_expr
@@ -1146,29 +1074,6 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             } else {
                 format!("METHOD::{}", method_call.method)
             };
-            let mut expr_args: Vec<Expr> = vec![*method_call.receiver.clone()];
-            expr_args.extend(method_call.args.iter().cloned());
-            let return_type = if is_slice || is_vec {
-                builtin_option_vec_return(&callee, &expr_args, ctx).or({
-                    match method_call.method.as_str() {
-                        "len" | "capacity" => Some(Type::Int),
-                        "push" | "set" => Some(Type::Void),
-                        _ => None,
-                    }
-                })
-            } else if is_string {
-                match method_call.method.as_str() {
-                    "len" => Some(Type::Int),
-                    "get" => Some(Type::Generic {
-                        name: "Option".to_string(),
-                        params: vec![Type::U8],
-                    }),
-                    "push_str" | "push_byte" => Some(Type::Void),
-                    _ => None,
-                }
-            } else {
-                None
-            };
             let receiver_is_ref = matches!(
                 method_call.method.as_str(),
                 "push"
@@ -1210,7 +1115,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             IREexpr::Call {
                 callee,
                 args: all_args,
-                return_type,
+                return_type: Some(ctx.expr_type(expr)),
                 tuple_destructure_index: None,
             }
         }
@@ -1219,10 +1124,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             let elem_types: Vec<Type> = tuple_lit
                 .elements
                 .iter()
-                .map(|e| {
-                    ctx.resolve_expr_type(e)
-                        .unwrap_or_else(|| infer_type_from_expr(e))
-                })
+                .map(|e| ctx.expr_type(e))
                 .collect();
             IREexpr::TupleLit {
                 elements: tuple_lit
@@ -1290,6 +1192,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 ctx.enum_param_counts.clone(),
                 ctx.fn_literal_counter.clone(),
                 ctx.function_returns.clone(),
+                ctx.types.clone(),
             );
             let body = IRBuilder::lower_ast_block("fn_lit_body", &lit.body, &mut lit_ctx);
             IREexpr::FnLiteral(IRFnLiteral {
@@ -1299,38 +1202,6 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 body,
             })
         }
-    }
-}
-
-/// Infer the type of an expression for type inference in let statements.
-fn infer_type_from_expr(expr: &Expr) -> Type {
-    match expr {
-        Expr::Lit(_) => Type::Int,
-        Expr::BoolLiteral(_) => Type::Bool,
-        Expr::FloatLiteral(_) => Type::F64, // Float literals default to f64
-        Expr::Var(_) => Type::Int, // Can't infer from variable without type info - will be fixed by type checker
-        Expr::Call(call_expr) => {
-            infer_type_from_call(&call_expr.callee, &call_expr.args).unwrap_or(Type::Int)
-        }
-        Expr::StringLit(_) => Type::String,
-        Expr::StructLit(lit) => Type::Struct(lit.type_name.clone()),
-        Expr::EnumLit(lit) => Type::Enum(lit.enum_name.clone()),
-        Expr::TupleLit(t) => Type::Tuple {
-            elements: t.elements.iter().map(infer_type_from_expr).collect(),
-        },
-        Expr::Ref(ref_expr) => Type::Ref {
-            inner: Box::new(infer_type_from_expr(&ref_expr.inner)),
-            mutable: ref_expr.mutable,
-        },
-        Expr::FnLiteral(lit) => fn_type_from_expr_literal(lit),
-        _ => Type::Int, // Default fallback
-    }
-}
-
-fn fn_type_from_expr_literal(lit: &FnLiteralExpr) -> Type {
-    Type::Fn {
-        params: lit.params.iter().map(|p| p.ty.clone()).collect(),
-        return_type: Box::new(lit.return_type.clone().unwrap_or(Type::Void)),
     }
 }
 
@@ -1357,26 +1228,6 @@ fn slice_elem_type_from_arg_expr(arg: &Expr, ctx: &LoweringContext) -> Option<Ty
         },
         _ => None,
     }
-}
-
-fn call_ir_return_type(callee: &str, args: &[Expr], ctx: &LoweringContext) -> Option<Type> {
-    builtin_option_vec_return(callee, args, ctx)
-        .or_else(|| {
-            if callee.starts_with("Box::new") && !args.is_empty() {
-                ctx.resolve_expr_type(&args[0]).map(|arg_ty| Type::Box {
-                    inner: Box::new(arg_ty),
-                })
-            } else if callee == "Box::unwrap" && !args.is_empty() {
-                match ctx.resolve_expr_type(&args[0]) {
-                    Some(Type::Box { inner }) => Some(*inner),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        })
-        .or_else(|| lookup_merged(&ctx.function_returns, callee).and_then(|ret| ret.clone()))
-        .or_else(|| infer_type_from_call(callee, args))
 }
 
 fn builtin_option_vec_return(callee: &str, args: &[Expr], ctx: &LoweringContext) -> Option<Type> {
@@ -1414,49 +1265,6 @@ fn builtin_option_vec_return(callee: &str, args: &[Expr], ctx: &LoweringContext)
         name: "Option".to_string(),
         params: vec![elem],
     })
-}
-
-/// Infer the return type of a function call.
-fn infer_type_from_call(callee: &str, args: &[Expr]) -> Option<Type> {
-    // Handle built-in functions
-    if callee == "Box::new" && !args.is_empty() {
-        // Box::new<T>(value: T) -> Box<T>
-        let arg_type = infer_type_from_expr(&args[0]);
-        return Some(Type::Box {
-            inner: Box::new(arg_type),
-        });
-    }
-    if callee == "Vec::new" {
-        // Vec::new<T>() -> Vec<T>
-        // We can't infer T from no arguments, so return None
-        return None;
-    }
-    if callee == "Vec::with_capacity" {
-        // Vec::with_capacity<T>(cap: int) -> Vec<T>
-        // We can't infer T from capacity, so return None
-        return None;
-    }
-    if callee == "String::new" {
-        return Some(Type::String);
-    }
-    if callee == "String::from" && !args.is_empty() {
-        // String::from(str: &str) -> String
-        return Some(Type::String);
-    }
-    if callee == "String::get" {
-        return Some(Type::Generic {
-            name: "Option".to_string(),
-            params: vec![Type::U8],
-        });
-    }
-    if callee == "Slice::len" {
-        return Some(Type::Int);
-    }
-    if callee == "Slice::get_ref" {
-        return None; // needs context for T
-    }
-    // For other calls, we can't infer without type information
-    None
 }
 
 /// Monomorphize generic functions at each call site and drop unresolved templates.
@@ -2157,7 +1965,9 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
         } => IREexpr::Match {
             expr: Box::new(substitute_types_in_expr(inner, substitutions)),
             enum_type: enum_type.clone(),
-            scrutinee_type: scrutinee_type.clone(),
+            scrutinee_type: scrutinee_type
+                .as_ref()
+                .map(|ty| substitute_type(ty, substitutions)),
             arms: arms
                 .iter()
                 .map(|arm| IRMatchArm {
@@ -2326,15 +2136,29 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
     }
 }
 
+/// Parse, number, type-check, and lower `src`. Panics on compile errors (tests/helpers).
+pub fn lower_checked(src: &str) -> IRProgram {
+    let tokens = crate::lexer::Lexer::new(src)
+        .tokenize()
+        .unwrap_or_else(|e| panic!("lex error: {e}"));
+    let mut program = crate::parser::Parser::new(tokens)
+        .parse()
+        .unwrap_or_else(|e| panic!("parse error: {e}"));
+    let mut next = 1;
+    crate::ast::number_program(&mut program, &mut next);
+    let mut checker = crate::tc::TypeChecker::new();
+    let (result, errors) = checker.check_program_collecting(&program);
+    assert!(
+        errors.is_empty(),
+        "{}",
+        crate::tc::format_type_errors(&errors)
+    );
+    IRBuilder::build(&program, &result.type_info)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser;
-
-    fn parse_program(src: &str) -> crate::ast::Program {
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        parser::Parser::new(tokens).parse().unwrap()
-    }
 
     #[test]
     fn module_qualified_generic_call_is_monomorphized() {
@@ -2350,8 +2174,7 @@ fn main() -> int {
     return a.live;
 }
 "#;
-        let program = parse_program(src);
-        let mut ir = IRBuilder::build(&program);
+        let mut ir = lower_checked(src);
         {
             let main = ir
                 .functions
@@ -2401,5 +2224,40 @@ fn main() -> int {
             IREexpr::Call { callee, .. } => assert_eq!(callee, "handle_new_int"),
             other => panic!("expected call, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn unannotated_var_copy_keeps_checker_type() {
+        let src = r#"
+struct Point {
+    x: int;
+    y: int;
+}
+fn main() -> int {
+    let p: Point = Point { x: 1, y: 2 };
+    let q = p;
+    return q.x + q.y;
+}
+"#;
+        let ir = lower_checked(src);
+        let main = ir.functions.iter().find(|f| f.name == "main").unwrap();
+        let lets: Vec<&IRLetStmt> = main.blocks[0]
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                IRStmt::Let(l) => Some(l),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            lets.len() >= 2,
+            "expected two lets, got {:?}",
+            lets.iter().map(|l| &l.name).collect::<Vec<_>>()
+        );
+        assert!(
+            matches!(&lets[1].ty, Type::Struct(n) if n == "Point"),
+            "let q = p should keep Point, got {:?}",
+            lets[1].ty
+        );
     }
 }

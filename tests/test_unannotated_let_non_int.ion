@@ -1,0 +1,23 @@
+// Unannotated lets must keep checker types, not default to int:
+// Var copy/move, field access, and call results.
+struct Point {
+    x: int;
+    y: int;
+}
+
+struct Wrapper {
+    p: Point;
+}
+
+fn origin() -> Point {
+    return Point { x: 1, y: 2 };
+}
+
+fn main() -> int {
+    let p: Point = origin();
+    let q = p;
+    let w: Wrapper = Wrapper { p: origin() };
+    let n = w.p;
+    let v = origin();
+    return q.x + q.y + n.x + v.x;
+}

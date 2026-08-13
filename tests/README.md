@@ -110,6 +110,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_enum_basic.ion` - Enum declarations and literals
 - `test_enum_unannotated_let.ion` - unannotated `let flag = Flag::On` / `let status = Status::Ok { ... }` types as the enum, not default int (exit 7); cgen asserts `Flag flag =` / `Status status =`
 - `test_enum_generic_unannotated_let.ion` - unannotated `let x = Option::Some(42)` types as `Option<int>` (exit 42); cgen asserts `Option_int x =`
+- `test_unannotated_let_non_int.ion` - unannotated `let q = p` / `let n = w.p` / `let v = origin()` keep struct types, not default int (exit 5); cgen asserts `Point q =` / `Point n =` / `Point v =`
 - `test_enum_generic.ion` - Generic enum types
 - `test_result_custom_enum.ion` - `Result<int, MyError>` via `stdlib/result.ion` (Ok and Err, exit 0)
 - `test_match_ref_generic_enum_arith.ion` - Match on `&Status<int>` and non-generic `&Flag` with arithmetic on copy payloads (exit 55)

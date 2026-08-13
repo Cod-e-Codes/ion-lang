@@ -99,7 +99,7 @@ fn main() {
 
     // Type check merged program (main + imported modules)
     let merged_program = compiler.merge_modules(&ast, input_path);
-    let (_result, errors) = checker.check_program_collecting(&merged_program);
+    let (result, errors) = checker.check_program_collecting(&merged_program);
     if !errors.is_empty() {
         eprintln!("{}", tc::format_type_errors(&errors));
         process::exit(1);
@@ -135,7 +135,7 @@ fn main() {
         let mut object_files = Vec::new();
         for (module_path, module_program) in modules {
             // Build IR for this module
-            let ir = ir::IRBuilder::build(module_program);
+            let ir = ir::IRBuilder::build(module_program, &result.type_info);
 
             // Generate module name from file path
             let file_stem = module_path
@@ -164,6 +164,7 @@ fn main() {
 
             // Generate .c file
             let mut codegen = cgen::Codegen::new();
+            codegen.set_type_info(&result.type_info);
             let source_ion = build::portable_source_label(module_path);
             let c_code = codegen.generate_module_source(
                 &ir,
@@ -247,10 +248,11 @@ fn main() {
         let merged_program = compiler.merge_modules(&ast, input_path);
 
         // Build IR from merged program
-        let ir = ir::IRBuilder::build(&merged_program);
+        let ir = ir::IRBuilder::build(&merged_program, &result.type_info);
 
         // Generate C code
         let mut codegen = cgen::Codegen::new();
+        codegen.set_type_info(&result.type_info);
         let c_code = codegen.generate(&ir, &build::portable_source_label(input_path));
 
         // Determine output filename

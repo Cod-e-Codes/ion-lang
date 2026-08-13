@@ -20,7 +20,7 @@ paths:
 |-------|----------|
 | LSP server | `src/lsp/server.rs`, `src/lsp/util.rs`, `src/bin/ion-lsp.rs` |
 | VS Code extension | `ion-vscode/` (TypeScript + TextMate grammar) |
-| Compiler reuse | `lexer`, `parser`, `tc` on buffer; `load_imports` → `parse_module` for imports on disk |
+| Compiler reuse | `lexer`, `parser`, `tc` on buffer; `load_imports` → `parse_module` for imports on disk; number the buffer AST after imports, then `merge_modules` |
 
 ## Build LSP
 
@@ -65,13 +65,14 @@ Adjust path for OS (no `.exe` on Linux/macOS).
 
 1. On `did_open` / `did_change` - **lexer → parser** on the in-memory buffer (unsaved edits included; does not re-read the file from disk)
 2. **`Compiler::load_imports`** - per-import `parse_module` on disk with `build::discover_import_config` (same stdlib search order as `ion-build`, including walk-up `stdlib/` and install-relative paths); failed imports publish diagnostics at the `import` span while successful imports still register exports
-3. **Type-check** - `tc::TypeChecker::check_program_collecting_with_source` on merged program, symbols seeded from buffer AST (`check_program_collecting` for unit tests)
-4. Publish diagnostics from lexer, parser, import resolution, or type-check errors
-5. **Hover** - expression types, symbol docs, builtin signatures
-6. **Completion** - prefix-filtered; context-aware for `alias::` and `Type.` / `expr.` (`int`, `i8`-`i64`, `u8`-`u64`, `uint` expose `MIN`/`MAX` via `BUILTIN_TYPE_MEMBERS` in `util.rs`)
-7. **Go to definition** - variables, calls, methods, fields, variants, type aliases; cross-file via `module_paths`
-8. **References**, **document symbols**, **signature help**, **semantic tokens**
-9. **`did_change_watched_files`** - re-check open files whose import dependencies changed
+3. **Number + merge** - `compiler.number_program` on the buffer AST (after imports, so IDs do not collide), then `merge_modules`. Do not re-number the merged program.
+4. **Type-check** - `tc::TypeChecker::check_program_collecting_with_source` on the merged program, symbols seeded from the buffer AST (`check_program_collecting` for unit tests)
+5. Publish diagnostics from lexer, parser, import resolution, or type-check errors
+6. **Hover** - expression types, symbol docs, builtin signatures
+7. **Completion** - prefix-filtered; context-aware for `alias::` and `Type.` / `expr.` (`int`, `i8`-`i64`, `u8`-`u64`, `uint` expose `MIN`/`MAX` via `BUILTIN_TYPE_MEMBERS` in `util.rs`)
+8. **Go to definition** - variables, calls, methods, fields, variants, type aliases; cross-file via `module_paths`
+9. **References**, **document symbols**, **signature help**, **semantic tokens**
+10. **`did_change_watched_files`** - re-check open files whose import dependencies changed
 
 Known limitations: built-in methods have signature hover but no go-to-definition target (ION_SPEC §10.2); type names in annotations have no goto (§10.3; no spans on `Type` nodes).
 

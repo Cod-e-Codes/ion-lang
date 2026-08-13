@@ -575,11 +575,11 @@ impl TypeChecker {
     }
 
     fn vec_elem_type_from_vec_arg(&mut self, arg: &Expr) -> Option<Type> {
+        let checked = self.check_expr(arg).ok();
         if let Some(elem) = self.vec_elem_type_from_receiver(arg) {
             return Some(elem);
         }
-        let vec_ty = self.check_expr(arg).ok()?;
-        if let Type::Ref { inner, .. } = vec_ty
+        if let Some(Type::Ref { inner, .. }) = checked
             && let Type::Vec { elem_type } = *inner
         {
             return Some(*elem_type);

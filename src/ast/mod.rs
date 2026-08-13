@@ -1,5 +1,18 @@
 use crate::lexer::Token;
 
+/// Stable identity for an expression. Copied by `Clone` so merged and per-module
+/// ASTs share ids. `0` means the numbering pass has not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExprId(pub u32);
+
+impl ExprId {
+    pub const UNASSIGNED: ExprId = ExprId(0);
+
+    pub fn is_assigned(self) -> bool {
+        self.0 != 0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Program {
     /// File-level documentation from leading `//` lines before imports and declarations.
@@ -331,8 +344,202 @@ pub enum Expr {
     TypeConst(TypeConstExpr),
 }
 
+impl Expr {
+    pub fn id(&self) -> ExprId {
+        match self {
+            Expr::Lit(e) => e.id,
+            Expr::BoolLiteral(e) => e.id,
+            Expr::FloatLiteral(e) => e.id,
+            Expr::Var(e) => e.id,
+            Expr::BinOp(e) => e.id,
+            Expr::UnOp(e) => e.id,
+            Expr::Ref(e) => e.id,
+            Expr::Send(e) => e.id,
+            Expr::Recv(e) => e.id,
+            Expr::StructLit(e) => e.id,
+            Expr::FieldAccess(e) => e.id,
+            Expr::EnumLit(e) => e.id,
+            Expr::Match(e) => e.id,
+            Expr::Call(e) => e.id,
+            Expr::MethodCall(e) => e.id,
+            Expr::StringLit(e) => e.id,
+            Expr::ArrayLiteral(e) => e.id,
+            Expr::TupleLit(e) => e.id,
+            Expr::Index(e) => e.id,
+            Expr::Cast(e) => e.id,
+            Expr::Assign(e) => e.id,
+            Expr::FnLiteral(e) => e.id,
+            Expr::TypeConst(e) => e.id,
+        }
+    }
+
+    pub fn set_id(&mut self, id: ExprId) {
+        match self {
+            Expr::Lit(e) => e.id = id,
+            Expr::BoolLiteral(e) => e.id = id,
+            Expr::FloatLiteral(e) => e.id = id,
+            Expr::Var(e) => e.id = id,
+            Expr::BinOp(e) => e.id = id,
+            Expr::UnOp(e) => e.id = id,
+            Expr::Ref(e) => e.id = id,
+            Expr::Send(e) => e.id = id,
+            Expr::Recv(e) => e.id = id,
+            Expr::StructLit(e) => e.id = id,
+            Expr::FieldAccess(e) => e.id = id,
+            Expr::EnumLit(e) => e.id = id,
+            Expr::Match(e) => e.id = id,
+            Expr::Call(e) => e.id = id,
+            Expr::MethodCall(e) => e.id = id,
+            Expr::StringLit(e) => e.id = id,
+            Expr::ArrayLiteral(e) => e.id = id,
+            Expr::TupleLit(e) => e.id = id,
+            Expr::Index(e) => e.id = id,
+            Expr::Cast(e) => e.id = id,
+            Expr::Assign(e) => e.id = id,
+            Expr::FnLiteral(e) => e.id = id,
+            Expr::TypeConst(e) => e.id = id,
+        }
+    }
+}
+
+/// Assign unique `ExprId`s in `program`, starting at `*next_id` (must be >= 1).
+pub fn number_program(program: &mut Program, next_id: &mut u32) {
+    for function in &mut program.functions {
+        number_block(&mut function.body, next_id);
+    }
+}
+
+pub(crate) fn number_block(block: &mut Block, next_id: &mut u32) {
+    for stmt in &mut block.statements {
+        number_stmt(stmt, next_id);
+    }
+}
+
+pub(crate) fn number_stmt(stmt: &mut Stmt, next_id: &mut u32) {
+    match stmt {
+        Stmt::Let(s) => {
+            if let Some(init) = &mut s.init {
+                number_expr(init, next_id);
+            }
+        }
+        Stmt::Return(s) => {
+            if let Some(value) = &mut s.value {
+                number_expr(value, next_id);
+            }
+        }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
+        Stmt::Expr(s) => number_expr(&mut s.expr, next_id),
+        Stmt::Defer(s) => number_expr(&mut s.expr, next_id),
+        Stmt::Spawn(s) => number_block(&mut s.body, next_id),
+        Stmt::If(s) => {
+            number_expr(&mut s.cond, next_id);
+            number_block(&mut s.then_block, next_id);
+            if let Some(else_block) = &mut s.else_block {
+                number_block(else_block, next_id);
+            }
+        }
+        Stmt::While(s) => {
+            number_expr(&mut s.cond, next_id);
+            number_block(&mut s.body, next_id);
+        }
+        Stmt::Loop(s) => number_block(&mut s.body, next_id),
+        Stmt::For(s) => {
+            number_expr(&mut s.iterable, next_id);
+            number_block(&mut s.body, next_id);
+        }
+        Stmt::UnsafeBlock(s) => number_block(&mut s.body, next_id),
+    }
+}
+
+pub(crate) fn number_expr(expr: &mut Expr, next_id: &mut u32) {
+    match expr {
+        Expr::BinOp(e) => {
+            number_expr(&mut e.left, next_id);
+            number_expr(&mut e.right, next_id);
+        }
+        Expr::UnOp(e) => number_expr(&mut e.operand, next_id),
+        Expr::Ref(e) => number_expr(&mut e.inner, next_id),
+        Expr::Send(e) => {
+            number_expr(&mut e.channel, next_id);
+            number_expr(&mut e.value, next_id);
+        }
+        Expr::Recv(e) => number_expr(&mut e.channel, next_id),
+        Expr::StructLit(e) => {
+            for field in &mut e.fields {
+                number_expr(&mut field.value, next_id);
+            }
+        }
+        Expr::FieldAccess(e) => number_expr(&mut e.base, next_id),
+        Expr::EnumLit(e) => {
+            for arg in &mut e.args {
+                number_expr(arg, next_id);
+            }
+            if let Some(fields) = &mut e.named_fields {
+                for (_, value) in fields {
+                    number_expr(value, next_id);
+                }
+            }
+        }
+        Expr::Match(e) => {
+            number_expr(&mut e.expr, next_id);
+            for arm in &mut e.arms {
+                if let Some(guard) = &mut arm.guard {
+                    number_expr(guard, next_id);
+                }
+                number_block(&mut arm.body, next_id);
+            }
+        }
+        Expr::Call(e) => {
+            for arg in &mut e.args {
+                number_expr(arg, next_id);
+            }
+        }
+        Expr::MethodCall(e) => {
+            number_expr(&mut e.receiver, next_id);
+            for arg in &mut e.args {
+                number_expr(arg, next_id);
+            }
+        }
+        Expr::ArrayLiteral(e) => {
+            for elem in &mut e.elements {
+                number_expr(elem, next_id);
+            }
+            if let Some((repeat, _)) = &mut e.repeat {
+                number_expr(repeat, next_id);
+            }
+        }
+        Expr::TupleLit(e) => {
+            for elem in &mut e.elements {
+                number_expr(elem, next_id);
+            }
+        }
+        Expr::Index(e) => {
+            number_expr(&mut e.target, next_id);
+            number_expr(&mut e.index, next_id);
+        }
+        Expr::Cast(e) => number_expr(&mut e.expr, next_id),
+        Expr::Assign(e) => {
+            number_expr(&mut e.target, next_id);
+            number_expr(&mut e.value, next_id);
+        }
+        Expr::FnLiteral(e) => number_block(&mut e.body, next_id),
+        Expr::Lit(_)
+        | Expr::BoolLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::Var(_)
+        | Expr::StringLit(_)
+        | Expr::TypeConst(_) => {}
+    }
+    if !expr.id().is_assigned() {
+        let id = *next_id;
+        *next_id = next_id.saturating_add(1);
+        expr.set_id(ExprId(id));
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeConstExpr {
+    pub id: ExprId,
     pub type_name: String,
     pub member: String,
     pub span: Span,
@@ -340,6 +547,7 @@ pub struct TypeConstExpr {
 
 #[derive(Debug, Clone)]
 pub struct FnLiteralExpr {
+    pub id: ExprId,
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
     pub body: Block,
@@ -348,6 +556,7 @@ pub struct FnLiteralExpr {
 
 #[derive(Debug, Clone)]
 pub struct RefExpr {
+    pub id: ExprId,
     pub mutable: bool,
     pub inner: Box<Expr>,
     pub span: Span,
@@ -355,30 +564,35 @@ pub struct RefExpr {
 
 #[derive(Debug, Clone)]
 pub struct LitExpr {
+    pub id: ExprId,
     pub value: i64,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoolLiteralExpr {
+    pub id: ExprId,
     pub value: bool,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct FloatLiteralExpr {
+    pub id: ExprId,
     pub value: f64,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct VarExpr {
+    pub id: ExprId,
     pub name: String,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct BinOpExpr {
+    pub id: ExprId,
     pub op: BinOp,
     pub left: Box<Expr>,
     pub right: Box<Expr>,
@@ -387,6 +601,7 @@ pub struct BinOpExpr {
 
 #[derive(Debug, Clone)]
 pub struct UnOpExpr {
+    pub id: ExprId,
     pub op: UnOp,
     pub operand: Box<Expr>,
     pub span: Span,
@@ -394,6 +609,7 @@ pub struct UnOpExpr {
 
 #[derive(Debug, Clone)]
 pub struct SendExpr {
+    pub id: ExprId,
     pub channel: Box<Expr>,
     pub value: Box<Expr>,
     pub span: Span,
@@ -401,12 +617,14 @@ pub struct SendExpr {
 
 #[derive(Debug, Clone)]
 pub struct RecvExpr {
+    pub id: ExprId,
     pub channel: Box<Expr>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct StructLitExpr {
+    pub id: ExprId,
     pub type_name: String,
     pub fields: Vec<StructLitField>,
     pub span: Span,
@@ -421,6 +639,7 @@ pub struct StructLitField {
 
 #[derive(Debug, Clone)]
 pub struct FieldAccessExpr {
+    pub id: ExprId,
     pub base: Box<Expr>,
     pub field: String,
     pub field_span: Span,
@@ -429,6 +648,7 @@ pub struct FieldAccessExpr {
 
 #[derive(Debug, Clone)]
 pub struct EnumLitExpr {
+    pub id: ExprId,
     pub enum_name: String,
     pub enum_name_span: Span,
     pub variant: String,
@@ -440,6 +660,7 @@ pub struct EnumLitExpr {
 
 #[derive(Debug, Clone)]
 pub struct MatchExpr {
+    pub id: ExprId,
     pub expr: Box<Expr>,
     pub arms: Vec<MatchArm>,
     pub span: Span,
@@ -483,6 +704,7 @@ impl Pattern {
 
 #[derive(Debug, Clone)]
 pub struct CallExpr {
+    pub id: ExprId,
     pub callee: String,
     pub args: Vec<Expr>,
     pub span: Span,
@@ -492,6 +714,7 @@ pub struct CallExpr {
 
 #[derive(Debug, Clone)]
 pub struct MethodCallExpr {
+    pub id: ExprId,
     pub receiver: Box<Expr>,
     pub method: String,
     pub method_span: Span,
@@ -501,12 +724,14 @@ pub struct MethodCallExpr {
 
 #[derive(Debug, Clone)]
 pub struct StringLitExpr {
+    pub id: ExprId,
     pub value: String,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ArrayLiteralExpr {
+    pub id: ExprId,
     pub elements: Vec<Expr>,
     pub repeat: Option<(Box<Expr>, usize)>, // For [value; count] syntax: (value, count)
     pub span: Span,
@@ -514,12 +739,14 @@ pub struct ArrayLiteralExpr {
 
 #[derive(Debug, Clone)]
 pub struct TupleLitExpr {
+    pub id: ExprId,
     pub elements: Vec<Expr>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct IndexExpr {
+    pub id: ExprId,
     pub target: Box<Expr>,
     pub index: Box<Expr>,
     pub span: Span,
@@ -527,6 +754,7 @@ pub struct IndexExpr {
 
 #[derive(Debug, Clone)]
 pub struct CastExpr {
+    pub id: ExprId,
     pub expr: Box<Expr>,
     pub target_type: Type,
     pub span: Span,
@@ -534,6 +762,7 @@ pub struct CastExpr {
 
 #[derive(Debug, Clone)]
 pub struct AssignExpr {
+    pub id: ExprId,
     pub target: Box<Expr>, // Can be VarExpr or IndexExpr
     pub value: Box<Expr>,
     pub span: Span,

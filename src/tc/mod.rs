@@ -251,9 +251,79 @@ pub fn format_type_errors(errors: &[TypeCheckError]) -> String {
     message
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TypeInfo {
+    pub expr_types: HashMap<ExprId, Type>,
+    pub function_params: HashMap<String, Vec<Type>>,
+    pub function_returns: HashMap<String, Option<Type>>,
+    pub enum_names: HashSet<String>,
+}
+
+impl TypeInfo {
+    pub fn expr_type(&self, expr: &Expr) -> Type {
+        self.expr_types.get(&expr.id()).cloned().unwrap_or_else(|| {
+            panic!(
+                "compiler bug: missing type for expr id {:?} (numbering/type-check mismatch)",
+                expr.id()
+            )
+        })
+    }
+
+    pub fn resolve(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Struct(name) if self.enum_names.contains(name) => Type::Enum(name.clone()),
+            Type::Ref { inner, mutable } => Type::Ref {
+                inner: Box::new(self.resolve(inner)),
+                mutable: *mutable,
+            },
+            Type::RawPtr { inner } => Type::RawPtr {
+                inner: Box::new(self.resolve(inner)),
+            },
+            Type::Box { inner } => Type::Box {
+                inner: Box::new(self.resolve(inner)),
+            },
+            Type::Vec { elem_type } => Type::Vec {
+                elem_type: Box::new(self.resolve(elem_type)),
+            },
+            Type::Array { inner, size } => Type::Array {
+                inner: Box::new(self.resolve(inner)),
+                size: *size,
+            },
+            Type::Slice { inner } => Type::Slice {
+                inner: Box::new(self.resolve(inner)),
+            },
+            Type::Channel { elem_type } => Type::Channel {
+                elem_type: Box::new(self.resolve(elem_type)),
+            },
+            Type::Sender { elem_type } => Type::Sender {
+                elem_type: Box::new(self.resolve(elem_type)),
+            },
+            Type::Receiver { elem_type } => Type::Receiver {
+                elem_type: Box::new(self.resolve(elem_type)),
+            },
+            Type::Tuple { elements } => Type::Tuple {
+                elements: elements.iter().map(|e| self.resolve(e)).collect(),
+            },
+            Type::Fn {
+                params,
+                return_type,
+            } => Type::Fn {
+                params: params.iter().map(|p| self.resolve(p)).collect(),
+                return_type: Box::new(self.resolve(return_type)),
+            },
+            Type::Generic { name, params } => Type::Generic {
+                name: name.clone(),
+                params: params.iter().map(|p| self.resolve(p)).collect(),
+            },
+            other => other.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeCheckResult {
     pub lsp_info: LspInfo,
+    pub type_info: TypeInfo,
 }
 
 pub struct TypeChecker {
@@ -279,6 +349,8 @@ pub struct TypeChecker {
     expr_expected: Option<Type>,
     // LSP information collected during type checking
     pub lsp_info: LspInfo,
+    type_info: TypeInfo,
+    next_expr_id: u32,
     // Active function generic type parameter names (innermost scope last)
     type_param_scopes: Vec<Vec<String>>,
     // Borrows registered in nested scopes (released on scope pop)
@@ -319,6 +391,8 @@ impl TypeChecker {
             current_return_type: None,
             expr_expected: None,
             lsp_info: LspInfo::default(),
+            type_info: TypeInfo::default(),
+            next_expr_id: 1_000_000,
             type_param_scopes: Vec::new(),
             borrow_scopes: Vec::new(),
             lsp_recording: true,
@@ -401,6 +475,18 @@ impl TypeChecker {
                 .and_then(|f| f.doc.clone());
         }
         self.functions.get(callee).and_then(|f| f.doc.clone())
+    }
+
+    fn record_checked_type(&mut self, expr: &Expr, ty: &Type) {
+        let resolved = self.resolve_type_name(ty).unwrap_or_else(|_| ty.clone());
+        if expr.id().is_assigned() {
+            self.type_info
+                .expr_types
+                .insert(expr.id(), resolved.clone());
+        }
+        if self.lsp_recording {
+            self.lsp_info.types.insert(expr.span(), resolved);
+        }
     }
 
     fn record_expr_type(&mut self, span: Span, ty: &Type) {
@@ -801,6 +887,8 @@ impl TypeChecker {
         source: &Program,
     ) -> (TypeCheckResult, Vec<TypeCheckError>) {
         self.lsp_info = LspInfo::default();
+        self.type_info = TypeInfo::default();
+        self.next_expr_id = 1_000_000;
         self.seed_lsp_symbols(source);
         self.seed_module_items();
         let mut errors = Vec::new();
@@ -815,6 +903,7 @@ impl TypeChecker {
         self.enums.clear();
         for e in &program.enums {
             self.enums.insert(e.name.clone(), e.clone());
+            self.type_info.enum_names.insert(e.name.clone());
         }
 
         // Record type alias declarations
@@ -933,12 +1022,86 @@ impl TypeChecker {
         }
         self.lsp_recording = true;
 
+        self.seed_type_info_functions(program);
+
         (
             TypeCheckResult {
                 lsp_info: self.lsp_info.clone(),
+                type_info: self.type_info.clone(),
             },
             errors,
         )
+    }
+
+    fn seed_type_info_functions(&mut self, program: &Program) {
+        for f in &program.functions {
+            let params: Vec<Type> = f
+                .params
+                .iter()
+                .map(|p| {
+                    self.resolve_type_name(&p.ty)
+                        .unwrap_or_else(|_| p.ty.clone())
+                })
+                .collect();
+            let ret = f
+                .return_type
+                .as_ref()
+                .map(|t| self.resolve_type_name(t).unwrap_or_else(|_| t.clone()));
+            self.type_info
+                .function_params
+                .insert(f.name.clone(), params.clone());
+            self.type_info
+                .function_returns
+                .insert(f.name.clone(), ret.clone());
+        }
+        for (alias, exports) in &self.module_imports {
+            for (name, decl) in &exports.functions {
+                let params: Vec<Type> = decl.params.iter().map(|p| p.ty.clone()).collect();
+                let ret = decl.return_type.clone();
+                self.type_info
+                    .function_params
+                    .insert(format!("{alias}::{name}"), params.clone());
+                self.type_info
+                    .function_returns
+                    .insert(format!("{alias}::{name}"), ret.clone());
+                self.type_info
+                    .function_params
+                    .insert(format!("{alias}_{name}"), params.clone());
+                self.type_info
+                    .function_returns
+                    .insert(format!("{alias}_{name}"), ret.clone());
+                self.type_info
+                    .function_params
+                    .entry(name.clone())
+                    .or_insert(params);
+                self.type_info
+                    .function_returns
+                    .entry(name.clone())
+                    .or_insert(ret);
+            }
+        }
+        for (name, decl) in &self.extern_functions {
+            let params: Vec<Type> = decl.params.iter().map(|p| p.ty.clone()).collect();
+            self.type_info.function_params.insert(name.clone(), params);
+            self.type_info
+                .function_returns
+                .insert(name.clone(), decl.return_type.clone());
+        }
+        let names: Vec<String> = self.type_info.function_params.keys().cloned().collect();
+        for name in names {
+            if let Some(params) = self.type_info.function_params.get(&name).cloned() {
+                let resolved: Vec<Type> =
+                    params.iter().map(|p| self.type_info.resolve(p)).collect();
+                self.type_info.function_params.insert(name, resolved);
+            }
+        }
+        let ret_names: Vec<String> = self.type_info.function_returns.keys().cloned().collect();
+        for name in ret_names {
+            if let Some(ret) = self.type_info.function_returns.get(&name).cloned() {
+                let resolved = ret.map(|t| self.type_info.resolve(&t));
+                self.type_info.function_returns.insert(name, resolved);
+            }
+        }
     }
 
     /// Get the required receiver type for a built-in method.
@@ -1072,7 +1235,7 @@ impl TypeChecker {
 
     /// Create a receiver argument with appropriate borrowing based on the required type.
     fn create_receiver_argument(
-        &self,
+        &mut self,
         receiver: Box<Expr>,
         receiver_type: &Type,
         required_type: &Type,
@@ -1117,25 +1280,14 @@ impl TypeChecker {
                 // Already the right type, return as-is
                 Ok(*receiver)
             } else {
-                // Need to create a reference
-                // Check if receiver is a mutable variable for &mut
-                if *required_mut {
-                    // For &mut, the receiver must be a mutable binding
-                    // This is a simplified check - in practice, we'd need to track mutability
-                    // For now, we'll create the &mut expression and let the type checker validate
-                    Ok(Expr::Ref(RefExpr {
-                        mutable: true,
-                        inner: receiver,
-                        span,
-                    }))
-                } else {
-                    // Create immutable reference
-                    Ok(Expr::Ref(RefExpr {
-                        mutable: false,
-                        inner: receiver,
-                        span,
-                    }))
-                }
+                let mut expr = Expr::Ref(RefExpr {
+                    id: ExprId::UNASSIGNED,
+                    mutable: *required_mut,
+                    inner: receiver,
+                    span,
+                });
+                crate::ast::number_expr(&mut expr, &mut self.next_expr_id);
+                Ok(expr)
             }
         } else {
             // Required type is not a reference - pass by value
@@ -1911,7 +2063,7 @@ impl TypeChecker {
                 let index_init_span = for_stmt.span;
 
                 // First, initialize the container variable: let container_var = container_expr;
-                let container_init_stmt = Stmt::Let(LetStmt {
+                let mut container_init_stmt = Stmt::Let(LetStmt {
                     name: container_var.clone(),
                     name_span: index_init_span,
                     patterns: None,
@@ -1920,24 +2072,28 @@ impl TypeChecker {
                     init: Some(container_expr.clone()),
                     span: index_init_span,
                 });
+                crate::ast::number_stmt(&mut container_init_stmt, &mut self.next_expr_id);
 
                 // Check the container initialization first (this moves the container)
                 // check_stmt will handle the move checking internally
                 self.check_stmt(&container_init_stmt)?;
 
                 // Initialize the index variable: let mut __i = 0;
-                let index_init_stmt = Stmt::Let(LetStmt {
+                let mut index_init_stmt = Stmt::Let(LetStmt {
                     name: index_var.clone(),
                     name_span: index_init_span,
                     patterns: None,
                     mutable: true,
                     type_ann: None,
                     init: Some(Expr::Lit(LitExpr {
+                        id: ExprId::UNASSIGNED,
                         value: 0,
                         span: index_init_span,
                     })),
                     span: index_init_span,
                 });
+
+                crate::ast::number_stmt(&mut index_init_stmt, &mut self.next_expr_id);
 
                 // Check the index initialization
                 self.check_stmt(&index_init_stmt)?;
@@ -1945,20 +2101,24 @@ impl TypeChecker {
                 // Now create expressions that reference the initialized variables
                 // Create: container.len() - using the container variable
                 let container_var_expr = Expr::Var(VarExpr {
+                    id: ExprId::UNASSIGNED,
                     name: container_var.clone(),
                     span: index_init_span,
                 });
 
                 let index_var_ref = Expr::Var(VarExpr {
+                    id: ExprId::UNASSIGNED,
                     name: index_var.clone(),
                     span: index_init_span,
                 });
 
                 let cond_expr = match &iterable_type {
                     Type::Array { size, .. } => Expr::BinOp(BinOpExpr {
+                        id: ExprId::UNASSIGNED,
                         op: BinOp::Lt,
                         left: Box::new(index_var_ref.clone()),
                         right: Box::new(Expr::Lit(LitExpr {
+                            id: ExprId::UNASSIGNED,
                             value: *size as i64,
                             span: index_init_span,
                         })),
@@ -1971,11 +2131,14 @@ impl TypeChecker {
                             _ => unreachable!(),
                         };
                         Expr::BinOp(BinOpExpr {
+                            id: ExprId::UNASSIGNED,
                             op: BinOp::Lt,
                             left: Box::new(index_var_ref.clone()),
                             right: Box::new(Expr::Call(CallExpr {
+                                id: ExprId::UNASSIGNED,
                                 callee: len_callee.to_string(),
                                 args: vec![Expr::Ref(RefExpr {
+                                    id: ExprId::UNASSIGNED,
                                     mutable: false,
                                     inner: Box::new(container_var_expr.clone()),
                                     span: index_init_span,
@@ -1995,9 +2158,11 @@ impl TypeChecker {
                     Type::Vec { .. } => {
                         let opt_var = format!("__for_opt_{}", for_stmt.span.start);
                         let get_expr = Expr::Call(CallExpr {
+                            id: ExprId::UNASSIGNED,
                             callee: "Vec::get".to_string(),
                             args: vec![
                                 Expr::Ref(RefExpr {
+                                    id: ExprId::UNASSIGNED,
                                     mutable: false,
                                     inner: Box::new(container_var_expr.clone()),
                                     span: index_init_span,
@@ -2025,14 +2190,18 @@ impl TypeChecker {
                         }
                         match_body.statements.push(Stmt::Expr(ExprStmt {
                             expr: Expr::Assign(AssignExpr {
+                                id: ExprId::UNASSIGNED,
                                 target: Box::new(Expr::Var(VarExpr {
+                                    id: ExprId::UNASSIGNED,
                                     name: index_var.clone(),
                                     span: index_init_span,
                                 })),
                                 value: Box::new(Expr::BinOp(BinOpExpr {
+                                    id: ExprId::UNASSIGNED,
                                     op: BinOp::Add,
                                     left: Box::new(index_var_ref.clone()),
                                     right: Box::new(Expr::Lit(LitExpr {
+                                        id: ExprId::UNASSIGNED,
                                         value: 1,
                                         span: index_init_span,
                                     })),
@@ -2043,7 +2212,9 @@ impl TypeChecker {
                         }));
                         desugared_body.statements.push(Stmt::Expr(ExprStmt {
                             expr: Expr::Match(MatchExpr {
+                                id: ExprId::UNASSIGNED,
                                 expr: Box::new(Expr::Var(VarExpr {
+                                    id: ExprId::UNASSIGNED,
                                     name: opt_var,
                                     span: index_init_span,
                                 })),
@@ -2088,6 +2259,7 @@ impl TypeChecker {
                             mutable: false,
                             type_ann: Some(elem_type.clone()),
                             init: Some(Expr::Index(IndexExpr {
+                                id: ExprId::UNASSIGNED,
                                 target: Box::new(container_var_expr.clone()),
                                 index: Box::new(index_var_ref.clone()),
                                 span: index_init_span,
@@ -2099,14 +2271,18 @@ impl TypeChecker {
                         }
                         desugared_body.statements.push(Stmt::Expr(ExprStmt {
                             expr: Expr::Assign(AssignExpr {
+                                id: ExprId::UNASSIGNED,
                                 target: Box::new(Expr::Var(VarExpr {
+                                    id: ExprId::UNASSIGNED,
                                     name: index_var.clone(),
                                     span: index_init_span,
                                 })),
                                 value: Box::new(Expr::BinOp(BinOpExpr {
+                                    id: ExprId::UNASSIGNED,
                                     op: BinOp::Add,
                                     left: Box::new(index_var_ref),
                                     right: Box::new(Expr::Lit(LitExpr {
+                                        id: ExprId::UNASSIGNED,
                                         value: 1,
                                         span: index_init_span,
                                     })),
@@ -2120,11 +2296,12 @@ impl TypeChecker {
                 }
 
                 // Create the while loop
-                let while_stmt = Stmt::While(WhileStmt {
+                let mut while_stmt = Stmt::While(WhileStmt {
                     cond: cond_expr,
                     body: desugared_body,
                     span: for_stmt.span,
                 });
+                crate::ast::number_stmt(&mut while_stmt, &mut self.next_expr_id);
 
                 // Check the while loop (which will check the body)
                 // Variables are already initialized above
@@ -2149,9 +2326,7 @@ impl TypeChecker {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> Result<Type, TypeCheckError> {
-        let ty = self.check_expr_with_context(expr, false)?;
-        self.record_expr_type(expr.span(), &ty);
-        Ok(ty)
+        self.check_expr_with_context(expr, false)
     }
 
     fn check_expr_borrow_operand(&mut self, expr: &Expr) -> Result<Type, TypeCheckError> {
@@ -2159,6 +2334,16 @@ impl TypeChecker {
     }
 
     fn check_let_init_type(
+        &mut self,
+        init: &Expr,
+        resolved_type_ann: Option<&Type>,
+    ) -> Result<Type, TypeCheckError> {
+        let ty = self.check_let_init_type_inner(init, resolved_type_ann)?;
+        self.record_checked_type(init, &ty);
+        Ok(ty)
+    }
+
+    fn check_let_init_type_inner(
         &mut self,
         init: &Expr,
         resolved_type_ann: Option<&Type>,
@@ -2390,6 +2575,16 @@ impl TypeChecker {
     }
 
     fn check_expr_with_context(
+        &mut self,
+        expr: &Expr,
+        borrow_operand: bool,
+    ) -> Result<Type, TypeCheckError> {
+        let ty = self.check_expr_with_context_impl(expr, borrow_operand)?;
+        self.record_checked_type(expr, &ty);
+        Ok(ty)
+    }
+
+    fn check_expr_with_context_impl(
         &mut self,
         expr: &Expr,
         borrow_operand: bool,
@@ -3437,30 +3632,10 @@ impl TypeChecker {
                         }
                     }
 
-                    // Type-check the arm body and unify arm result types.
-                    // `infer_block_result_type` re-walks the last expression for
-                    // the arm's value type. Restore post-binding ownership first:
-                    // `check_stmt` already validated moves, and re-checking a
-                    // match whose scrutinee was marked moved (owned enum after
-                    // `Vec::get`) would spuriously report UseAfterMove.
-                    // Locals introduced in the arm are not in `after_bindings`;
-                    // `check_stmt` may have moved them (`let row = ...; Vec::set(..., row)`).
-                    // Reset those to Valid so the last-expr re-walk does not
-                    // report a false UseAfterMove. `check_stmt` already caught
-                    // real use-after-move on those names.
-                    let after_bindings = self.variables.clone();
+                    // Type-check the arm body once, then read recorded types for
+                    // value unification (no second ownership walk).
                     for stmt in &arm.body.statements {
                         self.check_stmt(stmt)?;
-                    }
-                    for (name, info) in &after_bindings {
-                        if let Some(cur) = self.variables.get_mut(name) {
-                            cur.state = info.state;
-                        }
-                    }
-                    for (name, info) in self.variables.iter_mut() {
-                        if !after_bindings.contains_key(name) {
-                            info.state = OwnershipState::Valid;
-                        }
                     }
                     match self.infer_block_result_type(&arm.body, arm.span)? {
                         MatchArmValue::Diverges => {}
@@ -3901,11 +4076,16 @@ impl TypeChecker {
                 let mut desugared_args = vec![receiver_arg];
                 desugared_args.extend(method_call.args.clone());
 
-                let desugared_call = CallExpr {
+                let mut desugared = Expr::Call(CallExpr {
+                    id: ExprId::UNASSIGNED,
                     callee: qualified_name.clone(),
                     args: desugared_args,
                     span: method_call.span,
                     callee_span: method_call.method_span,
+                });
+                crate::ast::number_expr(&mut desugared, &mut self.next_expr_id);
+                let Expr::Call(desugared_call) = desugared else {
+                    unreachable!("desugared method call");
                 };
 
                 // Step 10: Type-check the desugared call and return its type
@@ -4504,6 +4684,19 @@ impl TypeChecker {
     }
 
     /// Infer what value a match arm contributes to expression unification.
+    fn recorded_expr_type(&self, expr: &Expr, span: Span) -> Result<Type, TypeCheckError> {
+        self.type_info
+            .expr_types
+            .get(&expr.id())
+            .cloned()
+            .ok_or_else(|| {
+                TypeCheckError::Message(format!(
+                    "internal: missing recorded type for expression at line {}",
+                    span.line
+                ))
+            })
+    }
+
     fn infer_block_result_type(
         &mut self,
         block: &Block,
@@ -4549,7 +4742,9 @@ impl TypeChecker {
             Stmt::Break(_) | Stmt::Continue(_) => Ok(MatchArmValue::Diverges),
             Stmt::Expr(expr_stmt) => {
                 if is_last {
-                    Ok(MatchArmValue::Value(self.check_expr(&expr_stmt.expr)?))
+                    Ok(MatchArmValue::Value(
+                        self.recorded_expr_type(&expr_stmt.expr, span)?,
+                    ))
                 } else {
                     self.infer_stmts_result_from(stmts, idx + 1, span)
                 }
@@ -5525,6 +5720,26 @@ mod tests {
     use super::*;
     use crate::parser;
 
+    fn parse_program(src: &str) -> crate::ast::Program {
+        let mut program = parse_unnumbered(src);
+        let mut next = 1;
+        crate::ast::number_program(&mut program, &mut next);
+        program
+    }
+
+    fn parse_unnumbered(src: &str) -> crate::ast::Program {
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        parser::Parser::new(tokens).parse().unwrap()
+    }
+
+    fn parse_with_source_for_tc(src: &str) -> crate::ast::Program {
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let mut program = parser::Parser::with_source(tokens, src).parse().unwrap();
+        let mut next = 1;
+        crate::ast::number_program(&mut program, &mut next);
+        program
+    }
+
     #[test]
     fn match_arm_loop_without_break_is_diverging_with_value_arm() {
         let src = r#"enum E { A(int); B(int); }
@@ -5536,8 +5751,7 @@ fn main() -> int {
     };
     return n;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = parser::Parser::new(tokens).parse().unwrap();
+        let program = parse_program(src);
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
         assert!(
@@ -5558,8 +5772,7 @@ fn main() -> int {
     };
     return n;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = parser::Parser::new(tokens).parse().unwrap();
+        let program = parse_program(src);
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
         assert!(
@@ -5588,11 +5801,6 @@ fn greet() -> int {
         assert!(doc.contains("Prints a greeting."));
     }
 
-    fn parse_with_source_for_tc(src: &str) -> crate::ast::Program {
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        parser::Parser::with_source(tokens, src).parse().unwrap()
-    }
-
     #[test]
     fn module_call_hover_includes_imported_doc() {
         use crate::compiler::Compiler;
@@ -5601,9 +5809,10 @@ fn greet() -> int {
         let path = Path::new("stdlib/io.ion");
         let src = std::fs::read_to_string(path).expect("io.ion");
         let tokens = crate::lexer::Lexer::new(&src).tokenize().unwrap();
-        let ast = parser::Parser::with_source(tokens, &src).parse().unwrap();
+        let mut ast = parser::Parser::with_source(tokens, &src).parse().unwrap();
         let mut compiler = Compiler::new();
         let _ = compiler.parse_module(path);
+        compiler.number_program(&mut ast);
         let mut checker = TypeChecker::new();
         checker.set_module_exports(compiler.get_module_exports().clone());
         let (result, errors) = checker.check_program_collecting_with_source(&ast, &ast);
@@ -5629,8 +5838,7 @@ fn greet() -> int {
     ClientError;
     ServerError;
 }"#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = parser::Parser::new(tokens).parse().unwrap();
+        let program = parse_program(src);
         let mut checker = TypeChecker::new();
         let (result, errors) = checker.check_program_collecting(&program);
         assert!(errors.is_empty());
@@ -5659,11 +5867,11 @@ fn greet() -> int {
 
         let path = Path::new("examples/access_log/access_log.ion");
         let src = std::fs::read_to_string(path).expect("access_log.ion");
-        let tokens = crate::lexer::Lexer::new(&src).tokenize().unwrap();
-        let ast = parser::Parser::new(tokens).parse().unwrap();
+        let mut ast = parse_unnumbered(&src);
         let (stdlib_paths, project_root) = crate::build::discover_import_config(path);
         let mut compiler = Compiler::with_import_config(stdlib_paths, project_root);
         let _ = compiler.load_imports(path, &ast.imports);
+        compiler.number_program(&mut ast);
         let program = compiler.merge_modules(&ast, path);
         let mut checker = TypeChecker::new();
         checker.set_module_exports(compiler.get_module_exports().clone());
@@ -5725,8 +5933,7 @@ fn classify(code: int) -> int {
     return 0;
 }
 "#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = parser::Parser::new(tokens).parse().unwrap();
+        let program = parse_program(src);
         let mut checker = TypeChecker::new();
         let (result, errors) = checker.check_program_collecting(&program);
         assert!(errors.is_empty(), "{errors:?}");
@@ -5773,11 +5980,11 @@ fn main() -> int {
 }
 "#;
         let path = Path::new("examples/access_log/access_log.ion");
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let ast = parser::Parser::new(tokens).parse().unwrap();
+        let mut ast = parse_unnumbered(src);
         let (stdlib_paths, project_root) = crate::build::discover_import_config(path);
         let mut compiler = Compiler::with_import_config(stdlib_paths, project_root);
         let _ = compiler.load_imports(path, &ast.imports);
+        compiler.number_program(&mut ast);
         let program = compiler.merge_modules(&ast, path);
         let mut checker = TypeChecker::new();
         checker.set_module_exports(compiler.get_module_exports().clone());
@@ -5834,15 +6041,15 @@ fn same<T: Eq>(pair: Pair, a: T, b: T) -> bool {
             params: vec![Type::Int],
             return_type: Box::new(Type::Int),
         };
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let mut program = parser::Parser::new(tokens).parse().unwrap();
-        let helper_tokens = crate::lexer::Lexer::new(helper_src).tokenize().unwrap();
-        let helper = parser::Parser::new(helper_tokens).parse().unwrap();
+        let mut program = parse_unnumbered(src);
+        let helper = parse_unnumbered(helper_src);
         let mut method_fn = helper.functions.into_iter().next().expect("helper fn");
         method_fn.name = "Pair::same".to_string();
         method_fn.params[1].ty = fn_ptr.clone();
         method_fn.params[2].ty = fn_ptr;
         program.functions.push(method_fn);
+        let mut next = 1;
+        crate::ast::number_program(&mut program, &mut next);
 
         let mut checker = TypeChecker::new();
         let (result, errors) = checker.check_program_collecting(&program);
@@ -5881,8 +6088,7 @@ fn bad_b() -> int {
     return Box::unwrap(a);
 }
 "#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = parser::Parser::new(tokens).parse().unwrap();
+        let program = parse_program(src);
         let mut checker = TypeChecker::new();
         let (_result, errors) = checker.check_program_collecting(&program);
         assert_eq!(errors.len(), 2);
@@ -5916,13 +6122,65 @@ fn main() -> int {
     }
 }
 "#;
-        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
-        let program = parser::Parser::new(tokens).parse().unwrap();
+        let program = parse_program(src);
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
         assert!(
             result.is_ok(),
             "Result<int, MyError> should type-check: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn canonicalize_struct_named_enum_matches_enum_ref() {
+        let mut info = TypeInfo::default();
+        info.enum_names.insert("Flag".to_string());
+        let param = Type::Ref {
+            inner: Box::new(Type::Struct("Flag".to_string())),
+            mutable: false,
+        };
+        let arg = Type::Ref {
+            inner: Box::new(Type::Enum("Flag".to_string())),
+            mutable: false,
+        };
+        assert!(
+            types_equal(&info.resolve(&param), &arg),
+            "canonical &Flag param should equal &Enum(Flag)"
+        );
+    }
+
+    #[test]
+    fn match_arm_named_putback_typechecks_without_ownership_rewalk() {
+        let src = r#"
+enum Option<T> {
+    Some(T);
+    None;
+}
+struct Item {
+    n: int;
+}
+fn main() -> int {
+    let mut items: Vec<Item> = Vec::new();
+    Vec::push(&mut items, Item { n: 1 });
+    match Vec::get(&items, 0) {
+        Option::Some(item) => {
+            let row: Item = Item { n: item.n };
+            Vec::set(&mut items, 0, row);
+        }
+        Option::None => {
+            return 1;
+        }
+    };
+    return 0;
+}
+"#;
+        let program = parse_program(src);
+        let mut checker = TypeChecker::new();
+        let result = checker.check_program(&program);
+        assert!(
+            result.is_ok(),
+            "named put-back as last match-arm statement should type-check: {:?}",
             result.err()
         );
     }

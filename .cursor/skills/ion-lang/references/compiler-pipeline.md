@@ -13,6 +13,7 @@
 ### 1. Module resolution (`src/compiler/mod.rs`)
 
 - Entry point: `Compiler::parse_module` - resolves imports, detects cycles, then **lexes and parses each file**
+- After parse, `ast::number_program` assigns unique `ExprId`s from a compiler-global counter (clone preserves IDs; do not re-number a merged program)
 - Resolves `import "path.ion" as alias;` relative to importing file
 - Caches parsed `ast::Program` per module; builds `ModuleExports` for qualified names (`alias::fn`)
 
@@ -31,6 +32,7 @@
 ### 4. AST (`src/ast/mod.rs`)
 
 - Node definitions for items, expressions, types, patterns
+- Every expression struct has `id: ExprId`; parser constructs `UNASSIGNED`, numbering assigns unique ids
 - Extend AST types before adding parser branches that build them (lexer first if new tokens are needed)
 
 ### 5. Type checker (`src/tc/`)
@@ -47,11 +49,14 @@
 - Module visibility (`pub`), generics, method resolution
 - Errors via `TypeCheckError` enum
 - CLI and LSP: `check_program_collecting` gathers multiple independent errors; CLI prints them via `tc::format_type_errors`
+- Product is `TypeInfo`: `expr_types` keyed by `ExprId`, plus compilation-wide `function_params` / `function_returns` (Ion names, `alias::name`, and prefixed C names). Named types are canonical (`Struct("Flag")` stored as `Enum("Flag")`).
 
 ### 6. IR (`src/ir/mod.rs`)
 
-- `IRBuilder::build` lowers AST to IR for codegen
-- Used in both single-file (merged program) and multi-file modes
+- `IRBuilder::build(program, &TypeInfo)` lowers AST for codegen
+- Unannotated lets and call types come from `TypeInfo`; a missing id after a successful check is a compiler bug (never default `int`)
+- Used in both single-file (merged program) and multi-file modes; both consume the same `TypeInfo` from the merged check
+- Tests and helpers use `ir::lower_checked(src)` (parse, number, check, lower)
 
 ### 7. C codegen (`src/cgen/`)
 
@@ -62,6 +67,7 @@
 | `builtins.rs` | `generate_builtin_call` |
 | `drop.rs` | `emit_drop`, `type_needs_drop` |
 
+- `Codegen::set_type_info` copies compilation-wide `function_params` / `function_returns` before emission
 - `Codegen::generate` - single merged `.c`
 - `generate_module_source` / `generate_module_header` - multi-file `.c`/`.h`
 - Runtime support in `runtime/ion_runtime.c` and `runtime/ion_runtime.h`
@@ -79,10 +85,10 @@
 
 ## Single vs multi-file (`src/main.rs`)
 
-**Single (default):** merge all imported modules → one IR → one `.c` next to input.
+**Single (default):** merge all imported modules → type-check merged (`TypeInfo`) → one IR → one `.c` next to input.
 
-**Multi (`--mode multi`):** per-module IR → `.c` + `.h` each → compile objects → link with runtime.
+**Multi (`--mode multi`):** type-check merged (`TypeInfo`) → per-module IR (original numbered ASTs) → `.c` + `.h` each, with compilation-wide callee param/return types → compile objects → link with runtime.
 
 ## LSP path (`src/lsp/server.rs`, `src/lsp/util.rs`)
 
-Differs from the CLI for the **current file**: lexer → parser on buffer text (not reading the file from disk). Then `load_imports` runs `parse_module` per import on disk (per-import diagnostics; partial exports on failure), then `check_program_collecting_with_source` type-checks the merged program while seeding LSP symbols from the buffer AST only. Expression-level LSP data (types, references) is recorded only for functions in the open file so merged stdlib spans do not collide by line/column. See `ion-lsp-vscode` skill.
+Differs from the CLI for the **current file**: lexer → parser on buffer text (not reading the file from disk). `load_imports` runs `parse_module` per import on disk (per-import diagnostics; partial exports on failure). Number the buffer AST with that session's `Compiler` after imports so IDs stay unique, then `merge_modules`. Then `check_program_collecting_with_source` type-checks the merged program while seeding LSP symbols from the buffer AST only. Expression-level LSP data (types, references) is recorded only for functions in the open file so merged stdlib spans do not collide by line/column. See `ion-lsp-vscode` skill.
