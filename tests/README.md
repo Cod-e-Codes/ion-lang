@@ -119,6 +119,13 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_string_eq.ion` - String `==` and `!=` value equality (exit 55)
 - `test_generic_types.ion` - Generic type system
 - `test_generic_struct.ion` - Generic struct types
+- `test_generic_enum_named_vec.ion` - generic named-field enum in `Vec`: push, `get_ref`, owned `get` (exit 42)
+- `test_vec_len_mut_param.ion` - `Vec::len` / `.len()` on a `&mut Vec` field (exit 42)
+- `test_handle_arena_basic.ion` - `stdlib/handle.ion` insert, `len`, `contains`, remove Hit then Miss (exit 42)
+- `test_handle_arena_stale.ion` - reused slot: stale handle is Miss / `contains` false (exit 42)
+- `test_handle_arena_get_ref.ion` - local peek via `Vec::get_ref` on `arena.slots` through `&World` / `&mut World` (exit 42)
+- `test_handle_arena_copy_struct.ion` - `Arena<Item>` with `String` field; remove returns owned value (exit 42)
+- `test_handle_arena_escape_error.ion` - returning `&T` from a slot peek (`ReferenceEscape`)
 - `test_box_basic.ion` - Box<T> heap allocation
 - `test_box_new_struct_let_annotated.ion` - `let b: Box<Node> = Box::new(Node { ... })` multi-field unwrap (exit 10); cgen asserts `ion_box_free(_box)`
 - `test_box_new_struct_let.ion` - unannotated `let b = Box::new(Node { ... })` multi-field unwrap (exit 10)

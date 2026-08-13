@@ -1,0 +1,48 @@
+// Local peek via Vec::get_ref on slots; struct-field case through &World / &mut World.
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct World {
+    entities: Arena<int>;
+}
+
+fn peek_value(world: &World, h: Handle) -> int {
+    let mut found: int = -1;
+    match world.entities.slots.get_ref(h.index) {
+        Option::Some(slot) => {
+            match slot {
+                Slot::Occupied { generation: g, value: v } => {
+                    if g == h.generation {
+                        found = v;
+                    }
+                }
+                Slot::Free { generation: _g, next: _n } => {}
+            }
+        }
+        Option::None => {}
+    }
+    return found;
+}
+
+fn insert_entity(world: &mut World, value: int) -> Handle {
+    return handle::insert(world.entities, value);
+}
+
+fn main() -> int {
+    let mut entities: Arena<int> = handle::new();
+    let mut world: World = World {
+        entities: entities,
+    };
+    let h: Handle = insert_entity(&mut world, 99);
+    if peek_value(&world, handle::copy(&h)) != 99 {
+        return 1;
+    }
+    if handle::len(&world.entities) != 1 {
+        return 2;
+    }
+    return 42;
+}

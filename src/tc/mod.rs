@@ -4,6 +4,7 @@ mod trait_bounds;
 mod types;
 
 use crate::ast::*;
+use crate::types_util::infer_generic_substitutions;
 use ownership::join_ownership_states;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -274,6 +275,8 @@ pub struct TypeChecker {
     loop_frames: Vec<LoopOwnershipFrame>,
     // Current function's resolved return type (for return statement checking)
     current_return_type: Option<Type>,
+    // Expected type for the expression being checked (let annotation, struct field).
+    expr_expected: Option<Type>,
     // LSP information collected during type checking
     pub lsp_info: LspInfo,
     // Active function generic type parameter names (innermost scope last)
@@ -314,6 +317,7 @@ impl TypeChecker {
             loop_depth: 0,
             loop_frames: Vec::new(),
             current_return_type: None,
+            expr_expected: None,
             lsp_info: LspInfo::default(),
             type_param_scopes: Vec::new(),
             borrow_scopes: Vec::new(),
@@ -343,6 +347,17 @@ impl TypeChecker {
         self.type_param_scopes
             .iter()
             .any(|scope| scope.iter().any(|p| p == name))
+    }
+
+    fn expected_generic_params(&self, enum_name: &str) -> Option<Vec<Type>> {
+        for candidate in [&self.expr_expected, &self.current_return_type] {
+            if let Some(Type::Generic { name, params }) = candidate
+                && name == enum_name
+            {
+                return Some(params.clone());
+            }
+        }
+        None
     }
 
     fn record_hover_doc(&mut self, span: Span, doc: String) {
@@ -2148,6 +2163,12 @@ impl TypeChecker {
         init: &Expr,
         resolved_type_ann: Option<&Type>,
     ) -> Result<Type, TypeCheckError> {
+        if let (Expr::Call(call), Some(expected)) = (init, resolved_type_ann)
+            && call.args.is_empty()
+            && let Some(ty) = self.infer_zero_arg_generic_call(call, expected)?
+        {
+            return Ok(ty);
+        }
         if let (Expr::Call(call), Some(Type::Vec { elem_type })) = (init, resolved_type_ann) {
             if call.callee == "Vec::new" && call.args.is_empty() {
                 return Ok(Type::Vec {
@@ -2168,7 +2189,204 @@ impl TypeChecker {
                 });
             }
         }
+        if let Expr::StructLit(lit) = init {
+            return self.check_struct_lit(lit, resolved_type_ann);
+        }
+        if let Some(expected) = resolved_type_ann {
+            let prev = self.expr_expected.replace(expected.clone());
+            let ty = self.check_expr(init);
+            self.expr_expected = prev;
+            return ty;
+        }
         self.check_expr(init)
+    }
+
+    /// `let x: Arena<int> = new();` infers `T = int` from the annotation vs the
+    /// generic function's return type (same idea as `Vec::new()`).
+    fn infer_zero_arg_generic_call(
+        &mut self,
+        call: &CallExpr,
+        expected: &Type,
+    ) -> Result<Option<Type>, TypeCheckError> {
+        let (fn_type_params, return_type) =
+            if let Some((module, func)) = call.callee.split_once("::") {
+                match self
+                    .module_imports
+                    .get(module)
+                    .and_then(|m| m.functions.get(func))
+                {
+                    Some(f) => (f.generics.clone(), f.return_type.clone()),
+                    None => return Ok(None),
+                }
+            } else if let Some(f) = self.functions.get(&call.callee) {
+                (f.generics.clone(), f.return_type.clone())
+            } else {
+                return Ok(None);
+            };
+        if fn_type_params.is_empty() {
+            return Ok(None);
+        }
+        let Some(ret) = return_type else {
+            return Ok(None);
+        };
+        let fn_generics = TypeParam::names(&fn_type_params);
+        let resolved_ret = self.resolve_type_name(&ret)?;
+        let resolved_expected = self.resolve_type_name(expected)?;
+        let generic_substitutions =
+            infer_generic_substitutions(&resolved_ret, &resolved_expected, &fn_generics);
+        if generic_substitutions.len() != fn_generics.len() {
+            return Ok(None);
+        }
+        self.check_instantiation_bounds(
+            &fn_type_params,
+            &generic_substitutions,
+            &format!("fn '{}'", call.callee),
+            call.span,
+        )?;
+        Ok(Some(substitute_generic_types_impl(
+            &resolved_ret,
+            &generic_substitutions,
+        )))
+    }
+
+    fn check_struct_lit(
+        &mut self,
+        lit: &StructLitExpr,
+        expected: Option<&Type>,
+    ) -> Result<Type, TypeCheckError> {
+        let (struct_name, struct_fields) = if let Some(decl) = self.structs.get(&lit.type_name) {
+            (decl.name.clone(), decl.fields.clone())
+        } else {
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "known struct type".to_string(),
+                got: lit.type_name.clone(),
+                span: lit.span,
+            });
+        };
+
+        let is_generic = if let Some(decl) = self.structs.get(&struct_name) {
+            !decl.generics.is_empty()
+        } else {
+            false
+        };
+        let generic_param_names = if let Some(decl) = self.structs.get(&struct_name) {
+            TypeParam::names(&decl.generics)
+        } else {
+            Vec::new()
+        };
+        let struct_generics = if let Some(decl) = self.structs.get(&struct_name) {
+            decl.generics.clone()
+        } else {
+            Vec::new()
+        };
+        let mut inferred_substitutions = HashMap::new();
+        if is_generic && let Some(expected_ty) = expected {
+            let resolved_expected = self.resolve_type_name(expected_ty)?;
+            if let Type::Generic { name, params } = &resolved_expected
+                && name == &struct_name
+                && params.len() == generic_param_names.len()
+            {
+                for (g, p) in generic_param_names.iter().zip(params.iter()) {
+                    inferred_substitutions.insert(g.clone(), p.clone());
+                }
+            }
+        }
+
+        for field_expr in &lit.fields {
+            let field_decl_ty = struct_fields
+                .iter()
+                .find(|f| f.name == field_expr.name)
+                .map(|f| f.ty.clone())
+                .ok_or_else(|| TypeCheckError::TypeMismatch {
+                    expected: format!("field of struct '{}'", struct_name),
+                    got: field_expr.name.clone(),
+                    span: field_expr.span,
+                })?;
+
+            let resolved_field_ty = self.resolve_type_name(&field_decl_ty)?;
+            let expected_field_ty =
+                substitute_generic_types_impl(&resolved_field_ty, &inferred_substitutions);
+
+            let value_ty = match &field_expr.value {
+                Expr::Call(c)
+                    if (c.callee == "Vec::new" || c.callee == "Vec::with_capacity")
+                        && matches!(&expected_field_ty, Type::Vec { .. }) =>
+                {
+                    self.check_expr(&field_expr.value)?;
+                    expected_field_ty.clone()
+                }
+                _ => {
+                    let prev = self.expr_expected.replace(expected_field_ty.clone());
+                    let ty = self.check_expr(&field_expr.value);
+                    self.expr_expected = prev;
+                    ty?
+                }
+            };
+            let resolved_value_ty = self.resolve_type_name(&value_ty)?;
+
+            if is_generic {
+                inferred_substitutions.extend(infer_generic_substitutions(
+                    &resolved_field_ty,
+                    &resolved_value_ty,
+                    &generic_param_names,
+                ));
+            }
+            let expected_field_ty =
+                substitute_generic_types_impl(&resolved_field_ty, &inferred_substitutions);
+
+            let array_elem_coerced = if let Type::Array {
+                inner: value_elem,
+                size: value_size,
+            } = &resolved_value_ty
+            {
+                if let Type::Array {
+                    inner: field_elem,
+                    size: field_size,
+                } = &expected_field_ty
+                {
+                    value_size == field_size && Self::can_coerce_numeric(value_elem, field_elem)
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            let numeric_coerced = Self::can_coerce_numeric(&resolved_value_ty, &expected_field_ty);
+            let types_match = array_elem_coerced
+                || numeric_coerced
+                || types_equal(&resolved_value_ty, &expected_field_ty);
+
+            if !types_match {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: type_to_string(&expected_field_ty),
+                    got: type_to_string(&value_ty),
+                    span: field_expr.span,
+                });
+            }
+        }
+
+        if is_generic {
+            self.check_instantiation_bounds(
+                &struct_generics,
+                &inferred_substitutions,
+                &format!("struct '{}'", struct_name),
+                lit.span,
+            )?;
+            if inferred_substitutions.len() == generic_param_names.len() {
+                let params: Vec<Type> = generic_param_names
+                    .iter()
+                    .filter_map(|g| inferred_substitutions.get(g).cloned())
+                    .collect();
+                if params.len() == generic_param_names.len() {
+                    return Ok(Type::Generic {
+                        name: struct_name,
+                        params,
+                    });
+                }
+            }
+        }
+
+        Ok(Type::Struct(struct_name))
     }
 
     fn check_expr_with_context(
@@ -2313,157 +2531,7 @@ impl TypeChecker {
                     mutable: ref_expr.mutable,
                 })
             }
-            Expr::StructLit(lit) => {
-                // Look up struct declaration and clone the fields so we don't
-                // hold any borrows into `self` while recursing.
-                let (struct_name, struct_fields) =
-                    if let Some(decl) = self.structs.get(&lit.type_name) {
-                        (decl.name.clone(), decl.fields.clone())
-                    } else {
-                        return Err(TypeCheckError::TypeMismatch {
-                            expected: "known struct type".to_string(),
-                            got: lit.type_name.clone(),
-                            span: lit.span,
-                        });
-                    };
-
-                // Check if this struct has generic parameters
-                let is_generic = if let Some(decl) = self.structs.get(&struct_name) {
-                    !decl.generics.is_empty()
-                } else {
-                    false
-                };
-                let generic_param_names = if let Some(decl) = self.structs.get(&struct_name) {
-                    TypeParam::names(&decl.generics)
-                } else {
-                    Vec::new()
-                };
-                let struct_generics = if let Some(decl) = self.structs.get(&struct_name) {
-                    decl.generics.clone()
-                } else {
-                    Vec::new()
-                };
-                let mut inferred_substitutions = std::collections::HashMap::new();
-
-                // Check that all fields provided correspond to struct fields
-                for field_expr in &lit.fields {
-                    let field_decl_ty = struct_fields
-                        .iter()
-                        .find(|f| f.name == field_expr.name)
-                        .map(|f| f.ty.clone())
-                        .ok_or_else(|| TypeCheckError::TypeMismatch {
-                            expected: format!("field of struct '{}'", struct_name),
-                            got: field_expr.name.clone(),
-                            span: field_expr.span,
-                        })?;
-
-                    let resolved_field_ty = self.resolve_type_name(&field_decl_ty)?;
-
-                    let value_ty = match &field_expr.value {
-                        Expr::Call(c)
-                            if (c.callee == "Vec::new" || c.callee == "Vec::with_capacity")
-                                && matches!(&resolved_field_ty, Type::Vec { .. }) =>
-                        {
-                            self.check_expr(&field_expr.value)?;
-                            resolved_field_ty.clone()
-                        }
-                        _ => self.check_expr(&field_expr.value)?,
-                    };
-                    let resolved_value_ty = self.resolve_type_name(&value_ty)?;
-
-                    // If this is a generic struct and the field type is a generic parameter, allow any type
-                    let types_match = if is_generic {
-                        // Check if field_decl_ty is a generic parameter (e.g., Type::Struct("T"))
-                        if let Type::Struct(param_name) = &field_decl_ty {
-                            // If this is a generic parameter name, allow any type
-                            if generic_param_names.iter().any(|g| g == param_name) {
-                                inferred_substitutions
-                                    .insert(param_name.clone(), resolved_value_ty.clone());
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            // Check for array element type coercion
-                            let array_elem_coerced = if let Type::Array {
-                                inner: value_elem,
-                                size: value_size,
-                            } = &resolved_value_ty
-                            {
-                                if let Type::Array {
-                                    inner: field_elem,
-                                    size: field_size,
-                                } = &resolved_field_ty
-                                {
-                                    value_size == field_size
-                                        && Self::can_coerce_numeric(value_elem, field_elem)
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            };
-
-                            // Check for numeric coercion
-                            let numeric_coerced =
-                                Self::can_coerce_numeric(&resolved_value_ty, &resolved_field_ty);
-
-                            array_elem_coerced
-                                || numeric_coerced
-                                || types_equal(&resolved_value_ty, &resolved_field_ty)
-                        }
-                    } else {
-                        // Check for array element type coercion
-                        let array_elem_coerced = if let Type::Array {
-                            inner: value_elem,
-                            size: value_size,
-                        } = &resolved_value_ty
-                        {
-                            if let Type::Array {
-                                inner: field_elem,
-                                size: field_size,
-                            } = &resolved_field_ty
-                            {
-                                value_size == field_size
-                                    && Self::can_coerce_numeric(value_elem, field_elem)
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-
-                        // Check for numeric coercion
-                        let numeric_coerced =
-                            Self::can_coerce_numeric(&resolved_value_ty, &resolved_field_ty);
-
-                        array_elem_coerced
-                            || numeric_coerced
-                            || types_equal(&resolved_value_ty, &resolved_field_ty)
-                    };
-
-                    if !types_match {
-                        return Err(TypeCheckError::TypeMismatch {
-                            expected: type_to_string(&field_decl_ty),
-                            got: type_to_string(&value_ty),
-                            span: field_expr.span,
-                        });
-                    }
-                }
-
-                if is_generic {
-                    self.check_instantiation_bounds(
-                        &struct_generics,
-                        &inferred_substitutions,
-                        &format!("struct '{}'", struct_name),
-                        lit.span,
-                    )?;
-                }
-
-                // For now we don't enforce that all fields are initialized; minimal subset.
-
-                Ok(Type::Struct(struct_name))
-            }
+            Expr::StructLit(lit) => self.check_struct_lit(lit, None),
             Expr::FieldAccess(acc) => {
                 let base_ty = self.check_expr_with_context(&acc.base, borrow_operand)?;
                 match base_ty {
@@ -3016,8 +3084,11 @@ impl TypeChecker {
                     self.record_reference(enum_lit.variant_span, target);
                 }
 
-                // Check argument count matches
-                if enum_lit.args.len() != variant.payload_types.len() {
+                // Check argument count matches (tuple variants). Struct variants
+                // store fields in `named_fields` with empty `args`.
+                if enum_lit.named_fields.is_none()
+                    && enum_lit.args.len() != variant.payload_types.len()
+                {
                     return Err(TypeCheckError::TypeMismatch {
                         expected: format!("{} arguments", variant.payload_types.len()),
                         got: format!("{} arguments", enum_lit.args.len()),
@@ -3027,6 +3098,7 @@ impl TypeChecker {
 
                 // Check if this enum has generic parameters
                 let is_generic = !enum_decl.generics.is_empty();
+                let generic_names = TypeParam::names(&enum_decl.generics);
 
                 // Check argument types match and infer generic parameters if needed
                 let payload_types = variant.payload_types.clone();
@@ -3037,38 +3109,45 @@ impl TypeChecker {
                     let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
                     let resolved_expected_ty = self.resolve_type_name(expected_ty)?;
 
-                    // If this is a generic enum and the payload type is a generic parameter, infer it from the argument
+                    // If this is a generic enum, infer type params from the payload
+                    // (tuple variants such as Result::Err(E) and Option::Some(T)).
                     let types_match = if is_generic {
-                        // Check if expected_ty is a generic parameter (e.g., Type::Struct("T"))
-                        if let Type::Struct(param_name) = &resolved_expected_ty {
-                            // If this is a generic parameter name, infer it from the argument type
-                            if enum_decl.generics.iter().any(|g| g.name == *param_name) {
-                                // Find the index of this generic parameter
-                                if let Some(index) = enum_decl
-                                    .generics
-                                    .iter()
-                                    .position(|g| g.name == *param_name)
-                                {
-                                    // Ensure we have enough inferred params
-                                    while inferred_params.len() <= index {
-                                        inferred_params.push(Type::Int); // Default fallback
-                                    }
-                                    inferred_params[index] = resolved_arg_ty.clone();
+                        let subs = infer_generic_substitutions(
+                            &resolved_expected_ty,
+                            &resolved_arg_ty,
+                            &generic_names,
+                        );
+                        for (name, ty) in subs {
+                            if let Some(index) =
+                                enum_decl.generics.iter().position(|g| g.name == name)
+                            {
+                                while inferred_params.len() <= index {
+                                    inferred_params.push(Type::Struct(
+                                        enum_decl.generics[inferred_params.len()].name.clone(),
+                                    ));
                                 }
-                                true
-                            } else {
-                                let numeric_coerced = Self::can_coerce_numeric(
-                                    &resolved_arg_ty,
-                                    &resolved_expected_ty,
-                                );
-                                numeric_coerced
-                                    || types_equal(&resolved_arg_ty, &resolved_expected_ty)
+                                inferred_params[index] = ty;
                             }
-                        } else {
-                            let numeric_coerced =
-                                Self::can_coerce_numeric(&resolved_arg_ty, &resolved_expected_ty);
-                            numeric_coerced || types_equal(&resolved_arg_ty, &resolved_expected_ty)
                         }
+                        let subst_map: HashMap<String, Type> = enum_decl
+                            .generics
+                            .iter()
+                            .zip(inferred_params.iter())
+                            .map(|(g, t)| (g.name.clone(), t.clone()))
+                            .collect();
+                        let expected_now =
+                            substitute_generic_types_impl(&resolved_expected_ty, &subst_map);
+                        Self::can_coerce_numeric(&resolved_arg_ty, &expected_now)
+                            || types_equal(&resolved_arg_ty, &expected_now)
+                            || matches!(
+                                &resolved_expected_ty,
+                                Type::Struct(p) if generic_names.iter().any(|g| g == p)
+                            )
+                            || matches!(
+                                &resolved_expected_ty,
+                                Type::Generic { name: p, params }
+                                    if params.is_empty() && generic_names.iter().any(|g| g == p)
+                            )
                     } else {
                         let numeric_coerced =
                             Self::can_coerce_numeric(&resolved_arg_ty, &resolved_expected_ty);
@@ -3081,6 +3160,87 @@ impl TypeChecker {
                             got: type_to_string(&resolved_arg_ty),
                             span: arg_expr.span(),
                         });
+                    }
+                }
+
+                if let Some(named) = &enum_lit.named_fields {
+                    let Some(variant_fields) = variant.named_fields.as_ref() else {
+                        return Err(TypeCheckError::Message(format!(
+                            "Variant '{}' of enum '{}' does not have named fields",
+                            enum_lit.variant, enum_decl.name
+                        )));
+                    };
+                    for (field_name, field_expr) in named {
+                        let Some((_, field_ty)) =
+                            variant_fields.iter().find(|(n, _)| n == field_name)
+                        else {
+                            return Err(TypeCheckError::Message(format!(
+                                "Unknown field '{}' in variant '{}' of enum '{}'",
+                                field_name, enum_lit.variant, enum_decl.name
+                            )));
+                        };
+                        let arg_ty = self.check_expr(field_expr)?;
+                        let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
+                        let resolved_expected_ty = self.resolve_type_name(field_ty)?;
+                        if is_generic {
+                            let subs = infer_generic_substitutions(
+                                &resolved_expected_ty,
+                                &resolved_arg_ty,
+                                &generic_names,
+                            );
+                            for (name, ty) in subs {
+                                if let Some(index) =
+                                    enum_decl.generics.iter().position(|g| g.name == name)
+                                {
+                                    while inferred_params.len() <= index {
+                                        inferred_params.push(Type::Struct(
+                                            enum_decl.generics[inferred_params.len()].name.clone(),
+                                        ));
+                                    }
+                                    inferred_params[index] = ty;
+                                }
+                            }
+                        }
+                        let subst_map: HashMap<String, Type> = enum_decl
+                            .generics
+                            .iter()
+                            .zip(inferred_params.iter())
+                            .map(|(g, t)| (g.name.clone(), t.clone()))
+                            .collect();
+                        let expected_now =
+                            substitute_generic_types_impl(&resolved_expected_ty, &subst_map);
+                        let types_match = Self::can_coerce_numeric(&resolved_arg_ty, &expected_now)
+                            || types_equal(&resolved_arg_ty, &expected_now)
+                            || (is_generic
+                                && matches!(&resolved_expected_ty, Type::Struct(p) if generic_names.iter().any(|g| g == p)));
+                        if !types_match {
+                            return Err(TypeCheckError::TypeMismatch {
+                                expected: type_to_string(&expected_now),
+                                got: type_to_string(&resolved_arg_ty),
+                                span: field_expr.span(),
+                            });
+                        }
+                    }
+                }
+
+                if is_generic {
+                    let expected_params = self.expected_generic_params(&enum_decl.name);
+                    for (i, g) in enum_decl.generics.iter().enumerate() {
+                        while inferred_params.len() <= i {
+                            inferred_params.push(Type::Struct(g.name.clone()));
+                        }
+                        let is_placeholder = matches!(&inferred_params[i], Type::Int)
+                            || matches!(&inferred_params[i], Type::Struct(n) if n == &g.name)
+                            || matches!(&inferred_params[i], Type::Generic { name, params } if name == &g.name && params.is_empty());
+                        if is_placeholder {
+                            if let Some(ref exp) = expected_params
+                                && i < exp.len()
+                            {
+                                inferred_params[i] = exp[i].clone();
+                            } else if self.is_type_param(&g.name) {
+                                inferred_params[i] = Type::Struct(g.name.clone());
+                            }
+                        }
                     }
                 }
 
@@ -3277,9 +3437,20 @@ impl TypeChecker {
                         }
                     }
 
-                    // Type-check the arm body and unify arm result types
+                    // Type-check the arm body and unify arm result types.
+                    // `infer_block_result_type` re-walks the last expression for
+                    // the arm's value type. Restore post-binding ownership first:
+                    // `check_stmt` already validated moves, and re-checking a
+                    // match whose scrutinee was marked moved (owned enum after
+                    // `Vec::get`) would spuriously report UseAfterMove.
+                    let after_bindings = self.variables.clone();
                     for stmt in &arm.body.statements {
                         self.check_stmt(stmt)?;
+                    }
+                    for (name, info) in &after_bindings {
+                        if let Some(cur) = self.variables.get_mut(name) {
+                            cur.state = info.state;
+                        }
                     }
                     match self.infer_block_result_type(&arm.body, arm.span)? {
                         MatchArmValue::Diverges => {}
@@ -3503,7 +3674,9 @@ impl TypeChecker {
                     && !call_expr.args.is_empty()
                     && !func_decl_params.is_empty()
                 {
+                    let saved = self.variables.clone();
                     let arg0_ty = self.check_expr(&call_expr.args[0])?;
+                    self.variables = saved;
                     let resolved_arg = self.resolve_type_name(&arg0_ty)?;
                     let param0_ty = self.resolve_type_name(&func_decl_params[0].ty)?;
                     generic_substitutions =
@@ -5099,35 +5272,6 @@ fn block_falls_through(block: &Block) -> bool {
         }
         _ => true,
     }
-}
-
-fn infer_generic_substitutions(
-    expected: &Type,
-    actual: &Type,
-    fn_generics: &[String],
-) -> std::collections::HashMap<String, Type> {
-    let mut subs = std::collections::HashMap::new();
-    match (expected, actual) {
-        (
-            Type::Generic {
-                name: e_name,
-                params: e_params,
-            },
-            Type::Generic {
-                name: a_name,
-                params: a_params,
-            },
-        ) if e_name == a_name && e_params.len() == a_params.len() => {
-            for (e, a) in e_params.iter().zip(a_params.iter()) {
-                subs.extend(infer_generic_substitutions(e, a, fn_generics));
-            }
-        }
-        (Type::Struct(param_name), actual_ty) if fn_generics.contains(param_name) => {
-            subs.insert(param_name.clone(), actual_ty.clone());
-        }
-        _ => {}
-    }
-    subs
 }
 
 /// Substitute generic type parameters with concrete types

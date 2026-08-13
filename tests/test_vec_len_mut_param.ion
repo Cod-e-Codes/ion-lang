@@ -1,0 +1,27 @@
+// Vec::len / .len() on a &mut Vec field (reborrow as &Vec).
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Bag {
+    items: Vec<int>;
+}
+
+fn push_and_len(bag: &mut Bag, val: int) -> int {
+    bag.items.push(val);
+    return bag.items.len();
+}
+
+fn main() -> int {
+    let mut bag: Bag = Bag {
+        items: Vec::new(),
+    };
+    if push_and_len(&mut bag, 10) != 1 {
+        return 1;
+    }
+    if push_and_len(&mut bag, 20) != 2 {
+        return 2;
+    }
+    return 42;
+}

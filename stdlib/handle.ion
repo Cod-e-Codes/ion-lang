@@ -1,0 +1,178 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+// Index plus generation. Not Copy in the type system (user structs of ints
+// still move); use copy(&h) when a by-value call would consume the only binding.
+pub struct Handle {
+    index: int;
+    generation: int;
+}
+
+pub enum Slot<T> {
+    Occupied { generation: int, value: T };
+    Free { generation: int, next: int };
+}
+
+pub struct Arena<T> {
+    slots: Vec<Slot<T>>;
+    free_head: int;
+    live: int;
+}
+
+pub enum Take<T> {
+    Hit(T);
+    Miss;
+}
+
+pub fn invalid() -> Handle {
+    return Handle {
+        index: -1,
+        generation: 0,
+    };
+}
+
+pub fn copy(h: &Handle) -> Handle {
+    return Handle {
+        index: h.index,
+        generation: h.generation,
+    };
+}
+
+pub fn new<T>() -> Arena<T> {
+    let slots: Vec<Slot<T>> = Vec::new();
+    return Arena {
+        slots: slots,
+        free_head: -1,
+        live: 0,
+    };
+}
+
+pub fn len<T>(arena: &Arena<T>) -> int {
+    return arena.live;
+}
+
+pub fn contains<T>(arena: &Arena<T>, h: Handle) -> bool {
+    if h.index < 0 {
+        return false;
+    }
+    match arena.slots.get_ref(h.index) {
+        Option::Some(slot) => {
+            match slot {
+                // Do not bind Occupied.value here; a named binding drops T while the slot still holds it.
+                Slot::Occupied { generation: g, value: _ } => {
+                    if g == h.generation {
+                        return true;
+                    }
+                    return false;
+                }
+                Slot::Free { generation: _g, next: _n } => {
+                    return false;
+                }
+            }
+        }
+        Option::None => {
+            return false;
+        }
+    }
+}
+
+pub fn insert<T>(arena: &mut Arena<T>, value: T) -> Handle {
+    if arena.free_head >= 0 {
+        let idx: int = arena.free_head;
+        let mut reuse_gen: int = 0;
+        let mut reuse_next: int = -1;
+        let mut can_reuse: bool = false;
+        match arena.slots.get_ref(idx) {
+            Option::Some(slot) => {
+                match slot {
+                    Slot::Free { generation: g, next: n } => {
+                        reuse_gen = g;
+                        reuse_next = n;
+                        can_reuse = true;
+                    }
+                    Slot::Occupied { generation: _g, value: _ } => {}
+                }
+            }
+            Option::None => {}
+        }
+        if can_reuse {
+            arena.free_head = reuse_next;
+            let _set: int = arena.slots.set(
+                idx,
+                Slot::Occupied {
+                    generation: reuse_gen,
+                    value: value,
+                },
+            );
+            arena.live = arena.live + 1;
+            return Handle {
+                index: idx,
+                generation: reuse_gen,
+            };
+        }
+    }
+    let gen: int = 1;
+    arena.slots.push(Slot::Occupied {
+        generation: gen,
+        value: value,
+    });
+    let idx: int = arena.slots.len() - 1;
+    arena.live = arena.live + 1;
+    return Handle {
+        index: idx,
+        generation: gen,
+    };
+}
+
+pub fn remove<T>(arena: &mut Arena<T>, h: Handle) -> Take<T> {
+    if h.index < 0 {
+        return Take::Miss;
+    }
+    let mut live_gen: int = 0;
+    match arena.slots.get_ref(h.index) {
+        Option::Some(slot) => {
+            match slot {
+                Slot::Occupied { generation: g, value: _ } => {
+                    if g != h.generation {
+                        return Take::Miss;
+                    }
+                    live_gen = g;
+                }
+                Slot::Free { generation: _g, next: _n } => {
+                    return Take::Miss;
+                }
+            }
+        }
+        Option::None => {
+            return Take::Miss;
+        }
+    }
+    match arena.slots.get(h.index) {
+        Option::Some(slot) => {
+            match slot {
+                Slot::Occupied { generation: _g, value: v } => {
+                    let new_gen: int = live_gen + 1;
+                    let next: int = arena.free_head;
+                    let _set: int = arena.slots.set(
+                        h.index,
+                        Slot::Free {
+                            generation: new_gen,
+                            next: next,
+                        },
+                    );
+                    arena.free_head = h.index;
+                    arena.live = arena.live - 1;
+                    return Take::Hit(v);
+                }
+                Slot::Free { generation: _g, next: _n } => {
+                    return Take::Miss;
+                }
+            }
+        }
+        Option::None => {
+            return Take::Miss;
+        }
+    }
+}

@@ -157,9 +157,10 @@ impl Codegen {
             vec_code = std::mem::replace(&mut self.output, old_output);
             let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
 
+            let elem_ty = self.vec_elem_type_from_arg(&args[0]);
             let mut value_code = String::new();
             let old_output = std::mem::replace(&mut self.output, value_code);
-            self.generate_expr(&args[1]);
+            self.generate_expr_with_type(&args[1], elem_ty.as_ref());
             value_code = std::mem::replace(&mut self.output, old_output);
 
             let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
@@ -342,7 +343,8 @@ impl Codegen {
 
             let mut value_code = String::new();
             let old_output = std::mem::replace(&mut self.output, value_code);
-            self.generate_expr(&args[2]);
+            let elem_ty = self.vec_elem_type_from_arg(&args[0]);
+            self.generate_expr_with_type(&args[2], elem_ty.as_ref());
             value_code = std::mem::replace(&mut self.output, old_output);
 
             let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);

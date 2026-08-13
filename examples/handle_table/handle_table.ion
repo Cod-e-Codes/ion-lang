@@ -1,0 +1,79 @@
+// Entity table: store Handle on another struct, peek through &World, remove, stale handle.
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Entity {
+    hp: int;
+}
+
+struct Link {
+    target: Handle;
+}
+
+struct World {
+    entities: Arena<Entity>;
+}
+
+fn peek_hp(world: &World, h: Handle) -> int {
+    let mut hp: int = -1;
+    match world.entities.slots.get_ref(h.index) {
+        Option::Some(slot) => {
+            match slot {
+                Slot::Occupied { generation: g, value: e } => {
+                    if g == h.generation {
+                        hp = e.hp;
+                    }
+                }
+                Slot::Free { generation: _g, next: _n } => {}
+            }
+        }
+        Option::None => {}
+    }
+    return hp;
+}
+
+fn main() -> int {
+    let mut entities: Arena<Entity> = handle::new();
+    let mut world: World = World {
+        entities: entities,
+    };
+
+    let e1: Entity = Entity { hp: 10 };
+    let h1: Handle = handle::insert(&mut world.entities, e1);
+    let link: Link = Link {
+        target: handle::copy(&h1),
+    };
+
+    if peek_hp(&world, handle::copy(&link.target)) != 10 {
+        return 1;
+    }
+
+    match handle::remove(&mut world.entities, handle::copy(&h1)) {
+        Take::Hit(got) => {
+            if got.hp != 10 {
+                return 2;
+            }
+        }
+        Take::Miss => {
+            return 3;
+        }
+    }
+
+    let e2: Entity = Entity { hp: 20 };
+    let h2: Handle = handle::insert(&mut world.entities, e2);
+    if h2.index != h1.index {
+        return 4;
+    }
+    if peek_hp(&world, handle::copy(&link.target)) != -1 {
+        return 5;
+    }
+    if peek_hp(&world, handle::copy(&h2)) != 20 {
+        return 6;
+    }
+
+    return 0;
+}

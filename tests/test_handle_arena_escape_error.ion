@@ -1,0 +1,34 @@
+// Helper that tries to return &T from a peek (ReferenceEscape).
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn peek_name(arena: &Arena<String>, h: Handle) -> &String {
+    match arena.slots.get_ref(h.index) {
+        Option::Some(slot) => {
+            match slot {
+                Slot::Occupied { generation: _g, value: v } => {
+                    return v;
+                }
+                Slot::Free { generation: _g2, next: _n } => {
+                    let empty: String = "";
+                    return &empty;
+                }
+            }
+        }
+        Option::None => {
+            let empty: String = "";
+            return &empty;
+        }
+    }
+}
+
+fn main() -> int {
+    let mut arena: Arena<String> = handle::new();
+    let h: Handle = handle::insert(&mut arena, "x");
+    let _r: &String = peek_name(&arena, handle::copy(&h));
+    return 0;
+}

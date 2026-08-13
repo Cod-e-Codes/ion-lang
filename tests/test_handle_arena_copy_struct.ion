@@ -1,0 +1,33 @@
+// T with a String field; remove returns the owned value.
+import "stdlib/handle.ion" as handle;
+
+struct Item {
+    id: int;
+    name: String;
+}
+
+fn main() -> int {
+    let mut arena: Arena<Item> = handle::new();
+    let item: Item = Item {
+        id: 7,
+        name: "alpha",
+    };
+    let h: Handle = handle::insert(&mut arena, item);
+    match handle::remove(&mut arena, handle::copy(&h)) {
+        Take::Hit(got) => {
+            if got.id != 7 {
+                return 1;
+            }
+            if got.name != "alpha" {
+                return 2;
+            }
+        }
+        Take::Miss => {
+            return 3;
+        }
+    }
+    if handle::contains(&arena, handle::copy(&h)) {
+        return 4;
+    }
+    return 42;
+}

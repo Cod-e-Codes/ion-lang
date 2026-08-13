@@ -194,6 +194,7 @@ jobs:
           check "stdlib/fmt.ion"
           check "stdlib/fs.ion"
           check "stdlib/result.ion"
+          check "stdlib/handle.ion"
           for dir in examples/*/; do
             name="$(basename "$dir")"
             check "examples/$name"

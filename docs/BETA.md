@@ -45,8 +45,8 @@ The following features may change shape before 1.0:
 - The compiler, bundled standard library, runtime C ABI, and `ion-build`
   manifest format are versioned together.
 - Public stdlib import paths such as `stdlib/io.ion`, `stdlib/fmt.ion`,
-  `stdlib/fs.ion`, and `stdlib/result.ion` should not be removed or renamed in a
-  patch release.
+  `stdlib/fs.ion`, `stdlib/result.ion`, and `stdlib/handle.ion` should not be
+  removed or renamed in a patch release.
 - Additions are allowed in patch releases. Breaking language, stdlib, runtime,
   or manifest changes require a minor version while Ion is `0.x`.
 - Unsupported behavior inside `unsafe` remains outside the compatibility

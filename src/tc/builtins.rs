@@ -94,12 +94,8 @@ impl TypeChecker {
                 });
             }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: false,
-            } = vec_ty
-                && let Type::Vec { .. } = **inner_ty
-            {
+            // `&mut Vec<T>` reborrows as `&Vec<T>` (method calls on `&mut Arena` fields).
+            if crate::types_util::is_ref_to_vec(&vec_ty) {
                 return Ok(Some(Type::Int));
             }
             return Err(TypeCheckError::TypeMismatch {
@@ -119,12 +115,7 @@ impl TypeChecker {
                 });
             }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
-            if let Type::Ref {
-                inner: ref inner_ty,
-                mutable: false,
-            } = vec_ty
-                && let Type::Vec { .. } = **inner_ty
-            {
+            if crate::types_util::is_ref_to_vec(&vec_ty) {
                 return Ok(Some(Type::Int));
             }
             return Err(TypeCheckError::TypeMismatch {
