@@ -1,0 +1,51 @@
+// Put-back via a named non-copy local as the last match-arm statement.
+// Re-walking that statement for arm result typing must not report UseAfterMove.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Todo {
+    id: int;
+    label: String;
+}
+
+fn main() -> int {
+    let mut items: Vec<Todo> = Vec::new();
+    Vec::push(
+        &mut items,
+        Todo {
+            id: 1,
+            label: String::from("hi"),
+        },
+    );
+    match Vec::get(&items, 0) {
+        Option::Some(todo) => {
+            let id: int = todo.id;
+            let label: String = todo.label;
+            let row: Todo = Todo {
+                id: id,
+                label: label,
+            };
+            Vec::set(&mut items, 0, row);
+        }
+        Option::None => {
+            return 1;
+        }
+    };
+    match Vec::get(&items, 0) {
+        Option::Some(todo) => {
+            if todo.id != 1 {
+                return 2;
+            }
+            let n: int = String::len(&todo.label);
+            if n != 2 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    };
+    return 0;
+}

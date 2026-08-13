@@ -51,7 +51,7 @@ From [examples/hello_world_safe/hello_world_safe.ion](../../../examples/hello_wo
 import "stdlib/io.ion" as io;
 
 fn main() -> int {
-    io::println(String::from("Hello, World!"));
+    io::println("Hello, World!");
     return 0;
 }
 ```

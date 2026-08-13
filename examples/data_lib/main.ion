@@ -7,13 +7,13 @@ fn main() -> int {
     let units: int = catalog::catalog_units_in_stock();
     let total: int = catalog::catalog_grand_total();
 
-    io::println(String::from("catalog report"));
-    io::print(String::from("lines: "));
-    io::println(fmt::int_to_string(lines));
-    io::print(String::from("units: "));
-    io::println(fmt::int_to_string(units));
-    io::print(String::from("total cents: "));
-    io::println(fmt::int_to_string(total));
+    io::println("catalog report");
+    io::print("lines: ");
+    fmt::println_int(lines);
+    io::print("units: ");
+    fmt::println_int(units);
+    io::print("total cents: ");
+    fmt::println_int(total);
 
     if lines != 3 {
         return 1;

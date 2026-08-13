@@ -30,6 +30,13 @@ cargo build --release --bin ion-compiler --bin ion-build
 cd tests && ./test_runner.sh
 ```
 
+One test or a substring (runs every matching `run` / `error` / `cgen` row):
+
+```bash
+cd tests && ./test_runner.sh test_foo.ion
+cd tests && ./test_runner.sh test_foo
+```
+
 From PowerShell (repo root; requires Git Bash):
 
 ```powershell
@@ -182,4 +189,4 @@ cargo build --release --bin ion-compiler
 cd tests && ./test_runner.sh
 ```
 
-Update `tests/README.md` catalog entry. Verify with `./test_runner.sh`; do not hardcode pass totals in docs.
+Update `tests/README.md` catalog entry. Verify with `./test_runner.sh test_myfeature.ion`; do not hardcode pass totals in docs.

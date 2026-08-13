@@ -78,8 +78,8 @@ cargo build --release --bin ion-lsp
 **Manual transpile cycle** (advanced; integration tests use this path):
 
 ```powershell
-.\target\release\ion-compiler.exe examples\hello_world.ion
-gcc examples\hello_world.c runtime\ion_runtime.c -o hello_world.exe -I. -Iruntime -lpthread
+.\target\release\ion-compiler.exe examples\hello_world\hello_world.ion
+gcc examples\hello_world\target\hello_world.c runtime\ion_runtime.c -o hello_world.exe -I. -Iruntime -lpthread
 ```
 
 Add `-lws2_32` on Windows when linking programs that use channels, `spawn`, or sockets.

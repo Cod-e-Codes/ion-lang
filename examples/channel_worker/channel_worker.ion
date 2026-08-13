@@ -17,8 +17,8 @@ fn main() -> int {
                 break;
             }
             let job: int = recv(&mut rx);
-            sum = sum + job;
-            received = received + 1;
+            sum += job;
+            received += 1;
         }
         send(&done_tx, sum);
     };
@@ -26,7 +26,7 @@ fn main() -> int {
     let mut next_job: int = 1;
     while next_job <= job_count() {
         send(&job_tx, next_job);
-        next_job = next_job + 1;
+        next_job += 1;
     }
 
     let mut done_rx_mut: Receiver<int> = done_rx;

@@ -201,7 +201,7 @@ That peek binds `v` because `int` is Copy. For `T` with owned fields, match `val
 
 ## Mutating Vec elements
 
-`Vec::get` moves the element out. Copy fields, rebuild the struct, and `Vec::set` it back ([tests/test_vec_get_putback.ion](../../../../tests/test_vec_get_putback.ion)). Helpers can take `&mut T` on an owned local:
+`Vec::get` moves the element out. Copy fields, rebuild the struct, and `Vec::set` it back ([tests/test_vec_get_putback.ion](../../../../tests/test_vec_get_putback.ion)). A named local (`let row = Todo { ... }; Vec::set(..., row)`) is valid as the last match-arm statement ([tests/test_vec_get_putback_named.ion](../../../../tests/test_vec_get_putback_named.ion)). Helpers can take `&mut T` on an owned local:
 
 ```ion
 fn mark_active(c: &mut Customer) {
@@ -277,6 +277,13 @@ Boxing a struct literal as a `let` initializer is supported ([tests/test_box_new
 ```ion
 let boxed = Box::new(Node { a: 1, b: 2, c: 3, d: 4 });
 let n = Box::unwrap(boxed);
+```
+
+Unannotated enum literals type as the enum, not default `int` ([tests/test_enum_unannotated_let.ion](../../../../tests/test_enum_unannotated_let.ion), [tests/test_enum_generic_unannotated_let.ion](../../../../tests/test_enum_generic_unannotated_let.ion)):
+
+```ion
+let flag = Flag::On;
+let x = Option::Some(42);
 ```
 
 Recursive owned types need indirection (`Box`, `Vec`, or a raw pointer). Bare nests (`next: Node`, `next: Option<Node>`) are infinite size. Linked lists use `Option<Box<Node>>` ([tests/test_recursive_struct_box.ion](../../../../tests/test_recursive_struct_box.ion)); declare a local `enum Option<T>` when constructing `Option::None` / `Option::Some` (same pattern as [tests/test_enum_generic.ion](../../../../tests/test_enum_generic.ion)).

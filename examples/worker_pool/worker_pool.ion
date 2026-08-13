@@ -20,8 +20,8 @@ fn main() -> int {
             let mut j: int = 0;
             while j < jobs_per_worker() {
                 let job: int = recv(&mut rx);
-                sum = sum + job;
-                j = j + 1;
+                sum += job;
+                j += 1;
             }
             send(&result_tx, sum);
         };
@@ -30,13 +30,13 @@ fn main() -> int {
         while job_id <= jobs_per_worker() {
             let payload: int = (w + 1) * 100 + job_id;
             send(&job_tx, payload);
-            job_id = job_id + 1;
+            job_id += 1;
         }
 
         let mut result_rx_mut: Receiver<int> = result_rx;
         let partial: int = recv(&mut result_rx_mut);
-        grand_total = grand_total + partial;
-        w = w + 1;
+        grand_total += partial;
+        w += 1;
     }
 
     if grand_total != 2430 {

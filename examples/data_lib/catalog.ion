@@ -3,29 +3,58 @@ struct Product {
     quantity: int;
 }
 
-fn line_total(product: Product) -> int {
-    return product.unit_price * product.quantity;
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn catalog_rows() -> Vec<Product> {
+    let mut rows: Vec<Product> = Vec::new();
+    rows.push(Product { unit_price: 1200, quantity: 2 });
+    rows.push(Product { unit_price: 350, quantity: 5 });
+    rows.push(Product { unit_price: 99, quantity: 10 });
+    return rows;
 }
 
 pub fn catalog_line_count() -> int {
-    return 3;
+    let rows: Vec<Product> = catalog_rows();
+    return rows.len();
 }
 
 pub fn catalog_grand_total() -> int {
-    let row0: Product = Product { unit_price: 1200, quantity: 2 };
-    let row1: Product = Product { unit_price: 350, quantity: 5 };
-    let row2: Product = Product { unit_price: 99, quantity: 10 };
-    let total0: int = line_total(row0);
-    let total1: int = line_total(row1);
-    let total2: int = line_total(row2);
-    return total0 + total1 + total2;
+    let rows: Vec<Product> = catalog_rows();
+    let mut total: int = 0;
+    let mut i: int = 0;
+    let n: int = rows.len();
+    while i < n {
+        match rows.get_ref(i) {
+            Option::Some(product) => {
+                total += product.unit_price * product.quantity;
+            }
+            Option::None => {
+                return total;
+            }
+        }
+        i += 1;
+    }
+    return total;
 }
 
 pub fn catalog_units_in_stock() -> int {
     let quantities: [int; 3] = [2, 5, 10];
     let mut units: int = 0;
-    for qty in quantities {
-        units = units + qty;
+    let mut i: int = 0;
+    let n: int = quantities.len();
+    while i < n {
+        match quantities.get_ref(i) {
+            Option::Some(qty) => {
+                units += qty;
+            }
+            Option::None => {
+                return units;
+            }
+        }
+        i += 1;
     }
     return units;
 }

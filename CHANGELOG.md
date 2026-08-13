@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.16 - 2026-08-13
+
+- **IR / Codegen**: unannotated `let x = Enum::Variant` types `x` as the enum, not default `int`. Tuple payloads whose count matches the enum's type parameters (for example `Option::Some(42)`) lower as `Option<int>` / `Option_int`. This impacts any unannotated `let flag = Flag::On` or `let x = Option::Some(...)`: previously ion-compiler succeeded and gcc saw `int x`. Annotated `let x: Flag = ...` already lowered correctly.
+- **Codegen**: string literals passed to `String` parameters in multi-file mode (`io::println("hi")` from an importing module) lower through `ion_string_from_literal`. Previously only same-file calls did, so `examples/data_lib` failed gcc with `char *` vs `ion_string_t *`.
+- **Type checker**: match-arm result typing no longer reports a false UseAfterMove when the last statement consumes an arm-local (`let row = ...; Vec::set(..., row)`). `check_stmt` already validated that move; the last-expr re-walk now treats arm-locals as Valid.
+- **Tests**: `test_enum_unannotated_let.ion`, `test_enum_generic_unannotated_let.ion`; `test_vec_get_putback_named.ion`; `test_multi_fmt_io.ion` covers an imported `io::println` literal. `test_runner.sh` accepts stem filters (`./test_runner.sh test_foo.ion`); a filter runs every matching manifest row (`run` / `error` / `cgen`). No args still runs the full suite.
+- **Examples**: rewritten to current idioms (string literal `String` coercion, `Slice::len` / `get_ref`, loop REPL, `Vec::get_ref` / `get`/`set`, stdlib `Result`, unannotated `Box::new` / enum lets). Output contracts unchanged.
+
 ## 0.1.15 - 2026-08-13
 
 - **Stdlib**: `import "stdlib/handle.ion" as handle;` with `Handle`, `Arena<T>`, `insert` / `remove` / `contains` / `len`. Peek stays local via `Vec::get_ref` on `arena.slots` (no-escape). Not a compiler builtin. `handle::copy(&h)` reconstructs a `Handle` because user structs are not Copy.

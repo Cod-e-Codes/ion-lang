@@ -2,6 +2,12 @@
 
 # Test harness for Ion compiler
 # Automates: Ion -> C -> Compile C -> Run Executable -> Verify output
+#
+# Usage: ./test_runner.sh [filter ...]
+#   No args: full manifest plus special cases (multifile, ion-build smokes).
+#   Filters match test stems, with or without .ion / tests/ / path prefix.
+#   Substring match: test_enum_unannotated runs test_enum_unannotated_let.ion
+#   All matching manifest rows run (run, error, and cgen for the same file).
 
 set +e
 
@@ -98,6 +104,51 @@ NC='\033[0m'
 test_count=0
 pass_count=0
 fail_count=0
+FILTERS=()
+
+usage() {
+    cat <<'EOF'
+Usage: ./test_runner.sh [filter ...]
+
+  No arguments runs the full suite.
+  Each filter matches a test stem (test_foo, test_foo.ion, or tests/test_foo.ion).
+  Matching is by exact stem or substring, so test_enum_unannotated selects
+  test_enum_unannotated_let.ion. Every matching manifest row runs (run, error, cgen).
+
+Special-case stems: test_multifile, test_multi_struct, test_multi_fmt_io,
+build_hello, worker_pool, build_bad_main.
+EOF
+}
+
+normalize_test_stem() {
+    local f="$1"
+    f="${f//\\//}"
+    f="${f##*/}"
+    f="${f%.ion}"
+    printf '%s' "$f"
+}
+
+should_run() {
+    local n=${#FILTERS[@]}
+    if [ "$n" -eq 0 ]; then
+        return 0
+    fi
+    local candidate stem raw f
+    for candidate in "$@"; do
+        stem="$(normalize_test_stem "$candidate")"
+        for raw in "${FILTERS[@]}"; do
+            f="$(normalize_test_stem "$raw")"
+            [ -z "$f" ] && continue
+            if [ "$stem" = "$f" ]; then
+                return 0
+            fi
+            case "$stem" in
+                *"$f"*) return 0 ;;
+            esac
+        done
+    done
+    return 1
+}
 
 test_file() {
     local ion_file="$1"
@@ -503,6 +554,7 @@ run_manifest() {
         [ "$file" = "file" ] && continue
         [ -z "$file" ] && continue
         [ ! -f "$file" ] && continue
+        should_run "$file" || continue
 
         case "$kind" in
             run)
@@ -526,11 +578,26 @@ run_manifest() {
     )
 }
 
+cd "$(dirname "$0")" || exit 1
+
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            FILTERS+=("$arg")
+            ;;
+    esac
+done
+
 echo "Ion Compiler Test Harness"
 echo "========================="
+if [ ${#FILTERS[@]} -gt 0 ]; then
+    echo "Filter: ${FILTERS[*]}"
+fi
 echo ""
-
-cd "$(dirname "$0")" || exit 1
 
 precompile_runtime
 
@@ -539,12 +606,29 @@ verify_harness_cgen_empty_pattern
 echo ""
 
 run_manifest "test_expectations.tsv"
-test_multifile || true
-test_multi_struct || true
-test_multi_fmt_io || true
-test_ion_build || true
-test_ion_build_worker_pool || true
-test_ion_build_bad_main || true
+if should_run "test_multifile.ion"; then
+    test_multifile || true
+fi
+if should_run "test_multi_struct.ion"; then
+    test_multi_struct || true
+fi
+if should_run "test_multi_fmt_io.ion"; then
+    test_multi_fmt_io || true
+fi
+if should_run "build_hello"; then
+    test_ion_build || true
+fi
+if should_run "worker_pool"; then
+    test_ion_build_worker_pool || true
+fi
+if should_run "build_bad_main"; then
+    test_ion_build_bad_main || true
+fi
+
+if [ ${#FILTERS[@]} -gt 0 ] && [ "$test_count" -eq 0 ]; then
+    echo -e "${RED}ERROR${NC} - no tests matched filter: ${FILTERS[*]}"
+    fail_count=$((fail_count + 1))
+fi
 
 echo ""
 echo "========================="
