@@ -97,6 +97,8 @@ jobs:
           test_box_new_struct_let 10
           test_box_new_struct_let_annotated 10
           test_box_unwrap_same_scope 3
+          test_box_string_scope_drop 0
+          test_vec_string_scope_drop 0
           EOF
 
       - name: Generated C thread sanitizer (Linux)

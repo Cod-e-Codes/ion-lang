@@ -1,0 +1,6 @@
+// Box<String> scope-exit drop must free the String, then the box allocation.
+fn main() -> int {
+    let s: String = String::from("boxed");
+    let b: Box<String> = Box::new(s);
+    return 0;
+}

@@ -58,6 +58,18 @@ test_enum_generic_unannotated_let.ion	run	42
 test_enum_generic_unannotated_let.ion	cgen			Option_int x =	^[[:space:]]*int x =
 test_option_none_unannotated_error.ion	error		cannot infer type parameter
 test_option_none_struct_field.ion	run	2
+test_option_none_call_arg.ion	run	3
+test_option_none_call_arg.ion	cgen			take((Option_int)
+test_option_none_call_arg_middle.ion	run	5
+test_result_err_call_arg.ion	run	7
+test_vec_string_scope_drop.ion	run	0
+test_vec_string_scope_drop.ion	cgen			ion_string_free(((ion_string_t**)((v)->data))
+test_vec_string_scope_drop.ion	cgen			ion_vec_free((ion_vec_t*)(v))
+test_vec_struct_string_scope_drop.ion	run	0
+test_vec_struct_string_scope_drop.ion	cgen			ion_vec_free((ion_vec_t*)(b.items))
+test_box_string_scope_drop.ion	run	0
+test_box_string_scope_drop.ion	cgen			ion_string_free((*(b)))
+test_box_string_scope_drop.ion	cgen			ion_box_free(b)
 test_unannotated_let_non_int.ion	run	5
 test_unannotated_let_non_int.ion	cgen			Point q =	^[[:space:]]*int q =
 test_unannotated_let_non_int.ion	cgen			Point n =	^[[:space:]]*int n =

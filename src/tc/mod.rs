@@ -2390,6 +2390,17 @@ impl TypeChecker {
         self.check_expr(init)
     }
 
+    fn check_expr_with_expected(
+        &mut self,
+        expr: &Expr,
+        expected: &Type,
+    ) -> Result<Type, TypeCheckError> {
+        let prev = self.expr_expected.replace(expected.clone());
+        let ty = self.check_expr(expr);
+        self.expr_expected = prev;
+        ty
+    }
+
     /// `let x: Arena<int> = new();` infers `T = int` from the annotation vs the
     /// generic function's return type (same idea as `Vec::new()`).
     fn infer_zero_arg_generic_call(
@@ -3805,9 +3816,10 @@ impl TypeChecker {
                             }
                             for (arg_expr, param_ty) in call_expr.args.iter().zip(fn_params.iter())
                             {
-                                let arg_ty = self.check_expr(arg_expr)?;
-                                let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
                                 let resolved_param_ty = self.resolve_type_name(param_ty)?;
+                                let arg_ty =
+                                    self.check_expr_with_expected(arg_expr, &resolved_param_ty)?;
+                                let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
                                 let numeric_coerced =
                                     Self::can_coerce_numeric(&resolved_arg_ty, &resolved_param_ty);
                                 if !numeric_coerced
@@ -3903,12 +3915,12 @@ impl TypeChecker {
 
                 // Check argument types and mark as moved
                 for (arg_expr, param) in call_expr.args.iter().zip(func_decl_params.iter()) {
-                    let arg_ty = self.check_expr(arg_expr)?;
-                    let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
                     let resolved_param_ty = substitute_generic_types_impl(
                         &self.resolve_type_name(&param.ty)?,
                         &generic_substitutions,
                     );
+                    let arg_ty = self.check_expr_with_expected(arg_expr, &resolved_param_ty)?;
+                    let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
 
                     // Special case: allow string literals to be passed as *u8 for extern functions
                     // This enables calling C functions like printf with string literals
@@ -4184,9 +4196,9 @@ impl TypeChecker {
 
                 // Check argument types
                 for (arg_expr, param) in desugared_call.args.iter().zip(params.iter()) {
-                    let arg_ty = self.check_expr(arg_expr)?;
-                    let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
                     let resolved_param_ty = self.resolve_type_name(&param.ty)?;
+                    let arg_ty = self.check_expr_with_expected(arg_expr, &resolved_param_ty)?;
+                    let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
 
                     // Check for numeric coercion and type equality
                     let types_match =

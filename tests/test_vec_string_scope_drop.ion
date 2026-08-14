@@ -1,0 +1,7 @@
+// Vec<String> scope-exit drop must free each element's heap buffer.
+fn main() -> int {
+    let mut v: Vec<String> = Vec::new();
+    Vec::push(&mut v, String::from("one"));
+    Vec::push(&mut v, String::from("two"));
+    return 0;
+}

@@ -1,0 +1,20 @@
+// Option::None infers T in a non-final call-argument position.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn take2(x: int, o: Option<int>) -> int {
+    match o {
+        Option::Some(v) => {
+            return x + v;
+        }
+        Option::None => {
+            return x;
+        }
+    }
+}
+
+fn main() -> int {
+    return take2(5, Option::None);
+}

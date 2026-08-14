@@ -84,6 +84,9 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_defer_basic.ion` - Defer statements
 - `test_defer_block.ion` - Block-scoped defer
 - `test_scope_drop_block.ion` - Automatic Vec drop at block exit
+- `test_vec_string_scope_drop.ion` - `Vec<String>` scope-exit drop frees each `String` then the backing array (exit 0); cgen asserts element `ion_string_free` and `ion_vec_free`; Linux CI leak-sanitizer
+- `test_vec_struct_string_scope_drop.ion` - struct field `Vec<String>` drops elements then the array (exit 0)
+- `test_box_string_scope_drop.ion` - `Box<String>` drops the `String` then `ion_box_free` (exit 0); Linux CI leak-sanitizer
 - `test_struct_field_drop.ion` - Struct and enum field drops at block exit (nested String fields, enum payload)
 - `test_struct_field_drop_vec.ion` - Struct field holding `Vec<int>` drop at block exit (exit 46)
 - `test_struct_field_drop_box.ion` - Box field drop at block exit (exit 44)
@@ -112,6 +115,9 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_enum_generic_unannotated_let.ion` - unannotated `let x = Option::Some(42)` types as `Option<int>` (exit 42); cgen asserts `Option_int x =`
 - `test_option_none_unannotated_error.ion` - `let empty = Option::None` then use as `Option<Box<Node>>` needs a type annotation (`cannot infer type parameter`)
 - `test_option_none_struct_field.ion` - `Node { next: Option::None }` infers `T` from the field (exit 2)
+- `test_option_none_call_arg.ion` - `take(Option::None)` infers `T` from the parameter (exit 3)
+- `test_option_none_call_arg_middle.ion` - `take2(5, Option::None)` infers `T` in a non-final argument (exit 5)
+- `test_result_err_call_arg.ion` - `take(Result::Err(7))` infers `T` from the parameter (exit 7)
 - `test_unannotated_let_non_int.ion` - unannotated `let q = p` / `let n = w.p` / `let v = origin()` keep struct types, not default int (exit 5); cgen asserts `Point q =` / `Point n =` / `Point v =`
 - `test_enum_generic.ion` - Generic enum types
 - `test_result_custom_enum.ion` - `Result<int, MyError>` via `stdlib/result.ion` (Ok and Err, exit 0)
@@ -412,7 +418,7 @@ Special cases (not in the manifest):
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
 - `ION_BUILD`: Path to the ion-build binary (default: `../target/release/ion-build`)
 - `CC`: C compiler to use (default: `gcc`)
-- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`) and a leak-sanitizer step (`detect_leaks=1`) on `Box::unwrap` tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux.
+- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`) and a leak-sanitizer step (`detect_leaks=1`) on `Box::unwrap` tests plus `Vec<String>` / `Box<String>` scope-drop tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux.
 - `LDFLAGS`: Extra C linker flags for generated test executables (default: empty). Pair with `CFLAGS` for sanitizer runtime flags when needed.
 - `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 

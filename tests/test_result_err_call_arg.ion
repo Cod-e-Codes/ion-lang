@@ -1,0 +1,17 @@
+// Result::Err infers T from the parameter type; E comes from the payload.
+import "stdlib/result.ion" as result;
+
+fn take(r: Result<int, int>) -> int {
+    match r {
+        Result::Ok(v) => {
+            return v;
+        }
+        Result::Err(e) => {
+            return e;
+        }
+    }
+}
+
+fn main() -> int {
+    return take(Result::Err(7));
+}

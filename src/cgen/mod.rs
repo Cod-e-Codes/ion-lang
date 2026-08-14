@@ -586,6 +586,8 @@ impl Codegen {
             }
         }
 
+        self.emit_named_drop_functions();
+
         // Generate extern function prototypes
         for extern_block in &program.extern_blocks {
             self.generate_extern_block(extern_block);
@@ -912,6 +914,8 @@ impl Codegen {
                 }
             }
         }
+
+        self.emit_named_drop_functions();
 
         // Generate extern function prototypes (declarations only, implementations come from headers)
         for extern_block in &program.extern_blocks {
@@ -3247,8 +3251,8 @@ impl Codegen {
                             self.write(")");
                             continue;
                         }
-                        if matches!(param_ty, Some(Type::String)) {
-                            self.generate_expr_with_type(arg, Some(&Type::String));
+                        if let Some(ref pty) = param_ty {
+                            self.generate_expr_with_type(arg, Some(pty));
                         } else {
                             self.generate_expr(arg);
                         }
