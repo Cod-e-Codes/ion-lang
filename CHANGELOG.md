@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.20 - 2026-08-14
+
+- **Type checker**: `send(&tx, Option::None)` infers `T` from `Sender<T>`, and `Box::new(Option::None)` infers from an expected `Box<Option<...>>`. This impacts passing unannotated no-payload generic variants into `send` or `Box::new` (user-function call arguments already inferred in 0.1.19). Unannotated `let empty = Option::None` still requires an annotation.
+- **Tests**: `test_send_option_none.ion`, `test_send_result_err.ion`, `test_box_new_option_none.ion`.
+- **Docs**: ION_SPEC §4.4 / §7.2, bug hotspots, verified patterns.
+
 ## 0.1.19 - 2026-08-13
 
 - **Codegen**: `Vec<T>` scope-exit drop now drops remaining elements when `T` needs destruction, then `ion_vec_free`. This impacts any `Vec<String>`, `Vec<Vec<U>>`, or `Vec` of structs/enums with owned fields (previously the backing array was freed and elements leaked). `Vec::get` of such `T` hollows the slot (already specified as move-out). `Vec::set` drops the previous element. `Vec<int>` and other Copy elements are unchanged. `Box<T>` drops `T` before `ion_box_free` when `T` needs destruction; `Box::unwrap` still does not drop `T`.

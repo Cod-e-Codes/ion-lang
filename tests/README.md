@@ -118,6 +118,9 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_option_none_call_arg.ion` - `take(Option::None)` infers `T` from the parameter (exit 3)
 - `test_option_none_call_arg_middle.ion` - `take2(5, Option::None)` infers `T` in a non-final argument (exit 5)
 - `test_result_err_call_arg.ion` - `take(Result::Err(7))` infers `T` from the parameter (exit 7)
+- `test_send_option_none.ion` - `send(&tx, Option::None)` infers `T` from `Sender<Option<int>>` (exit 0)
+- `test_send_result_err.ion` - `send(&tx, Result::Err(4))` infers `T` from `Sender<Result<int, int>>` (exit 4)
+- `test_box_new_option_none.ion` - `Box::new(Option::None)` infers from expected `Box<Option<int>>` (exit 0)
 - `test_unannotated_let_non_int.ion` - unannotated `let q = p` / `let n = w.p` / `let v = origin()` keep struct types, not default int (exit 5); cgen asserts `Point q =` / `Point n =` / `Point v =`
 - `test_enum_generic.ion` - Generic enum types
 - `test_result_custom_enum.ion` - `Result<int, MyError>` via `stdlib/result.ion` (Ok and Err, exit 0)
@@ -258,6 +261,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_channel_string.ion` - `channel<String>` send/recv; IR recv uses `String` element type (exit 3)
 - `test_channel_send_call_expr.ion` - `send(&tx, make())` with non-lvalue operand codegen (exit 7)
 - `test_channel_send_field_call_expr.ion` - `send(&tx, make_pair().x)` temps field of call result (exit 11)
+- `test_send_option_none.ion` - `send(&tx, Option::None)` infers from `Sender<T>` (exit 0); also listed under Enums
 - `test_enum_struct_variant.ion` - Struct-style enum variants with named fields
 - `test_for_loop.ion` - `for...in` loop syntax with Vec iteration
 

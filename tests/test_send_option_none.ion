@@ -1,0 +1,18 @@
+// send(&tx, Option::None) infers T from Sender<Option<int>>.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<Option<int>>, Receiver<Option<int>>) = channel<Option<int>>();
+    send(&tx, Option::None);
+    match recv(&mut rx) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

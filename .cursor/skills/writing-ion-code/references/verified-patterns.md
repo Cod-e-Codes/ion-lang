@@ -22,7 +22,7 @@ let p: Point = Point { x: 1, y: 2 };
 
 ## Enum variants
 
-Tuple: `Option::Some(42)`, `Option::None`. `take(Option::None)` infers `T` from the parameter type ([tests/test_option_none_call_arg.ion](../../../../tests/test_option_none_call_arg.ion)); unannotated `let empty = Option::None` still needs an annotation.
+Tuple: `Option::Some(42)`, `Option::None`. `take(Option::None)` infers `T` from the parameter type ([tests/test_option_none_call_arg.ion](../../../../tests/test_option_none_call_arg.ion)); `send(&tx, Option::None)` infers from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)); `Box::new(Option::None)` infers from an expected `Box<Option<...>>` ([tests/test_box_new_option_none.ion](../../../../tests/test_box_new_option_none.ion)); unannotated `let empty = Option::None` still needs an annotation.
 
 Struct: `Status::Ok { value: 10 }`.
 
@@ -383,7 +383,7 @@ Multi-file mode prefixes each module's C symbols (`io_print_int`, `fmt_print_int
 
 ## Channel send expressions
 
-`send(&tx, make())` is valid ([tests/test_channel_send_call_expr.ion](../../../../tests/test_channel_send_call_expr.ion)). Use `send(&tx, value)` and `recv(&mut rx)` (see [examples/spawn_channel/spawn_channel.ion](../../../../examples/spawn_channel/spawn_channel.ion)).
+`send(&tx, make())` is valid ([tests/test_channel_send_call_expr.ion](../../../../tests/test_channel_send_call_expr.ion)). `send(&tx, Option::None)` infers `T` from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)). Use `send(&tx, value)` and `recv(&mut rx)` (see [examples/spawn_channel/spawn_channel.ion](../../../../examples/spawn_channel/spawn_channel.ion)).
 
 ## if / ownership merge
 

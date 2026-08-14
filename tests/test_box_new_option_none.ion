@@ -1,0 +1,17 @@
+// Box::new(Option::None) infers T from the expected Box<Option<int>>.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let b: Box<Option<int>> = Box::new(Option::None);
+    match Box::unwrap(b) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

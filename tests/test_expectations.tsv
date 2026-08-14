@@ -62,6 +62,11 @@ test_option_none_call_arg.ion	run	3
 test_option_none_call_arg.ion	cgen			take((Option_int)
 test_option_none_call_arg_middle.ion	run	5
 test_result_err_call_arg.ion	run	7
+test_send_option_none.ion	run	0
+test_send_option_none.ion	cgen			Option_int _send_val
+test_send_result_err.ion	run	4
+test_box_new_option_none.ion	run	0
+test_box_new_option_none.ion	cgen			(Option_int)
 test_vec_string_scope_drop.ion	run	0
 test_vec_string_scope_drop.ion	cgen			ion_string_free(((ion_string_t**)((v)->data))
 test_vec_string_scope_drop.ion	cgen			ion_vec_free((ion_vec_t*)(v))

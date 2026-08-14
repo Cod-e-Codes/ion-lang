@@ -671,7 +671,7 @@ Ion supports a **local, Hindley–Milner-inspired inference**:
 The inference engine is intentionally limited:
 
 - No higher-rank polymorphism.
-- Generic enum variants with no payload (`Option::None`) infer type arguments only from an adjacent expected type (a `let` annotation, a struct field, a function parameter / call argument, or a return type). They do not take `T` from a later statement; without that context the compiler requires an annotation.
+- Generic enum variants with no payload (`Option::None`) infer type arguments only from an adjacent expected type (a `let` annotation, a struct field, a function parameter / call argument including built-in value parameters such as `send` and `Box::new`, or a return type). They do not take `T` from a later statement; without that context the compiler requires an annotation.
 - Generic type parameters may declare optional **trait bounds** (`Copy`, `Eq`, `Send`). Bounds are checked at monomorphization: each concrete instantiation must satisfy every bound on the corresponding parameter. There are no user-defined traits; bounds name structural capabilities checked by the compiler (see Section 4.8).
 - Structural `Send` still applies per instantiation even without an explicit bound: for a generic type `Wrapper<T>`, each monomorphized `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`.
 
@@ -999,7 +999,7 @@ Semantics:
 
 - `channel<T>()` is a built-in that returns `(Sender<T>, Receiver<T>)`. It takes no arguments. Element type `T` must be `Send`. The runtime buffer capacity is fixed at **1** slot per channel in the current compiler.
 - `Sender<T>` and `Receiver<T>` are move-only value types (not pointers).
-- `send(&tx, value)` moves a value into the channel. Requires `&Sender<T>`.
+- `send(&tx, value)` moves a value into the channel. Requires `&Sender<T>`. The value is checked against `T`, so `send(&tx, Option::None)` infers from the sender.
 - `recv(&mut rx)` moves a value out of the channel. Requires `&mut Receiver<T>`. Blocks until a value is available.
 - `send` blocks when the buffer is full; `recv` blocks when empty.
 - Tuple destructuring is supported: `let (tx, rx) = channel<int>();`
