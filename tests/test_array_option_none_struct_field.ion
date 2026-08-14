@@ -1,0 +1,21 @@
+// Array literal elements infer Option::None from a struct field type.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Holder {
+    a: [Option<int>; 1];
+}
+
+fn main() -> int {
+    let h: Holder = Holder { a: [Option::None] };
+    match h.a[0] {
+        Option::Some(_) => {
+            return 1;
+        }
+        Option::None => {
+            return 7;
+        }
+    }
+}

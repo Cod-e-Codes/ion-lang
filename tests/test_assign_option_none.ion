@@ -1,0 +1,18 @@
+// Assignment infers Option::None from the already-typed left-hand side.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut x: Option<int> = Option::Some(1);
+    x = Option::None;
+    match x {
+        Option::Some(_) => {
+            return 1;
+        }
+        Option::None => {
+            return 11;
+        }
+    }
+}

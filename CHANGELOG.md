@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.21 - 2026-08-14
+
+- **Type checker / Codegen**: array, tuple, and `[value; N]` elements, assignment, returned compounds, and enum variant payloads now check against the adjacent expected type (same `expr_expected` helper as struct fields, call arguments, `send`, and `Box::new`). This impacts `let a: [Option<int>; 1] = [Option::None]`, `(Option::None, 1)`, `[Option::Some(4)]` (emits `Option_int`, not bare `(Option)`), `x = Option::None`, `return [Option::None]`, and `Result::Err(Option::None)` as a compound element. Unannotated `let empty = Option::None` still requires an annotation.
+- **Tests**: `test_array_option_none.ion`, `test_tuple_option_none.ion`, `test_array_option_some.ion`, `test_array_repeat_option_none.ion`, `test_array_option_none_call_arg.ion`, `test_array_option_none_struct_field.ion`, `test_array_of_tuples_option_none.ion`, `test_tuple_of_arrays_option_none.ion`, `test_array_result_err.ion`, `test_assign_option_none.ion`, `test_return_array_option_none.ion`. Filtered `test_runner.sh` skips non-matching TSV rows without a `tr` process per field; a `.ion` filter is exact and a bare stem stays a substring.
+- **Docs**: ION_SPEC §4.4, bug hotspots, verified patterns.
+
 ## 0.1.20 - 2026-08-14
 
 - **Type checker**: `send(&tx, Option::None)` infers `T` from `Sender<T>`, and `Box::new(Option::None)` infers from an expected `Box<Option<...>>`. This impacts passing unannotated no-payload generic variants into `send` or `Box::new` (user-function call arguments already inferred in 0.1.19). Unannotated `let empty = Option::None` still requires an annotation.

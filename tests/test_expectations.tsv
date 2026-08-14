@@ -67,6 +67,18 @@ test_send_option_none.ion	cgen			Option_int _send_val
 test_send_result_err.ion	run	4
 test_box_new_option_none.ion	run	0
 test_box_new_option_none.ion	cgen			(Option_int)
+test_array_option_none.ion	run	2
+test_tuple_option_none.ion	run	3
+test_array_option_some.ion	run	4
+test_array_option_some.ion	cgen			(Option_int){	(Option){
+test_array_repeat_option_none.ion	run	5
+test_array_option_none_call_arg.ion	run	6
+test_array_option_none_struct_field.ion	run	7
+test_array_of_tuples_option_none.ion	run	8
+test_tuple_of_arrays_option_none.ion	run	9
+test_array_result_err.ion	run	10
+test_assign_option_none.ion	run	11
+test_return_array_option_none.ion	run	12
 test_vec_string_scope_drop.ion	run	0
 test_vec_string_scope_drop.ion	cgen			ion_string_free(((ion_string_t**)((v)->data))
 test_vec_string_scope_drop.ion	cgen			ion_vec_free((ion_vec_t*)(v))

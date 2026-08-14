@@ -1,0 +1,17 @@
+// Payload-carrying Option in an array must emit Option_int, not bare (Option).
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let a: [Option<int>; 1] = [Option::Some(4)];
+    match a[0] {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}

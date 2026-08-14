@@ -1,0 +1,26 @@
+// Result::Err payload infers Option::None from the adjacent array element type.
+import "stdlib/result.ion" as result;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let a: [Result<int, Option<int>>; 1] = [Result::Err(Option::None)];
+    match a[0] {
+        Result::Ok(_) => {
+            return 1;
+        }
+        Result::Err(e) => {
+            match e {
+                Option::Some(_) => {
+                    return 2;
+                }
+                Option::None => {
+                    return 10;
+                }
+            }
+        }
+    }
+}

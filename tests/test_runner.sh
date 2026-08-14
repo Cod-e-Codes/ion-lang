@@ -6,7 +6,8 @@
 # Usage: ./test_runner.sh [filter ...]
 #   No args: full manifest plus special cases (multifile, ion-build smokes).
 #   Filters match test stems, with or without .ion / tests/ / path prefix.
-#   Substring match: test_enum_unannotated runs test_enum_unannotated_let.ion
+#   A filter that ends in .ion is an exact stem. A bare stem is a substring
+#   (test_enum_unannotated runs test_enum_unannotated_let.ion).
 #   All matching manifest rows run (run, error, and cgen for the same file).
 
 set +e
@@ -105,6 +106,8 @@ test_count=0
 pass_count=0
 fail_count=0
 FILTERS=()
+FILTER_STEMS=()
+FILTER_EXACT=()
 
 usage() {
     cat <<'EOF'
@@ -112,8 +115,9 @@ Usage: ./test_runner.sh [filter ...]
 
   No arguments runs the full suite.
   Each filter matches a test stem (test_foo, test_foo.ion, or tests/test_foo.ion).
-  Matching is by exact stem or substring, so test_enum_unannotated selects
-  test_enum_unannotated_let.ion. Every matching manifest row runs (run, error, cgen).
+  A filter ending in .ion is exact. A bare stem is a substring, so
+  test_enum_unannotated selects test_enum_unannotated_let.ion.
+  Every matching manifest row runs (run, error, cgen). Non-matching rows are skipped.
 
 Special-case stems: test_multifile, test_multi_struct, test_multi_fmt_io,
 build_hello, worker_pool, build_bad_main.
@@ -128,19 +132,36 @@ normalize_test_stem() {
     printf '%s' "$f"
 }
 
+prepare_filters() {
+    FILTER_STEMS=()
+    FILTER_EXACT=()
+    local raw exact
+    for raw in "${FILTERS[@]}"; do
+        exact=0
+        case "$raw" in
+            *.ion|*.ION) exact=1 ;;
+        esac
+        FILTER_STEMS+=("$(normalize_test_stem "$raw")")
+        FILTER_EXACT+=("$exact")
+    done
+}
+
 should_run() {
-    local n=${#FILTERS[@]}
+    local n=${#FILTER_STEMS[@]}
     if [ "$n" -eq 0 ]; then
         return 0
     fi
-    local candidate stem raw f
+    local candidate stem i f
     for candidate in "$@"; do
         stem="$(normalize_test_stem "$candidate")"
-        for raw in "${FILTERS[@]}"; do
-            f="$(normalize_test_stem "$raw")"
+        for i in "${!FILTER_STEMS[@]}"; do
+            f="${FILTER_STEMS[$i]}"
             [ -z "$f" ] && continue
             if [ "$stem" = "$f" ]; then
                 return 0
+            fi
+            if [ "${FILTER_EXACT[$i]}" = "1" ]; then
+                continue
             fi
             case "$stem" in
                 *"$f"*) return 0 ;;
@@ -454,10 +475,6 @@ test_ion_build_bad_main() {
     return 0
 }
 
-strip_cr() {
-    printf '%s' "$1" | tr -d '\r'
-}
-
 resolve_error_pattern() {
     local pattern="$1"
     local exit_code="$2"
@@ -544,17 +561,17 @@ run_manifest() {
     fi
 
     while IFS="$MANIFEST_FS" read -r file kind exit_code error_pattern must_match must_not_match || [ -n "$file" ]; do
-        file="$(strip_cr "$file")"
-        kind="$(strip_cr "$kind")"
-        exit_code="$(strip_cr "$exit_code")"
-        error_pattern="$(strip_cr "$error_pattern")"
-        must_match="$(strip_cr "$must_match")"
-        must_not_match="$(strip_cr "$must_not_match")"
-
+        # Strip CR in-shell. Do not pipe each field through `tr` (Git Bash spawn cost).
+        file="${file//$'\r'/}"
         [ "$file" = "file" ] && continue
         [ -z "$file" ] && continue
-        [ ! -f "$file" ] && continue
         should_run "$file" || continue
+        [ ! -f "$file" ] && continue
+        kind="${kind//$'\r'/}"
+        exit_code="${exit_code//$'\r'/}"
+        error_pattern="${error_pattern//$'\r'/}"
+        must_match="${must_match//$'\r'/}"
+        must_not_match="${must_not_match//$'\r'/}"
 
         case "$kind" in
             run)
@@ -591,6 +608,8 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+prepare_filters
 
 echo "Ion Compiler Test Harness"
 echo "========================="

@@ -20,7 +20,7 @@ Or from the project root:
 cd tests && ./test_runner.sh
 ```
 
-To run a subset, pass stems (with or without `.ion`). Matching is exact or substring; every matching manifest row runs (`run`, `error`, `cgen`):
+To run a subset, pass stems. A name ending in `.ion` matches that file only. A bare stem is a substring (`test_enum_unannotated` also runs `test_enum_unannotated_let.ion`). Every matching manifest row runs (`run`, `error`, `cgen`); other rows are skipped:
 
 ```bash
 cd tests && ./test_runner.sh test_enum_unannotated_let.ion
@@ -121,6 +121,17 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_send_option_none.ion` - `send(&tx, Option::None)` infers `T` from `Sender<Option<int>>` (exit 0)
 - `test_send_result_err.ion` - `send(&tx, Result::Err(4))` infers `T` from `Sender<Result<int, int>>` (exit 4)
 - `test_box_new_option_none.ion` - `Box::new(Option::None)` infers from expected `Box<Option<int>>` (exit 0)
+- `test_array_option_none.ion` - `[Option::None]` infers `T` from `[Option<int>; 1]` (exit 2)
+- `test_tuple_option_none.ion` - `(Option::None, 3)` infers `T` from `(Option<int>, int)` (exit 3)
+- `test_array_option_some.ion` - `[Option::Some(4)]` type-checks and emits `Option_int` not bare `(Option)` (exit 4)
+- `test_array_repeat_option_none.ion` - `[Option::None; 1]` infers from `[Option<int>; 1]` (exit 5)
+- `test_array_option_none_call_arg.ion` - array literal argument infers from the parameter type (exit 6)
+- `test_array_option_none_struct_field.ion` - array literal field infers from the struct field type (exit 7)
+- `test_array_of_tuples_option_none.ion` - `[(Option::None, 8)]` nested array-of-tuples (exit 8)
+- `test_tuple_of_arrays_option_none.ion` - `([Option::None], 9)` nested tuple-of-arrays (exit 9)
+- `test_array_result_err.ion` - `[Result::Err(Option::None)]` infers payload from the array element type (exit 10)
+- `test_assign_option_none.ion` - `x = Option::None` infers from the left-hand side type (exit 11)
+- `test_return_array_option_none.ion` - `return [Option::None]` infers from the function return type (exit 12)
 - `test_unannotated_let_non_int.ion` - unannotated `let q = p` / `let n = w.p` / `let v = origin()` keep struct types, not default int (exit 5); cgen asserts `Point q =` / `Point n =` / `Point v =`
 - `test_enum_generic.ion` - Generic enum types
 - `test_result_custom_enum.ion` - `Result<int, MyError>` via `stdlib/result.ion` (Ok and Err, exit 0)
