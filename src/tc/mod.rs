@@ -3120,7 +3120,7 @@ impl TypeChecker {
                     }
                 };
 
-                let value_type = self.check_expr(&send_expr.value)?;
+                let value_type = self.check_expr_with_expected(&send_expr.value, &elem_type)?;
                 if !types_equal(&value_type, &elem_type) {
                     return Err(TypeCheckError::TypeMismatch {
                         expected: type_to_string(&elem_type),

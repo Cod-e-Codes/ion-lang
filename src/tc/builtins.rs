@@ -18,7 +18,18 @@ impl TypeChecker {
                     span: call_expr.span,
                 });
             }
-            let value_ty = self.check_expr(&call_expr.args[0])?;
+            let expected_inner = match &self.expr_expected {
+                Some(Type::Box { inner }) => Some(inner.as_ref().clone()),
+                _ => match &self.current_return_type {
+                    Some(Type::Box { inner }) => Some(inner.as_ref().clone()),
+                    _ => None,
+                },
+            };
+            let value_ty = if let Some(inner) = &expected_inner {
+                self.check_expr_with_expected(&call_expr.args[0], inner)?
+            } else {
+                self.check_expr(&call_expr.args[0])?
+            };
             let box_ty = Type::Box {
                 inner: Box::new(value_ty),
             };

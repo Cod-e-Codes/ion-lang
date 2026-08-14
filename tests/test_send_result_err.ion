@@ -1,0 +1,15 @@
+// send(&tx, Result::Err(...)) infers T from Sender<Result<T, E>>.
+import "stdlib/result.ion" as result;
+
+fn main() -> int {
+    let (tx, rx): (Sender<Result<int, int>>, Receiver<Result<int, int>>) = channel<Result<int, int>>();
+    send(&tx, Result::Err(4));
+    match recv(&mut rx) {
+        Result::Ok(v) => {
+            return v;
+        }
+        Result::Err(e) => {
+            return e;
+        }
+    }
+}

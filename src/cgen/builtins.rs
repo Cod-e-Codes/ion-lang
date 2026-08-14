@@ -34,7 +34,7 @@ impl Codegen {
             // Generate the argument expression
             let mut arg_code = String::new();
             let old_output = std::mem::replace(&mut self.output, arg_code);
-            self.generate_expr(&args[0]);
+            self.generate_expr_with_type(&args[0], Some(inner_type));
             arg_code = std::mem::replace(&mut self.output, old_output);
             code.push_str(&arg_code);
             code.push_str("; } ptr; })");

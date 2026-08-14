@@ -2590,7 +2590,7 @@ impl Codegen {
                         let needs_temp = !is_send_value_lvalue(value);
                         if needs_temp {
                             self.write(&format!("{} _send_val = ", self.type_to_c(value_type)));
-                            self.generate_expr(value);
+                            self.generate_expr_with_type(value, Some(value_type));
                             self.write("; ");
                         }
                         self.write("ion_channel_send(");
@@ -2830,7 +2830,7 @@ impl Codegen {
                 let needs_temp = !is_send_value_lvalue(value);
                 if needs_temp {
                     self.write(&format!("{} _send_val = ", self.type_to_c(value_type)));
-                    self.generate_expr(value);
+                    self.generate_expr_with_type(value, Some(value_type));
                     self.write("; ");
                 }
                 self.write("ion_channel_send(");
