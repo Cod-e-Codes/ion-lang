@@ -3,9 +3,9 @@ mod drop;
 mod types;
 
 use self::types::{
-    fn_type_to_c_decl, fn_type_to_c_function_header, format_ret_val_decl, mangle_module_callee,
-    mangle_type_name, resolve_type_alias, ret_val_decl, substitute_type_params, tuple_type_name,
-    type_to_c_impl, type_to_c_return_type,
+    array_type_name, fn_type_to_c_decl, fn_type_to_c_function_header, format_ret_val_decl,
+    mangle_module_callee, mangle_type_name, resolve_type_alias, ret_val_decl,
+    substitute_type_params, tuple_type_name, type_to_c_impl, type_to_c_return_type,
 };
 
 use crate::ast::{
@@ -405,73 +405,19 @@ impl Codegen {
 
         self.generic_instantiations = resolved_instantiations;
 
+        let array_typedefs = collect_array_typedefs(program);
+
         // Vec and slice typedefs must precede struct fields that reference them.
         // Tuple typedefs wait until generic enums (e.g. Option_int) are complete types.
         self.emit_vec_slice_typedefs(program);
+        self.emit_ready_array_typedefs(&array_typedefs);
 
-        // Enums before structs so struct fields can use enum types by value.
-        for e in &program.enums {
-            if e.generics.is_empty() {
-                self.generate_enum_type(e);
-            }
-        }
-
-        // Forward-declare non-generic structs so Option<Box<Node>> can mention Node*
-        // before the Node body exists.
-        for s in &program.structs {
-            if s.generics.is_empty() {
-                self.writeln(&format!("typedef struct {} {};", s.name, s.name));
-            }
-        }
-        if program.structs.iter().any(|s| s.generics.is_empty()) {
-            self.writeln("");
-        }
+        // Forwards so Option<Box<Node>> / Option<&Op> can mention Node* / Op*
+        // before those bodies exist.
+        self.emit_non_generic_type_forwards(program);
 
         // Ensure Option template is available for monomorphization (builtin or user).
-        if !self.enum_map.contains_key("Option") {
-            let option_template = EnumDecl {
-                doc: None,
-                pub_: false,
-                name: "Option".to_string(),
-                generics: vec![TypeParam::simple("T")],
-                variants: vec![
-                    EnumVariant {
-                        doc: None,
-                        name: "Some".to_string(),
-                        payload_types: vec![Type::Generic {
-                            name: "T".to_string(),
-                            params: vec![],
-                        }],
-                        named_fields: None,
-                        span: Span {
-                            start: 0,
-                            end: 0,
-                            line: 0,
-                            column: 0,
-                        },
-                    },
-                    EnumVariant {
-                        doc: None,
-                        name: "None".to_string(),
-                        payload_types: vec![],
-                        named_fields: None,
-                        span: Span {
-                            start: 0,
-                            end: 0,
-                            line: 0,
-                            column: 0,
-                        },
-                    },
-                ],
-                span: Span {
-                    start: 0,
-                    end: 0,
-                    line: 0,
-                    column: 0,
-                },
-            };
-            self.enum_map.insert("Option".to_string(), option_template);
-        }
+        self.ensure_option_template();
 
         self.emit_monomorphized_enum_forwards();
 
@@ -524,6 +470,17 @@ impl Codegen {
             self.generated_types.insert(key, true);
         }
 
+        self.emit_ready_array_typedefs(&array_typedefs);
+
+        // Non-generic enums after Option_int and peers so payloads like Option<int>
+        // are complete C types (Hold { H(Option<int>) }).
+        for e in &program.enums {
+            if e.generics.is_empty() {
+                self.generate_enum_type(e);
+            }
+        }
+        self.emit_ready_array_typedefs(&array_typedefs);
+
         self.emit_tuple_typedefs(program);
 
         for (decl, params) in struct_instantiations {
@@ -533,6 +490,7 @@ impl Codegen {
         }
 
         self.emit_non_generic_struct_bodies(program);
+        self.emit_ready_array_typedefs(&array_typedefs);
 
         let mut late_pending: Vec<(EnumDecl, Vec<Type>)> = late_enum_instantiations;
         for (key, params) in late_option_types {
@@ -543,6 +501,7 @@ impl Codegen {
             late_pending.push((option_decl, params));
         }
         self.emit_enum_instantiations_ready_first(late_pending);
+        self.emit_ready_array_typedefs(&array_typedefs);
 
         // Collect and generate Vec type definitions
         let mut vec_types = std::collections::HashSet::new();
@@ -632,6 +591,8 @@ impl Codegen {
                 }
             }
         }
+
+        self.emit_ready_array_typedefs(&array_typedefs);
 
         self.emit_named_drop_functions();
 
@@ -759,10 +720,53 @@ impl Codegen {
         collect_generic_instantiations(program, &mut generic_instantiations_map);
         self.generic_instantiations = generic_instantiations_map.clone();
 
-        self.emit_vec_slice_typedefs(program);
-        self.emit_tuple_typedefs(program);
+        let array_typedefs = collect_array_typedefs(program);
 
+        self.emit_vec_slice_typedefs(program);
+        self.emit_ready_array_typedefs(&array_typedefs);
+
+        self.emit_non_generic_type_forwards(program);
+        self.ensure_option_template();
         self.emit_monomorphized_enum_forwards();
+
+        let mut instantiations_vec: Vec<_> = generic_instantiations_map.values().collect();
+        instantiations_vec.sort_by_key(|(name, _)| name.clone());
+
+        let mut struct_instantiations: Vec<(StructDecl, Vec<Type>)> = Vec::new();
+        let mut early_enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
+        let mut late_enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
+
+        for (base_name, params) in instantiations_vec {
+            let base_name_clone = base_name.clone();
+            let params_clone = params.clone();
+
+            if let Some(decl) = self.struct_map.get(&base_name_clone) {
+                struct_instantiations.push((decl.clone(), params_clone));
+            } else if let Some(decl) = self.enum_map.get(&base_name_clone) {
+                if params_complete_with_struct_forwards(&params_clone) {
+                    early_enum_instantiations.push((decl.clone(), params_clone));
+                } else {
+                    late_enum_instantiations.push((decl.clone(), params_clone));
+                }
+            }
+        }
+
+        for (decl, params) in &early_enum_instantiations {
+            self.generate_monomorphized_enum(decl, params);
+            let key = mangle_type_name(&decl.name, params);
+            self.generated_types.insert(key, true);
+        }
+        for (key, (base_name, params)) in &generic_instantiations_map.clone() {
+            if base_name == "Option"
+                && !self.generated_types.contains_key(key)
+                && params_complete_with_struct_forwards(params)
+            {
+                let option_decl = self.enum_map.get("Option").unwrap().clone();
+                self.generate_monomorphized_enum(&option_decl, params);
+                self.generated_types.insert(key.clone(), true);
+            }
+        }
+        self.emit_ready_array_typedefs(&array_typedefs);
 
         for s in &program.structs {
             if s.generics.is_empty() {
@@ -792,84 +796,27 @@ impl Codegen {
                 self.generate_enum_type(e);
             }
         }
+        self.emit_ready_array_typedefs(&array_typedefs);
 
-        // Generate monomorphized struct/enum types
-        let mut instantiations_vec: Vec<_> = generic_instantiations_map.values().collect();
-        instantiations_vec.sort_by_key(|(name, _)| name.clone());
-
-        let mut struct_instantiations: Vec<(StructDecl, Vec<Type>)> = Vec::new();
-        let mut enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
-
-        for (base_name, params) in instantiations_vec {
-            let base_name_clone = base_name.clone();
-            let params_clone = params.clone();
-
-            if let Some(decl) = self.struct_map.get(&base_name_clone) {
-                struct_instantiations.push((decl.clone(), params_clone));
-            } else if let Some(decl) = self.enum_map.get(&base_name_clone) {
-                enum_instantiations.push((decl.clone(), params_clone));
-            }
-        }
+        self.emit_tuple_typedefs(program);
 
         for (decl, params) in struct_instantiations {
+            let key = mangle_type_name(&decl.name, &params);
             self.generate_monomorphized_struct(&decl, &params);
+            self.generated_types.insert(key, true);
         }
-        for (decl, params) in enum_instantiations {
-            self.generate_monomorphized_enum(&decl, &params);
-        }
+        self.emit_enum_instantiations_ready_first(late_enum_instantiations);
+        self.emit_ready_array_typedefs(&array_typedefs);
 
-        // Handle built-in generic enums like Option<T> that aren't in enum_map
-        for (key, (base_name, params)) in &generic_instantiations_map {
-            if base_name == "Option"
-                && !self.enum_map.contains_key("Option")
-                && !self.generated_types.contains_key(key)
-            {
-                // Create a synthetic EnumDecl for Option<T>
-                let option_decl = EnumDecl {
-                    doc: None,
-                    pub_: false,
-                    name: "Option".to_string(),
-                    generics: vec![TypeParam::simple("T")],
-                    variants: vec![
-                        EnumVariant {
-                            doc: None,
-                            name: "Some".to_string(),
-                            payload_types: vec![Type::Generic {
-                                name: "T".to_string(),
-                                params: vec![],
-                            }],
-                            named_fields: None,
-                            span: Span {
-                                start: 0,
-                                end: 0,
-                                line: 0,
-                                column: 0,
-                            },
-                        },
-                        EnumVariant {
-                            doc: None,
-                            name: "None".to_string(),
-                            payload_types: vec![],
-                            named_fields: None,
-                            span: Span {
-                                start: 0,
-                                end: 0,
-                                line: 0,
-                                column: 0,
-                            },
-                        },
-                    ],
-                    span: Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        column: 0,
-                    },
-                };
+        // Remaining Option instantiations that needed complete struct payloads.
+        for (key, (base_name, params)) in &generic_instantiations_map.clone() {
+            if base_name == "Option" && !self.generated_types.contains_key(key) {
+                let option_decl = self.enum_map.get("Option").unwrap().clone();
                 self.generate_monomorphized_enum(&option_decl, params);
                 self.generated_types.insert(key.clone(), true);
             }
         }
+        self.emit_ready_array_typedefs(&array_typedefs);
 
         // Collect and generate Vec type definitions
         let mut vec_types = std::collections::HashSet::new();
@@ -959,6 +906,8 @@ impl Codegen {
                 }
             }
         }
+
+        self.emit_ready_array_typedefs(&array_typedefs);
 
         self.emit_named_drop_functions();
 
@@ -1050,6 +999,43 @@ impl Codegen {
         self.writeln("#include <stdint.h>");
         self.writeln("#include \"ion_runtime.h\"");
         self.writeln("");
+
+        let mut header_arrays: HashMap<String, Type> = HashMap::new();
+        for s in &program.structs {
+            if s.pub_ {
+                for field in &s.fields {
+                    collect_array_from_type(&field.ty, &mut header_arrays);
+                }
+            }
+        }
+        for e in &program.enums {
+            if e.pub_ {
+                for variant in &e.variants {
+                    for ty in &variant.payload_types {
+                        collect_array_from_type(ty, &mut header_arrays);
+                    }
+                    if let Some(fields) = &variant.named_fields {
+                        for (_, ty) in fields {
+                            collect_array_from_type(ty, &mut header_arrays);
+                        }
+                    }
+                }
+            }
+        }
+        for f in &program.functions {
+            if !f.pub_ {
+                continue;
+            }
+            if let Some(ret) = &f.return_type {
+                collect_array_from_type(ret, &mut header_arrays);
+            }
+            for p in &f.params {
+                collect_array_from_type(&p.ty, &mut header_arrays);
+            }
+        }
+        let mut header_array_typedefs: Vec<(String, Type)> = header_arrays.into_iter().collect();
+        header_array_typedefs.sort_by(|a, b| a.0.cmp(&b.0));
+        self.emit_ready_array_typedefs(&header_array_typedefs);
 
         // Generate public struct definitions
         for s in &program.structs {
@@ -3304,10 +3290,9 @@ impl Codegen {
                         }
                         if let Some(ref pty) = param_ty {
                             if matches!(arg, IREexpr::ArrayLiteral { .. })
-                                && let Type::Array { inner, size } = pty
+                                && let Type::Array { .. } = pty
                             {
-                                let elem_c = self.type_to_c(inner);
-                                self.write(&format!("({}[{}])", elem_c, size));
+                                self.write(&format!("({})", self.type_to_c(pty)));
                             }
                             self.generate_expr_with_type(arg, Some(pty));
                         } else {
@@ -3770,6 +3755,7 @@ impl Codegen {
         self.indent_level -= 1;
         self.writeln(&format!("}} {};", enum_name));
         self.writeln("");
+        self.generated_types.insert(enum_name.clone(), true);
     }
 
     fn generate_extern_block(&mut self, extern_block: &ExternBlock) {
@@ -4273,14 +4259,14 @@ impl Codegen {
                                     // Extract field into binding variable
                                     // For struct variants, fields are stored in variant_N.field_name
                                     self.write_indent();
-                                    self.write(&format!(
-                                        "{} {} = {}.data.variant_{}.{};",
-                                        self.type_to_c(&concrete_field_ty),
+                                    self.emit_binding_from_c_expr(
+                                        &concrete_field_ty,
                                         name,
-                                        match_var_name,
-                                        variant_idx,
-                                        field_name
-                                    ));
+                                        &format!(
+                                            "{}.data.variant_{}.{}",
+                                            match_var_name, variant_idx, field_name
+                                        ),
+                                    );
                                     self.writeln("");
                                     self.emit_match_scrutinee_payload_moved_out(
                                         match_var_name,
@@ -4301,14 +4287,14 @@ impl Codegen {
                                     // Nested variant pattern - extract to temp
                                     let temp_name = format!("_field_{}", field_name);
                                     self.write_indent();
-                                    self.write(&format!(
-                                        "{} {} = {}.data.variant_{}.{};",
-                                        self.type_to_c(&concrete_field_ty),
-                                        temp_name,
-                                        match_var_name,
-                                        variant_idx,
-                                        field_name
-                                    ));
+                                    self.emit_binding_from_c_expr(
+                                        &concrete_field_ty,
+                                        &temp_name,
+                                        &format!(
+                                            "{}.data.variant_{}.{}",
+                                            match_var_name, variant_idx, field_name
+                                        ),
+                                    );
                                     self.writeln("");
                                     self.emit_match_scrutinee_payload_moved_out(
                                         match_var_name,
@@ -4367,14 +4353,14 @@ impl Codegen {
                                         self.scope_register_binding(name, inner);
                                     }
                                 } else {
-                                    self.write(&format!(
-                                        "{} {} = {}.data.variant_{}.{};",
-                                        self.type_to_c(&concrete_payload_ty),
+                                    self.emit_binding_from_c_expr(
+                                        &concrete_payload_ty,
                                         name,
-                                        match_var_name,
-                                        variant_idx,
-                                        payload_field
-                                    ));
+                                        &format!(
+                                            "{}.data.variant_{}.{}",
+                                            match_var_name, variant_idx, payload_field
+                                        ),
+                                    );
                                     self.writeln("");
                                     self.emit_match_scrutinee_payload_moved_out(
                                         match_var_name,
@@ -4404,14 +4390,14 @@ impl Codegen {
                                 let payload_field = format!("arg{i}");
                                 let temp_name = format!("_payload_{}", i);
                                 self.write_indent();
-                                self.write(&format!(
-                                    "{} {} = {}.data.variant_{}.{};",
-                                    self.type_to_c(&concrete_payload_ty),
-                                    temp_name,
-                                    match_var_name,
-                                    variant_idx,
-                                    payload_field
-                                ));
+                                self.emit_binding_from_c_expr(
+                                    &concrete_payload_ty,
+                                    &temp_name,
+                                    &format!(
+                                        "{}.data.variant_{}.{}",
+                                        match_var_name, variant_idx, payload_field
+                                    ),
+                                );
                                 self.writeln("");
                                 self.emit_match_scrutinee_payload_moved_out(
                                     match_var_name,
@@ -4426,6 +4412,19 @@ impl Codegen {
                     }
                 }
             }
+        }
+    }
+
+    /// Bind `dest` from a C rvalue. Arrays are not assignable, so copy with memcpy.
+    fn emit_binding_from_c_expr(&mut self, ty: &Type, dest: &str, src: &str) {
+        let c_ty = self.type_to_c(ty);
+        if matches!(ty, Type::Array { .. }) {
+            self.write(&format!("{c_ty} {dest};"));
+            self.writeln("");
+            self.write_indent();
+            self.write(&format!("memcpy(&{dest}, &({src}), sizeof({dest}));"));
+        } else {
+            self.write(&format!("{c_ty} {dest} = {src};"));
         }
     }
 
@@ -4614,6 +4613,254 @@ impl Codegen {
     }
 }
 
+fn visit_enum_payload_types(program: &IRProgram, visit: &mut impl FnMut(&Type)) {
+    for e in &program.enums {
+        for variant in &e.variants {
+            for ty in &variant.payload_types {
+                visit(ty);
+            }
+            if let Some(fields) = &variant.named_fields {
+                for (_, ty) in fields {
+                    visit(ty);
+                }
+            }
+        }
+    }
+}
+
+fn collect_array_typedefs(program: &IRProgram) -> Vec<(String, Type)> {
+    let mut arrays: HashMap<String, Type> = HashMap::new();
+    for function in &program.functions {
+        if let Some(ref ret_ty) = function.return_type {
+            collect_array_from_type(ret_ty, &mut arrays);
+        }
+        for param in &function.params {
+            collect_array_from_type(&param.ty, &mut arrays);
+        }
+        for block in &function.blocks {
+            for stmt in &block.statements {
+                collect_array_from_stmt(stmt, &mut arrays);
+            }
+        }
+    }
+    for s in &program.structs {
+        for field in &s.fields {
+            collect_array_from_type(&field.ty, &mut arrays);
+        }
+    }
+    visit_enum_payload_types(program, &mut |ty| {
+        collect_array_from_type(ty, &mut arrays);
+    });
+    let mut out: Vec<(String, Type)> = arrays.into_iter().collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+fn collect_array_from_type(ty: &Type, arrays: &mut HashMap<String, Type>) {
+    match ty {
+        Type::Array { inner, size } => {
+            arrays.insert(array_type_name(inner, *size), ty.clone());
+            collect_array_from_type(inner, arrays);
+        }
+        Type::Ref { inner, .. }
+        | Type::RawPtr { inner }
+        | Type::Box { inner }
+        | Type::Slice { inner } => collect_array_from_type(inner, arrays),
+        Type::Vec { elem_type }
+        | Type::Channel { elem_type }
+        | Type::Sender { elem_type }
+        | Type::Receiver { elem_type } => collect_array_from_type(elem_type, arrays),
+        Type::Tuple { elements } => {
+            for elem in elements {
+                collect_array_from_type(elem, arrays);
+            }
+        }
+        Type::Generic { params, .. } => {
+            for param in params {
+                collect_array_from_type(param, arrays);
+            }
+        }
+        Type::Fn {
+            params,
+            return_type,
+        } => {
+            for param in params {
+                collect_array_from_type(param, arrays);
+            }
+            collect_array_from_type(return_type, arrays);
+        }
+        _ => {}
+    }
+}
+
+fn collect_array_from_stmt(stmt: &IRStmt, arrays: &mut HashMap<String, Type>) {
+    match stmt {
+        IRStmt::Let(let_stmt) => {
+            collect_array_from_type(&let_stmt.ty, arrays);
+            if let Some(ref init) = let_stmt.init {
+                collect_array_from_expr(init, arrays);
+            }
+        }
+        IRStmt::Return(ret) => {
+            if let Some(ref value) = ret.value {
+                collect_array_from_expr(value, arrays);
+            }
+        }
+        IRStmt::Break | IRStmt::Continue => {}
+        IRStmt::Expr(expr) | IRStmt::Defer(expr) => collect_array_from_expr(expr, arrays),
+        IRStmt::If(ir_if) => {
+            collect_array_from_expr(&ir_if.cond, arrays);
+            for stmt in &ir_if.then_block.statements {
+                collect_array_from_stmt(stmt, arrays);
+            }
+            if let Some(ref else_block) = ir_if.else_block {
+                for stmt in &else_block.statements {
+                    collect_array_from_stmt(stmt, arrays);
+                }
+            }
+        }
+        IRStmt::While(ir_while) => {
+            collect_array_from_expr(&ir_while.cond, arrays);
+            for stmt in &ir_while.body.statements {
+                collect_array_from_stmt(stmt, arrays);
+            }
+            if let Some(ref step) = ir_while.step {
+                for stmt in &step.statements {
+                    collect_array_from_stmt(stmt, arrays);
+                }
+            }
+        }
+        IRStmt::Spawn(spawn) => {
+            for stmt in &spawn.body.statements {
+                collect_array_from_stmt(stmt, arrays);
+            }
+        }
+        IRStmt::UnsafeBlock(unsafe_block) => {
+            for stmt in &unsafe_block.body.statements {
+                collect_array_from_stmt(stmt, arrays);
+            }
+        }
+    }
+}
+
+fn collect_array_from_expr(expr: &IREexpr, arrays: &mut HashMap<String, Type>) {
+    match expr {
+        IREexpr::Call {
+            return_type, args, ..
+        } => {
+            if let Some(ret_ty) = return_type {
+                collect_array_from_type(ret_ty, arrays);
+            }
+            for arg in args {
+                collect_array_from_expr(arg, arrays);
+            }
+        }
+        IREexpr::TupleLit {
+            elem_types,
+            elements,
+            ..
+        } => {
+            for ty in elem_types {
+                collect_array_from_type(ty, arrays);
+            }
+            for elem in elements {
+                collect_array_from_expr(elem, arrays);
+            }
+        }
+        IREexpr::Recv {
+            elem_type, channel, ..
+        } => {
+            collect_array_from_type(elem_type, arrays);
+            collect_array_from_expr(channel, arrays);
+        }
+        IREexpr::FnLiteral(lit) => {
+            for param in &lit.params {
+                collect_array_from_type(&param.ty, arrays);
+            }
+            if let Some(ret) = &lit.return_type {
+                collect_array_from_type(ret, arrays);
+            }
+            for stmt in &lit.body.statements {
+                collect_array_from_stmt(stmt, arrays);
+            }
+        }
+        IREexpr::BinOp { left, right, .. } => {
+            collect_array_from_expr(left, arrays);
+            collect_array_from_expr(right, arrays);
+        }
+        IREexpr::UnOp { operand, .. } | IREexpr::AddressOf { inner: operand, .. } => {
+            collect_array_from_expr(operand, arrays);
+        }
+        IREexpr::Send { channel, value, .. } => {
+            collect_array_from_expr(channel, arrays);
+            collect_array_from_expr(value, arrays);
+        }
+        IREexpr::StructLit { fields, .. } => {
+            for field in fields {
+                collect_array_from_expr(&field.value, arrays);
+            }
+        }
+        IREexpr::FieldAccess { base, .. } => collect_array_from_expr(base, arrays),
+        IREexpr::EnumLit {
+            args, named_fields, ..
+        } => {
+            for arg in args {
+                collect_array_from_expr(arg, arrays);
+            }
+            if let Some(fields) = named_fields {
+                for (_, value) in fields {
+                    collect_array_from_expr(value, arrays);
+                }
+            }
+        }
+        IREexpr::Match { expr, arms, .. } => {
+            collect_array_from_expr(expr, arrays);
+            for arm in arms {
+                for stmt in &arm.body.statements {
+                    collect_array_from_stmt(stmt, arrays);
+                }
+            }
+        }
+        IREexpr::ArrayLiteral {
+            elements, repeat, ..
+        } => {
+            for elem in elements {
+                collect_array_from_expr(elem, arrays);
+            }
+            if let Some((value_expr, _)) = repeat {
+                collect_array_from_expr(value_expr, arrays);
+            }
+        }
+        IREexpr::Index {
+            target,
+            index,
+            target_type,
+        } => {
+            collect_array_from_expr(target, arrays);
+            collect_array_from_expr(index, arrays);
+            if let Some(ty) = target_type {
+                collect_array_from_type(ty, arrays);
+            }
+        }
+        IREexpr::Cast { expr, .. } => collect_array_from_expr(expr, arrays),
+        IREexpr::Assign { value, .. } => collect_array_from_expr(value, arrays),
+        IREexpr::AssignIndex {
+            target,
+            index,
+            value,
+        } => {
+            collect_array_from_expr(target, arrays);
+            collect_array_from_expr(index, arrays);
+            collect_array_from_expr(value, arrays);
+        }
+        IREexpr::AssignField { target, value } => {
+            collect_array_from_expr(target, arrays);
+            collect_array_from_expr(value, arrays);
+        }
+        _ => {}
+    }
+}
+
 fn collect_slice_types_impl(
     program: &IRProgram,
     slice_types: &mut std::collections::HashSet<String>,
@@ -4641,6 +4888,9 @@ fn collect_slice_types_impl(
             collect_slice_types_from_type(&field.ty, slice_types);
         }
     }
+    visit_enum_payload_types(program, &mut |ty| {
+        collect_slice_types_from_type(ty, slice_types);
+    });
 }
 
 fn collect_slice_types_from_type(ty: &Type, slice_types: &mut std::collections::HashSet<String>) {
@@ -4897,6 +5147,9 @@ fn collect_tuple_types_impl(
             collect_tuple_types_from_type(&field.ty, tuple_types);
         }
     }
+    visit_enum_payload_types(program, &mut |ty| {
+        collect_tuple_types_from_type(ty, tuple_types);
+    });
 }
 
 fn collect_tuple_types_from_type(
@@ -5127,6 +5380,9 @@ fn collect_vec_types_impl(program: &IRProgram, vec_types: &mut std::collections:
             collect_vec_types_from_type(&field.ty, vec_types);
         }
     }
+    visit_enum_payload_types(program, &mut |ty| {
+        collect_vec_types_from_type(ty, vec_types);
+    });
 }
 
 fn collect_vec_types_from_type(ty: &Type, vec_types: &mut std::collections::HashSet<String>) {
@@ -5153,6 +5409,9 @@ fn collect_vec_types_from_type(ty: &Type, vec_types: &mut std::collections::Hash
         }
         Type::Channel { elem_type } => {
             collect_vec_types_from_type(elem_type, vec_types);
+        }
+        Type::Array { inner, .. } | Type::Slice { inner } => {
+            collect_vec_types_from_type(inner, vec_types);
         }
         Type::Tuple { elements } => {
             for elem in elements {
@@ -5335,6 +5594,112 @@ impl Codegen {
         forward_decls.push_str(&self.fn_literal_forward_decls);
         forward_decls.push('\n');
         self.output.insert_str(insert_at, &forward_decls);
+    }
+
+    fn ensure_option_template(&mut self) {
+        if self.enum_map.contains_key("Option") {
+            return;
+        }
+        let option_template = EnumDecl {
+            doc: None,
+            pub_: false,
+            name: "Option".to_string(),
+            generics: vec![TypeParam::simple("T")],
+            variants: vec![
+                EnumVariant {
+                    doc: None,
+                    name: "Some".to_string(),
+                    payload_types: vec![Type::Generic {
+                        name: "T".to_string(),
+                        params: vec![],
+                    }],
+                    named_fields: None,
+                    span: Span {
+                        start: 0,
+                        end: 0,
+                        line: 0,
+                        column: 0,
+                    },
+                },
+                EnumVariant {
+                    doc: None,
+                    name: "None".to_string(),
+                    payload_types: vec![],
+                    named_fields: None,
+                    span: Span {
+                        start: 0,
+                        end: 0,
+                        line: 0,
+                        column: 0,
+                    },
+                },
+            ],
+            span: Span {
+                start: 0,
+                end: 0,
+                line: 0,
+                column: 0,
+            },
+        };
+        self.enum_map.insert("Option".to_string(), option_template);
+    }
+
+    fn emit_non_generic_type_forwards(&mut self, program: &IRProgram) {
+        let mut any = false;
+        for s in &program.structs {
+            if s.generics.is_empty() {
+                self.writeln(&format!("typedef struct {} {};", s.name, s.name));
+                any = true;
+            }
+        }
+        for e in &program.enums {
+            if e.generics.is_empty() {
+                self.writeln(&format!("typedef struct {} {};", e.name, e.name));
+                any = true;
+            }
+        }
+        if any {
+            self.writeln("");
+        }
+    }
+
+    fn emit_ready_array_typedefs(&mut self, arrays: &[(String, Type)]) {
+        let none: HashSet<String> = HashSet::new();
+        loop {
+            let mut progressed = false;
+            for (name, ty) in arrays {
+                if self.generated_types.contains_key(name) {
+                    continue;
+                }
+                let Type::Array { inner, size } = ty else {
+                    continue;
+                };
+                if !type_ready_for_by_value(inner, &self.generated_types, &none) {
+                    continue;
+                }
+                if let Type::Array {
+                    inner: nested,
+                    size: nested_size,
+                } = inner.as_ref()
+                    && !self
+                        .generated_types
+                        .contains_key(&array_type_name(nested, *nested_size))
+                {
+                    continue;
+                }
+                self.writeln(&format!(
+                    "typedef {} {}[{}];",
+                    self.type_to_c(inner),
+                    name,
+                    size
+                ));
+                self.generated_types.insert(name.clone(), true);
+                progressed = true;
+            }
+            if !progressed {
+                break;
+            }
+        }
     }
 
     fn emit_vec_slice_typedefs(&mut self, program: &IRProgram) {
@@ -5669,6 +6034,38 @@ fn substitute_generic_types(ty: &Type, substitutions: &HashMap<String, &Type>) -
         Type::Channel { elem_type } => Type::Channel {
             elem_type: Box::new(substitute_generic_types(elem_type, substitutions)),
         },
+        Type::Array { inner, size } => Type::Array {
+            inner: Box::new(substitute_generic_types(inner, substitutions)),
+            size: *size,
+        },
+        Type::Slice { inner } => Type::Slice {
+            inner: Box::new(substitute_generic_types(inner, substitutions)),
+        },
+        Type::RawPtr { inner } => Type::RawPtr {
+            inner: Box::new(substitute_generic_types(inner, substitutions)),
+        },
+        Type::Sender { elem_type } => Type::Sender {
+            elem_type: Box::new(substitute_generic_types(elem_type, substitutions)),
+        },
+        Type::Receiver { elem_type } => Type::Receiver {
+            elem_type: Box::new(substitute_generic_types(elem_type, substitutions)),
+        },
+        Type::Tuple { elements } => Type::Tuple {
+            elements: elements
+                .iter()
+                .map(|e| substitute_generic_types(e, substitutions))
+                .collect(),
+        },
+        Type::Fn {
+            params,
+            return_type,
+        } => Type::Fn {
+            params: params
+                .iter()
+                .map(|p| substitute_generic_types(p, substitutions))
+                .collect(),
+            return_type: Box::new(substitute_generic_types(return_type, substitutions)),
+        },
         Type::Generic { name, params } => {
             // First check if the generic name itself is a generic parameter (e.g., T in Option<T>)
             if let Some(substituted) = substitutions.get(name) {
@@ -5759,10 +6156,26 @@ fn type_ready_for_by_value(
         Type::Channel { elem_type } | Type::Sender { elem_type } | Type::Receiver { elem_type } => {
             type_ready_for_by_value(elem_type, generated, user_structs)
         }
-        Type::Array { inner, .. } => type_ready_for_by_value(inner, generated, user_structs),
-        Type::Tuple { elements } => elements
-            .iter()
-            .all(|elem| type_ready_for_by_value(elem, generated, user_structs)),
+        Type::Array { inner, .. } => match inner.as_ref() {
+            Type::Array {
+                inner: nested,
+                size,
+            } => {
+                generated.contains_key(&array_type_name(nested, *size))
+                    && type_ready_for_by_value(inner, generated, user_structs)
+            }
+            Type::Tuple { elements } => {
+                generated.contains_key(&tuple_type_name(elements))
+                    && type_ready_for_by_value(inner, generated, user_structs)
+            }
+            _ => type_ready_for_by_value(inner, generated, user_structs),
+        },
+        Type::Tuple { elements } => {
+            generated.contains_key(&tuple_type_name(elements))
+                && elements
+                    .iter()
+                    .all(|elem| type_ready_for_by_value(elem, generated, user_structs))
+        }
         Type::Struct(name) | Type::Enum(name) => {
             generated.contains_key(name) || user_structs.contains(name)
         }
@@ -5796,9 +6209,77 @@ fn collect_generic_instantiations(
             collect_generic_from_type(&field.ty, instantiations);
         }
     }
+    visit_enum_payload_types(program, &mut |ty| {
+        collect_generic_from_type(ty, instantiations);
+    });
+    close_generic_instantiations(program, instantiations);
 
     let known = known_type_names(program);
     instantiations.retain(|_, (_, params)| params_are_bound(params, &known));
+}
+
+fn close_generic_instantiations(
+    program: &IRProgram,
+    instantiations: &mut std::collections::HashMap<String, (String, Vec<Type>)>,
+) {
+    loop {
+        let current: Vec<(String, Vec<Type>)> = instantiations.values().cloned().collect();
+        let before = instantiations.len();
+        for (base_name, params) in current {
+            if !type_params_are_concrete(&params) {
+                continue;
+            }
+            if let Some(decl) = program.structs.iter().find(|s| s.name == base_name)
+                && !decl.generics.is_empty()
+            {
+                let owned: Vec<(String, Type)> = decl
+                    .generics
+                    .iter()
+                    .zip(params.iter())
+                    .map(|(g, t)| (g.name.clone(), t.clone()))
+                    .collect();
+                let subst: HashMap<String, &Type> =
+                    owned.iter().map(|(n, t)| (n.clone(), t)).collect();
+                for field in &decl.fields {
+                    collect_generic_from_type(
+                        &substitute_generic_types(&field.ty, &subst),
+                        instantiations,
+                    );
+                }
+            }
+            if let Some(decl) = program.enums.iter().find(|e| e.name == base_name)
+                && !decl.generics.is_empty()
+            {
+                let owned: Vec<(String, Type)> = decl
+                    .generics
+                    .iter()
+                    .zip(params.iter())
+                    .map(|(g, t)| (g.name.clone(), t.clone()))
+                    .collect();
+                let subst: HashMap<String, &Type> =
+                    owned.iter().map(|(n, t)| (n.clone(), t)).collect();
+                for variant in &decl.variants {
+                    for ty in &variant.payload_types {
+                        collect_generic_from_type(
+                            &substitute_generic_types(ty, &subst),
+                            instantiations,
+                        );
+                    }
+                    if let Some(fields) = &variant.named_fields {
+                        for (_, ty) in fields {
+                            collect_generic_from_type(
+                                &substitute_generic_types(ty, &subst),
+                                instantiations,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if instantiations.len() == before {
+            break;
+        }
+    }
 }
 
 fn known_type_names(program: &IRProgram) -> HashSet<String> {

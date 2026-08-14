@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.22 - 2026-08-14
+
+- **Codegen**: `[T; N]` lowers to a named C array typedef (`arr_int_2`) so nested arrays and `Box`/`Vec` of arrays are valid C. Functions still cannot return a C array type (pointer decay unchanged). This impacts nested `[int; N]` locals, fields, parameters, and returns, plus `Box<[T; N]>` and `Vec<[T; N]>`.
+- **Codegen**: generic instantiations are collected from enum variant payloads and closed under generic struct/enum templates; `Option_int` is emitted before non-generic enums that embed it. This impacts `enum Hold { H(Option<int>) }` with `Hold::H(Option::None)` and `Hold::H(Option::Some(n))`, and `struct S<T> { x: Option<T> }` with `S { x: Option::None }`. Unannotated `let empty = Option::None` still requires an annotation.
+- **Tests**: `test_nested_array.ion`, `test_nested_array_field_param_return.ion`, `test_nested_array_3d.ion`, `test_box_array.ion`, `test_vec_array.ion`, `test_enum_option_payload_none.ion`, `test_enum_option_payload_some.ion`, `test_generic_struct_option_none.ion`.
+- **Docs**: ION_SPEC §4.1.1, ABI arrays, bug hotspots, verified patterns.
+
 ## 0.1.21 - 2026-08-14
 
 - **Type checker / Codegen**: array, tuple, and `[value; N]` elements, assignment, returned compounds, and enum variant payloads now check against the adjacent expected type (same `expr_expected` helper as struct fields, call arguments, `send`, and `Box::new`). This impacts `let a: [Option<int>; 1] = [Option::None]`, `(Option::None, 1)`, `[Option::Some(4)]` (emits `Option_int`, not bare `(Option)`), `x = Option::None`, `return [Option::None]`, and `Result::Err(Option::None)` as a compound element. Unannotated `let empty = Option::None` still requires an annotation.

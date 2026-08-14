@@ -22,7 +22,7 @@ let p: Point = Point { x: 1, y: 2 };
 
 ## Enum variants
 
-Tuple: `Option::Some(42)`, `Option::None`. `take(Option::None)` infers `T` from the parameter type ([tests/test_option_none_call_arg.ion](../../../../tests/test_option_none_call_arg.ion)); `send(&tx, Option::None)` infers from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)); `Box::new(Option::None)` infers from an expected `Box<Option<...>>` ([tests/test_box_new_option_none.ion](../../../../tests/test_box_new_option_none.ion)); `[Option::None]` and `(Option::None, 1)` infer from an adjacent array or tuple type ([tests/test_array_option_none.ion](../../../../tests/test_array_option_none.ion), [tests/test_tuple_option_none.ion](../../../../tests/test_tuple_option_none.ion)); unannotated `let empty = Option::None` still needs an annotation.
+Tuple: `Option::Some(42)`, `Option::None`. `take(Option::None)` infers `T` from the parameter type ([tests/test_option_none_call_arg.ion](../../../../tests/test_option_none_call_arg.ion)); `send(&tx, Option::None)` infers from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)); `Box::new(Option::None)` infers from an expected `Box<Option<...>>` ([tests/test_box_new_option_none.ion](../../../../tests/test_box_new_option_none.ion)); `[Option::None]` and `(Option::None, 1)` infer from an adjacent array or tuple type ([tests/test_array_option_none.ion](../../../../tests/test_array_option_none.ion), [tests/test_tuple_option_none.ion](../../../../tests/test_tuple_option_none.ion)); `enum Hold { H(Option<int>) }` with `Hold::H(Option::None)` and `Hold::H(Option::Some(n))` emits `Option_int` ([tests/test_enum_option_payload_none.ion](../../../../tests/test_enum_option_payload_none.ion), [tests/test_enum_option_payload_some.ion](../../../../tests/test_enum_option_payload_some.ion)); unannotated `let empty = Option::None` still needs an annotation.
 
 Struct: `Status::Ok { value: 10 }`.
 
@@ -302,7 +302,7 @@ struct Node {
 
 ## Arrays and slices
 
-Fixed arrays `[T; N]` and slices `[]T` / `&[]T` support bounds-checked indexing (panic on OOB). Query length with `Slice::len` (`s.len()`); field access `s.len` is not valid. For non-panicking element access use `Slice::get_ref` (`Option<&T>`, local only), including after `&[T; N]` -> `&[]T` coercion. See [tests/test_slice_len.ion](../../../../tests/test_slice_len.ion) and [tests/test_slice_get_ref_from_array.ion](../../../../tests/test_slice_get_ref_from_array.ion).
+Fixed arrays `[T; N]` and slices `[]T` / `&[]T` support bounds-checked indexing (panic on OOB). Query length with `Slice::len` (`s.len()`); field access `s.len` is not valid. For non-panicking element access use `Slice::get_ref` (`Option<&T>`, local only), including after `&[T; N]` -> `&[]T` coercion. Nested arrays, `Box<[T; N]>`, and `Vec<[T; N]>` compile ([tests/test_nested_array.ion](../../../../tests/test_nested_array.ion), [tests/test_box_array.ion](../../../../tests/test_box_array.ion), [tests/test_vec_array.ion](../../../../tests/test_vec_array.ion)). See [tests/test_slice_len.ion](../../../../tests/test_slice_len.ion) and [tests/test_slice_get_ref_from_array.ion](../../../../tests/test_slice_get_ref_from_array.ion).
 
 ```ion
 let arr: [int; 3] = [1, 2, 3];

@@ -132,6 +132,14 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_array_result_err.ion` - `[Result::Err(Option::None)]` infers payload from the array element type (exit 10)
 - `test_assign_option_none.ion` - `x = Option::None` infers from the left-hand side type (exit 11)
 - `test_return_array_option_none.ion` - `return [Option::None]` infers from the function return type (exit 12)
+- `test_nested_array.ion` - 2-D `[int; 2]` local, index, and index-assign (exit 17); cgen `typedef int arr_int_2[2];`
+- `test_nested_array_field_param_return.ion` - 2-D array struct field, parameter, and return (exit 7)
+- `test_nested_array_3d.ion` - 3-D array local (exit 6)
+- `test_box_array.ion` - `Box<[int; 2]>` (exit 30); cgen `arr_int_2*`
+- `test_vec_array.ion` - `Vec<[int; 2]>` push/get (exit 7); cgen `Vec_arr_int_2`
+- `test_enum_option_payload_none.ion` - `Hold::H(Option::None)` emits `Option_int` (exit 13)
+- `test_enum_option_payload_some.ion` - `Hold::H(Option::Some(14))` (exit 14)
+- `test_generic_struct_option_none.ion` - `S<int> { x: Option::None }` emits `Option_int` (exit 15)
 - `test_unannotated_let_non_int.ion` - unannotated `let q = p` / `let n = w.p` / `let v = origin()` keep struct types, not default int (exit 5); cgen asserts `Point q =` / `Point n =` / `Point v =`
 - `test_enum_generic.ion` - Generic enum types
 - `test_result_custom_enum.ion` - `Result<int, MyError>` via `stdlib/result.ion` (Ok and Err, exit 0)

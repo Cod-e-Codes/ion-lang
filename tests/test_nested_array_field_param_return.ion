@@ -1,0 +1,20 @@
+// Nested arrays as struct fields, parameters, and return types.
+struct Grid {
+    cells: [[int; 2]; 2];
+}
+
+fn corner_sum(g: [[int; 2]; 2]) -> int {
+    return g[0][0] + g[1][1];
+}
+
+fn make() -> [[int; 2]; 2] {
+    return [[1, 2], [3, 4]];
+}
+
+fn main() -> int {
+    let g: Grid = Grid {
+        cells: [[1, 2], [3, 4]],
+    };
+    let built = make();
+    return corner_sum(g.cells) + built[0][1];
+}

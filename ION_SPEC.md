@@ -515,6 +515,7 @@ Fixed-size arrays `[T; N]` have the following safety properties:
 - **Compile-time size**: Array size `N` must be a compile-time constant
 - **Stack allocation**: Arrays are allocated on the stack by default
 - **Index type**: The index expression may be any integer type (`int`, `i32`, `u32`, etc.).
+- **C lowering**: `[T; N]` lowers to a named C array typedef (`typedef int arr_int_2[2];`, nested `typedef arr_int_2 arr_arr_int_2_3[3];`) so nested arrays and `Box<[T; N]>` / `Vec<[T; N]>` are valid C type specifiers. Indexing stays `a[i]`. Functions still cannot return a C array type; array returns decay to a pointer to the first element.
 
 **Safe array access:**
 ```ion

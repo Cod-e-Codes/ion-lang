@@ -1,0 +1,5 @@
+fn main() -> int {
+    let b: Box<[int; 2]> = Box::new([10, 20]);
+    let a = Box::unwrap(b);
+    return a[0] + a[1];
+}

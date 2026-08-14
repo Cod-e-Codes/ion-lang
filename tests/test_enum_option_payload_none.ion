@@ -1,0 +1,25 @@
+// Generic enum used only as another enum's payload must still emit Option_int.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum Hold {
+    H(Option<int>);
+}
+
+fn main() -> int {
+    let x: Hold = Hold::H(Option::None);
+    match x {
+        Hold::H(inner) => {
+            match inner {
+                Option::None => {
+                    return 13;
+                }
+                Option::Some(_) => {
+                    return 1;
+                }
+            }
+        }
+    }
+}

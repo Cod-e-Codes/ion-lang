@@ -79,6 +79,19 @@ test_tuple_of_arrays_option_none.ion	run	9
 test_array_result_err.ion	run	10
 test_assign_option_none.ion	run	11
 test_return_array_option_none.ion	run	12
+test_nested_array.ion	run	17
+test_nested_array.ion	cgen			typedef int arr_int_2[2];
+test_nested_array_field_param_return.ion	run	7
+test_nested_array_3d.ion	run	6
+test_box_array.ion	run	30
+test_box_array.ion	cgen			arr_int_2*
+test_vec_array.ion	run	7
+test_vec_array.ion	cgen			Vec_arr_int_2
+test_enum_option_payload_none.ion	run	13
+test_enum_option_payload_none.ion	cgen			Option_int
+test_enum_option_payload_some.ion	run	14
+test_generic_struct_option_none.ion	run	15
+test_generic_struct_option_none.ion	cgen			Option_int
 test_vec_string_scope_drop.ion	run	0
 test_vec_string_scope_drop.ion	cgen			ion_string_free(((ion_string_t**)((v)->data))
 test_vec_string_scope_drop.ion	cgen			ion_vec_free((ion_vec_t*)(v))
