@@ -24,20 +24,26 @@ impl Codegen {
                 .unwrap_or(&Type::Int);
 
             let inner_c_type = self.type_to_c(inner_type);
+            let mut arg_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, arg_code);
+            self.generate_expr_with_type(&args[0], Some(inner_type));
+            arg_code = std::mem::replace(&mut self.output, old_output);
             let mut code = String::new();
             code.push_str("({ ");
             code.push_str(&format!(
                 "{}* ptr = ({}*)ion_box_alloc(sizeof({}));",
                 inner_c_type, inner_c_type, inner_c_type
             ));
-            code.push_str(" if (ptr) { *ptr = ");
-            // Generate the argument expression
-            let mut arg_code = String::new();
-            let old_output = std::mem::replace(&mut self.output, arg_code);
-            self.generate_expr_with_type(&args[0], Some(inner_type));
-            arg_code = std::mem::replace(&mut self.output, old_output);
-            code.push_str(&arg_code);
-            code.push_str("; } ptr; })");
+            // C arrays are not assignable, even behind a typedef name.
+            if matches!(inner_type, Type::Array { .. }) {
+                code.push_str(" if (ptr) { ");
+                code.push_str(&memcpy_from_value("ptr", &inner_c_type, &arg_code));
+                code.push_str("; } ptr; })");
+            } else {
+                code.push_str(" if (ptr) { *ptr = ");
+                code.push_str(&arg_code);
+                code.push_str("; } ptr; })");
+            }
             return Some(code);
         }
 
@@ -54,11 +60,19 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, arg_code);
             self.generate_expr(&args[0]);
             arg_code = std::mem::replace(&mut self.output, old_output);
-            let code = format!(
-                "({{ {ty}* _box = {arg}; {ty} _val = *_box; ion_box_free(_box); _val; }})",
-                ty = inner_c_type,
-                arg = arg_code
-            );
+            let code = if matches!(inner_type, Type::Array { .. }) {
+                format!(
+                    "({{ {ty}* _box = {arg}; static {ty} _val; memcpy(&_val, _box, sizeof(_val)); ion_box_free(_box); _val; }})",
+                    ty = inner_c_type,
+                    arg = arg_code
+                )
+            } else {
+                format!(
+                    "({{ {ty}* _box = {arg}; {ty} _val = *_box; ion_box_free(_box); _val; }})",
+                    ty = inner_c_type,
+                    arg = arg_code
+                )
+            };
             return Some(code);
         }
 
@@ -172,11 +186,20 @@ impl Codegen {
                     | IREexpr::Var(_)
                     | IREexpr::FieldAccess { .. }
             );
+            let elem_is_array = matches!(elem_ty, Some(Type::Array { .. }));
             if value_is_lvalue {
                 code.push_str("ion_vec_push((ion_vec_t*)(");
                 code.push_str(&deref_vec);
                 code.push_str("), &");
                 code.push_str(&value_code);
+                code.push_str(", sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str("))");
+            } else if elem_is_array {
+                code.push_str("ion_vec_push((ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("), ");
+                code.push_str(&compound_literal_addr(&elem_c_type, &value_code));
                 code.push_str(", sizeof(");
                 code.push_str(&elem_c_type);
                 code.push_str("))");
@@ -797,4 +820,21 @@ impl Codegen {
 
         None
     }
+}
+
+/// Address of a value for memcpy / `ion_vec_push`. Brace lists become typed compound literals.
+fn compound_literal_addr(c_ty: &str, value_code: &str) -> String {
+    let trimmed = value_code.trim_start();
+    if trimmed.starts_with('{') {
+        format!("&(({c_ty}){trimmed})")
+    } else {
+        format!("&({value_code})")
+    }
+}
+
+fn memcpy_from_value(dest_ptr: &str, c_ty: &str, value_code: &str) -> String {
+    format!(
+        "memcpy({dest_ptr}, {}, sizeof({c_ty}))",
+        compound_literal_addr(c_ty, value_code)
+    )
 }

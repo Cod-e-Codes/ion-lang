@@ -85,9 +85,14 @@ Stable beta expectations:
 
 ## Arrays and slices
 
-Fixed arrays `[T; N]` are inline values. Slices `[]T` are fat views carrying a
-data pointer and length. Safe indexing emits runtime bounds checks; indexing
-inside `unsafe` blocks may omit those checks.
+Fixed arrays `[T; N]` are inline values with C-compatible layout. Generated C
+names them `arr_{elem}_{N}` (`typedef int arr_int_2[2];`). Nested arrays compose
+(`typedef arr_int_2 arr_arr_int_2_3[3];`). `Box<[T; N]>` is a pointer to that
+array type (`arr_int_2*`). `Vec<[T; N]>` uses the typedef as the element type
+(`Vec_arr_int_2`). Functions do not return C array types; returns decay to a
+pointer to the first element. Slices `[]T` are fat views carrying a data pointer
+and length. Safe indexing emits runtime bounds checks; indexing inside `unsafe`
+blocks may omit those checks.
 
 - `Slice::len` returns the fat-pointer element count as `int` (empty is `0`). Method
   form `s.len()` desugars to `Slice::len`. `&[T; N]` may coerce to `&[]T` for this

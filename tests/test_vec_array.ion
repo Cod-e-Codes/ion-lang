@@ -1,0 +1,17 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<[int; 2]> = Vec::new();
+    Vec::push(&mut v, [3, 4]);
+    match Vec::get(&mut v, 0) {
+        Option::Some(row) => {
+            return row[0] + row[1];
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}

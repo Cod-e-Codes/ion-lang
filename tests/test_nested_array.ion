@@ -1,0 +1,6 @@
+// Nested `[T; N]` locals, index, and index-assign need a C array typedef name.
+fn main() -> int {
+    let mut grid: [[int; 2]; 2] = [[1, 2], [3, 4]];
+    grid[0][1] = 9;
+    return grid[0][0] + grid[0][1] + grid[1][0] + grid[1][1];
+}

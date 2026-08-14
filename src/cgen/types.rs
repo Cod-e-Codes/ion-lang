@@ -11,6 +11,11 @@ pub(crate) fn mangle_type_name(base: &str, params: &[Type]) -> String {
     }
 }
 
+/// C typedef name for `[T; N]`, e.g. `[int; 2]` -> `arr_int_2`, `[[int; 2]; 3]` -> `arr_arr_int_2_3`.
+pub(crate) fn array_type_name(inner: &Type, size: usize) -> String {
+    format!("arr_{}_{}", mangle_type_component(inner), size)
+}
+
 fn mangle_type_component(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
@@ -22,6 +27,7 @@ fn mangle_type_component(ty: &Type) -> String {
         Type::Struct(name) | Type::Enum(name) => name.clone(),
         Type::Vec { elem_type } => format!("Vec_{}", mangle_type_component(elem_type)),
         Type::Box { inner } => format!("Box_{}", mangle_type_component(inner)),
+        Type::Array { inner, size } => array_type_name(inner, *size),
         Type::Generic { name, params } if name == "Vec" && params.len() == 1 => {
             format!("Vec_{}", mangle_type_component(&params[0]))
         }
@@ -392,8 +398,9 @@ pub(crate) fn type_to_c_impl(ty: &Type) -> String {
         Type::String => "ion_string_t*".to_string(),
         Type::Str => "char".to_string(),
         Type::Array { inner, size } => {
-            // Fixed-size arrays: [T; N] -> T name[N]
-            format!("{}[{}]", type_to_c_impl(inner), size)
+            // Named typedef so the array can appear as a C type specifier
+            // (`Box<[T; N]>` -> `arr_T_N*`, nested arrays, `sizeof`).
+            array_type_name(inner, *size)
         }
         Type::Slice { inner } => {
             // Slices: []T -> ion_slice_T (fat pointer struct)
