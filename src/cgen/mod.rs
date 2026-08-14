@@ -66,7 +66,9 @@ pub struct Codegen {
     /// Compilation-wide callee env from TypeInfo (Ion names, alias::name, prefix_name).
     compilation_param_types: HashMap<String, Vec<Type>>,
     compilation_return_types: HashMap<String, Option<Type>>,
-    in_unsafe_block: bool,   // Track if we're in an unsafe block
+    in_unsafe_block: bool, // Track if we're in an unsafe block
+    /// When true, enum literals emit nested designated initializers without a type cast.
+    nested_designated_init: bool,
     temp_var_counter: usize, // Counter for unique temporary variable names
     current_function_params: HashMap<String, Type>, // Track current function parameter types for field access
     spawn_counter: usize,
@@ -114,6 +116,7 @@ impl Codegen {
             compilation_param_types: HashMap::new(),
             compilation_return_types: HashMap::new(),
             in_unsafe_block: false,
+            nested_designated_init: false,
             temp_var_counter: 0,
             current_function_params: HashMap::new(),
             spawn_counter: 0,
@@ -209,6 +212,22 @@ impl Codegen {
             .position(|v| v.name == variant_name)
     }
 
+    fn monomorphized_payload_type(
+        payload_ty: &Type,
+        enum_decl: &EnumDecl,
+        type_context: Option<&Type>,
+    ) -> Type {
+        let Some(Type::Generic { params, .. }) = type_context else {
+            return payload_ty.clone();
+        };
+        let names = TypeParam::names(&enum_decl.generics);
+        if names.len() != params.len() {
+            return payload_ty.clone();
+        }
+        let subst: HashMap<String, &Type> = names.into_iter().zip(params.iter()).collect();
+        substitute_type_params(payload_ty, &subst)
+    }
+
     fn emit_enum_variant_compound_literal(
         &mut self,
         c_type_name: &str,
@@ -216,6 +235,7 @@ impl Codegen {
         variant_name: &str,
         args: &[IREexpr],
         named_fields: Option<&[(String, IREexpr)]>,
+        type_context: Option<&Type>,
     ) {
         let enum_decl = self
             .enum_map
@@ -227,10 +247,34 @@ impl Codegen {
         });
         let variant = &enum_decl.variants[variant_idx];
         let has_payloads = !variant.payload_types.is_empty() || variant.named_fields.is_some();
+        let payload_tys: Vec<Type> = variant
+            .payload_types
+            .iter()
+            .map(|ty| Self::monomorphized_payload_type(ty, &enum_decl, type_context))
+            .collect();
+        let named_field_tys: HashMap<String, Type> = variant
+            .named_fields
+            .as_ref()
+            .map(|fields| {
+                fields
+                    .iter()
+                    .map(|(name, ty)| {
+                        (
+                            name.clone(),
+                            Self::monomorphized_payload_type(ty, &enum_decl, type_context),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        self.write(&format!(
-            "({c_type_name}){{ .tag = {variant_idx}, .data = {{"
-        ));
+        if self.nested_designated_init {
+            self.write(&format!("{{ .tag = {variant_idx}, .data = {{"));
+        } else {
+            self.write(&format!(
+                "({c_type_name}){{ .tag = {variant_idx}, .data = {{"
+            ));
+        }
         if has_payloads {
             self.write(&format!(" .variant_{variant_idx} = {{"));
             if let Some(named_fields) = named_fields {
@@ -239,7 +283,7 @@ impl Codegen {
                         self.write(", ");
                     }
                     self.write(&format!(" .{field_name} = "));
-                    self.generate_expr(field_expr);
+                    self.generate_expr_with_type(field_expr, named_field_tys.get(field_name));
                 }
             } else {
                 for (i, arg) in args.iter().enumerate() {
@@ -247,7 +291,7 @@ impl Codegen {
                         self.write(", ");
                     }
                     self.write(&format!(" .arg{i} = "));
-                    self.generate_expr(arg);
+                    self.generate_expr_with_type(arg, payload_tys.get(i));
                 }
             }
             self.write(" }");
@@ -361,8 +405,9 @@ impl Codegen {
 
         self.generic_instantiations = resolved_instantiations;
 
-        // Vec, slice, and tuple typedefs must precede struct fields that reference them.
-        self.emit_vec_slice_tuple_typedefs(program);
+        // Vec and slice typedefs must precede struct fields that reference them.
+        // Tuple typedefs wait until generic enums (e.g. Option_int) are complete types.
+        self.emit_vec_slice_typedefs(program);
 
         // Enums before structs so struct fields can use enum types by value.
         for e in &program.enums {
@@ -478,6 +523,8 @@ impl Codegen {
             self.generate_monomorphized_enum(&option_decl, &params);
             self.generated_types.insert(key, true);
         }
+
+        self.emit_tuple_typedefs(program);
 
         for (decl, params) in struct_instantiations {
             let key = mangle_type_name(&decl.name, &params);
@@ -712,18 +759,17 @@ impl Codegen {
         collect_generic_instantiations(program, &mut generic_instantiations_map);
         self.generic_instantiations = generic_instantiations_map.clone();
 
-        self.emit_vec_slice_tuple_typedefs(program);
+        self.emit_vec_slice_typedefs(program);
+        self.emit_tuple_typedefs(program);
 
         self.emit_monomorphized_enum_forwards();
 
-        // Emit struct type definitions first so functions can use them.
         for s in &program.structs {
             if s.generics.is_empty() {
                 self.write(&format!("typedef struct {} {{\n", s.name));
                 self.indent_level += 1;
                 for field in &s.fields {
                     self.write_indent();
-                    // Handle arrays specially: in struct fields, arrays must be declared as "type name[size];"
                     let field_decl = match &field.ty {
                         Type::Array { inner, size } => {
                             let base_type = self.type_to_c(inner);
@@ -741,7 +787,6 @@ impl Codegen {
             }
         }
 
-        // Emit enum type definitions
         for e in &program.enums {
             if e.generics.is_empty() {
                 self.generate_enum_type(e);
@@ -1766,12 +1811,14 @@ impl Codegen {
             };
 
             if is_array_return {
-                if let Some(Type::Array { inner, size }) = self.current_return_type.as_ref() {
+                if let Some(ret_ty) = self.current_return_type.clone()
+                    && let Type::Array { inner, size } = &ret_ty
+                {
                     let base_type = self.type_to_c(inner);
                     self.writeln(&format!("static {} _ret_array[{}] = ", base_type, size));
                     self.write_indent();
                     self.write("    ");
-                    self.generate_expr(value);
+                    self.generate_expr_with_type(value, Some(&ret_ty));
                     self.writeln(";");
                     self.write_indent();
                     self.writeln("ret_val = _ret_array;");
@@ -2946,7 +2993,10 @@ impl Codegen {
                                     .find(|f| f.name == field.name)
                                     .map(|f| f.ty.clone())
                             });
+                        let prev = self.nested_designated_init;
+                        self.nested_designated_init = true;
                         self.generate_expr_with_type(&field.value, field_ty.as_ref());
+                        self.nested_designated_init = prev;
                     }
                     self.write("}");
                 }
@@ -3076,6 +3126,7 @@ impl Codegen {
                     variant,
                     args,
                     named_fields.as_deref(),
+                    type_context,
                 );
             }
             IREexpr::Match {
@@ -3252,6 +3303,12 @@ impl Codegen {
                             continue;
                         }
                         if let Some(ref pty) = param_ty {
+                            if matches!(arg, IREexpr::ArrayLiteral { .. })
+                                && let Type::Array { inner, size } = pty
+                            {
+                                let elem_c = self.type_to_c(inner);
+                                self.write(&format!("({}[{}])", elem_c, size));
+                            }
                             self.generate_expr_with_type(arg, Some(pty));
                         } else {
                             self.generate_expr(arg);
@@ -3282,11 +3339,18 @@ impl Codegen {
                         self.write(", ");
                     }
                     self.write(&format!(".f{} = ", i));
-                    self.generate_expr(elem);
+                    let prev = self.nested_designated_init;
+                    self.nested_designated_init = true;
+                    self.generate_expr_with_type(elem, elem_types.get(i));
+                    self.nested_designated_init = prev;
                 }
                 self.write("}");
             }
             IREexpr::ArrayLiteral { elements, repeat } => {
+                let elem_ty = match type_context {
+                    Some(Type::Array { inner, .. }) => Some(inner.as_ref().clone()),
+                    _ => None,
+                };
                 if let Some((value_expr, count)) = repeat {
                     // Array repeat: [value; count]
                     // For zero initialization, use {0} syntax
@@ -3305,7 +3369,7 @@ impl Codegen {
                             if i > 0 {
                                 self.write(", ");
                             }
-                            self.generate_expr(value_expr);
+                            self.generate_expr_with_type(value_expr, elem_ty.as_ref());
                         }
                         self.write("}");
                     }
@@ -3316,7 +3380,7 @@ impl Codegen {
                         if i > 0 {
                             self.write(", ");
                         }
-                        self.generate_expr(elem);
+                        self.generate_expr_with_type(elem, elem_ty.as_ref());
                     }
                     self.write("}");
                 }
@@ -3402,27 +3466,35 @@ impl Codegen {
                 self.generate_expr(expr);
             }
             IREexpr::Assign { target, value } => {
-                // Generate assignment: target = value
                 self.write(target);
                 self.write(" = ");
-                self.generate_expr(value);
+                let ty = self.lookup_var_type(target);
+                self.generate_expr_with_type(value, ty.as_ref());
             }
             IREexpr::AssignIndex {
                 target,
                 index,
                 value,
             } => {
-                // Generate array element assignment: arr[i] = value
                 self.generate_expr(target);
                 self.write("[");
                 self.generate_expr(index);
                 self.write("] = ");
-                self.generate_expr(value);
+                let elem_ty = match self.infer_irexpr_type(target) {
+                    Some(Type::Array { inner, .. }) => Some(*inner),
+                    Some(Type::Ref { inner, .. }) => match *inner {
+                        Type::Array { inner, .. } => Some(*inner),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                self.generate_expr_with_type(value, elem_ty.as_ref());
             }
             IREexpr::AssignField { target, value } => {
                 self.generate_expr(target);
                 self.write(" = ");
-                self.generate_expr(value);
+                let field_ty = self.infer_irexpr_type(target);
+                self.generate_expr_with_type(value, field_ty.as_ref());
             }
             IREexpr::FnLiteral(lit) => {
                 self.generate_fn_literal(lit);
@@ -5265,7 +5337,7 @@ impl Codegen {
         self.output.insert_str(insert_at, &forward_decls);
     }
 
-    fn emit_vec_slice_tuple_typedefs(&mut self, program: &IRProgram) {
+    fn emit_vec_slice_typedefs(&mut self, program: &IRProgram) {
         let mut vec_types = std::collections::HashSet::new();
         collect_vec_types_impl(program, &mut vec_types);
         for vec_type_name in &vec_types {
@@ -5277,7 +5349,9 @@ impl Codegen {
         for slice_type_name in &slice_types {
             self.generate_slice_struct(slice_type_name);
         }
+    }
 
+    fn emit_tuple_typedefs(&mut self, program: &IRProgram) {
         let mut tuple_types: std::collections::HashMap<String, Vec<Type>> =
             std::collections::HashMap::new();
         collect_tuple_types_impl(program, &mut tuple_types);
@@ -5335,7 +5409,15 @@ impl Codegen {
         self.indent_level += 1;
         for (i, elem) in elements.iter().enumerate() {
             self.write_indent();
-            self.writeln(&format!("{} f{};", self.type_to_c(elem), i));
+            match elem {
+                Type::Array { inner, size } => {
+                    let base_type = self.type_to_c(inner);
+                    self.writeln(&format!("{} f{}[{}];", base_type, i, size));
+                }
+                _ => {
+                    self.writeln(&format!("{} f{};", self.type_to_c(elem), i));
+                }
+            }
         }
         self.indent_level -= 1;
         self.writeln(&format!("}} {};", tuple_name));
@@ -5824,6 +5906,11 @@ fn collect_generic_from_type(
         Type::Channel { elem_type } => collect_generic_from_type(elem_type, instantiations),
         Type::Array { inner, .. } => collect_generic_from_type(inner, instantiations),
         Type::Slice { inner } => collect_generic_from_type(inner, instantiations),
+        Type::Tuple { elements } => {
+            for elem in elements {
+                collect_generic_from_type(elem, instantiations);
+            }
+        }
         Type::Fn {
             params,
             return_type,
@@ -6030,7 +6117,13 @@ fn collect_generic_from_expr(
                 collect_generic_from_expr(arg, instantiations);
             }
         }
-        IREexpr::TupleLit { elements, .. } => {
+        IREexpr::TupleLit {
+            elements,
+            elem_types,
+        } => {
+            for ty in elem_types {
+                collect_generic_from_type(ty, instantiations);
+            }
             for elem in elements {
                 collect_generic_from_expr(elem, instantiations);
             }

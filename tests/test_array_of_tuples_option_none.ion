@@ -1,0 +1,17 @@
+// Nested array-of-tuples infers Option::None from [(Option<int>, int); N].
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let a: [(Option<int>, int); 1] = [(Option::None, 8)];
+    match a[0].0 {
+        Option::Some(_) => {
+            return 1;
+        }
+        Option::None => {
+            return a[0].1;
+        }
+    }
+}

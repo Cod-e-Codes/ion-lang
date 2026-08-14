@@ -434,6 +434,68 @@ impl TypeChecker {
         None
     }
 
+    fn expected_array_elem(&self) -> Option<Type> {
+        match &self.expr_expected {
+            Some(Type::Array { inner, .. }) => Some((**inner).clone()),
+            _ => None,
+        }
+    }
+
+    fn expected_tuple_elems(&self) -> Option<Vec<Type>> {
+        match &self.expr_expected {
+            Some(Type::Tuple { elements }) => Some(elements.clone()),
+            _ => None,
+        }
+    }
+
+    fn is_generic_placeholder(ty: &Type, generic_names: &[String]) -> bool {
+        match ty {
+            Type::Struct(n) | Type::Enum(n) => generic_names.iter().any(|g| g == n),
+            Type::Generic { name, params } if params.is_empty() => {
+                generic_names.iter().any(|g| g == name)
+            }
+            _ => false,
+        }
+    }
+
+    /// Concrete payload type after substituting adjacent generic params.
+    /// `None` when the result is still a type-parameter placeholder.
+    fn expected_enum_payload_type(
+        &self,
+        payload_ty: &Type,
+        enum_name: &str,
+        generic_names: &[String],
+    ) -> Option<Type> {
+        if generic_names.is_empty() {
+            return Some(payload_ty.clone());
+        }
+        let expected_params = self.expected_generic_params(enum_name)?;
+        if expected_params.len() != generic_names.len() {
+            return None;
+        }
+        let subst: HashMap<String, Type> =
+            generic_names.iter().cloned().zip(expected_params).collect();
+        let substituted = substitute_generic_types_impl(payload_ty, &subst);
+        if Self::is_generic_placeholder(&substituted, generic_names) {
+            None
+        } else {
+            Some(substituted)
+        }
+    }
+
+    fn check_enum_payload_arg(
+        &mut self,
+        arg_expr: &Expr,
+        payload_ty: &Type,
+        enum_name: &str,
+        generic_names: &[String],
+    ) -> Result<Type, TypeCheckError> {
+        match self.expected_enum_payload_type(payload_ty, enum_name, generic_names) {
+            Some(expected) => self.check_expr_with_expected(arg_expr, &expected),
+            None => self.check_expr(arg_expr),
+        }
+    }
+
     fn record_hover_doc(&mut self, span: Span, doc: String) {
         if !self.lsp_recording {
             return;
@@ -1550,9 +1612,15 @@ impl TypeChecker {
                             "tuple destructuring requires an initializer".to_string(),
                         )
                     })?;
-                    let init_type = self.check_expr(init)?;
-                    let tuple_type = if let Some(ref type_ann) = let_stmt.type_ann {
-                        let resolved = self.resolve_type_name(type_ann)?;
+                    let resolved_ann = match &let_stmt.type_ann {
+                        Some(ann) => Some(self.resolve_type_name(ann)?),
+                        None => None,
+                    };
+                    let init_type = match &resolved_ann {
+                        Some(expected) => self.check_expr_with_expected(init, expected)?,
+                        None => self.check_expr(init)?,
+                    };
+                    let tuple_type = if let Some(resolved) = resolved_ann {
                         if !types_equal(&resolved, &init_type) {
                             return Err(TypeCheckError::TypeMismatch {
                                 expected: type_to_string(&resolved),
@@ -1764,7 +1832,12 @@ impl TypeChecker {
             Stmt::Return(return_stmt) => {
                 if let Some(ref value) = return_stmt.value {
                     // First check the expression type (this verifies variables are Valid)
-                    let value_type = self.check_expr(value)?;
+                    let expected_return = self.current_return_type.clone();
+                    let value_type = if let Some(ref expected) = expected_return {
+                        self.check_expr_with_expected(value, expected)?
+                    } else {
+                        self.check_expr(value)?
+                    };
                     let resolved_value_type = self.resolve_type_name(&value_type)?;
 
                     // Check no-escape rule: cannot return reference-containing types
@@ -3216,9 +3289,9 @@ impl TypeChecker {
 
                     // Check argument types (now we can call self.check_expr since we've dropped the module_exports borrow)
                     for (arg_expr, param) in enum_lit.args.iter().zip(params.iter()) {
-                        let arg_ty = self.check_expr(arg_expr)?;
-                        let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
                         let resolved_param_ty = self.resolve_type_name(&param.ty)?;
+                        let arg_ty = self.check_expr_with_expected(arg_expr, &resolved_param_ty)?;
+                        let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
                         let numeric_coerced =
                             Self::can_coerce_numeric(&resolved_arg_ty, &resolved_param_ty);
                         if !numeric_coerced && !types_equal(&resolved_arg_ty, &resolved_param_ty) {
@@ -3315,7 +3388,12 @@ impl TypeChecker {
                 let mut inferred_params: Vec<Type> = Vec::new();
 
                 for (arg_expr, expected_ty) in enum_lit.args.iter().zip(payload_types.iter()) {
-                    let arg_ty = self.check_expr(arg_expr)?;
+                    let arg_ty = self.check_enum_payload_arg(
+                        arg_expr,
+                        expected_ty,
+                        &enum_decl.name,
+                        &generic_names,
+                    )?;
                     let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
                     let resolved_expected_ty = self.resolve_type_name(expected_ty)?;
 
@@ -3389,9 +3467,15 @@ impl TypeChecker {
                                 field_name, enum_lit.variant, enum_decl.name
                             )));
                         };
-                        let arg_ty = self.check_expr(field_expr)?;
+                        let field_ty = field_ty.clone();
+                        let arg_ty = self.check_enum_payload_arg(
+                            field_expr,
+                            &field_ty,
+                            &enum_decl.name,
+                            &generic_names,
+                        )?;
                         let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
-                        let resolved_expected_ty = self.resolve_type_name(field_ty)?;
+                        let resolved_expected_ty = self.resolve_type_name(&field_ty)?;
                         if is_generic {
                             let subs = infer_generic_substitutions(
                                 &resolved_expected_ty,
@@ -3731,6 +3815,8 @@ impl TypeChecker {
                                     })?;
 
                                 let payload_types = variant.payload_types.clone();
+                                let generic_names = TypeParam::names(&enum_decl.generics);
+                                let enum_name = enum_decl.name.clone();
 
                                 // Check argument count matches variant
                                 if call_expr.args.len() != payload_types.len() {
@@ -3745,7 +3831,12 @@ impl TypeChecker {
                                 for (arg_expr, expected_ty) in
                                     call_expr.args.iter().zip(payload_types.iter())
                                 {
-                                    let arg_ty = self.check_expr(arg_expr)?;
+                                    let arg_ty = self.check_enum_payload_arg(
+                                        arg_expr,
+                                        expected_ty,
+                                        &enum_name,
+                                        &generic_names,
+                                    )?;
                                     let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
                                     let resolved_expected_ty =
                                         self.resolve_type_name(expected_ty)?;
@@ -4236,9 +4327,18 @@ impl TypeChecker {
                         "empty tuple literal is not supported".to_string(),
                     ));
                 }
+                let expected_elems = self.expected_tuple_elems();
                 let mut elem_types = Vec::with_capacity(tuple_lit.elements.len());
-                for elem in &tuple_lit.elements {
-                    elem_types.push(self.check_expr(elem)?);
+                if let Some(ref expected) = expected_elems
+                    && expected.len() == tuple_lit.elements.len()
+                {
+                    for (elem, expected_ty) in tuple_lit.elements.iter().zip(expected.iter()) {
+                        elem_types.push(self.check_expr_with_expected(elem, expected_ty)?);
+                    }
+                } else {
+                    for elem in &tuple_lit.elements {
+                        elem_types.push(self.check_expr(elem)?);
+                    }
                 }
                 Ok(Type::Tuple {
                     elements: elem_types,
@@ -4247,8 +4347,11 @@ impl TypeChecker {
             Expr::ArrayLiteral(arr_lit) => {
                 // Handle [value; count] syntax
                 if let Some((ref value_expr, count)) = arr_lit.repeat {
-                    // Type-check the repeated expression once
-                    let elem_ty = self.check_expr(value_expr)?;
+                    let expected_elem = self.expected_array_elem();
+                    let elem_ty = match &expected_elem {
+                        Some(expected) => self.check_expr_with_expected(value_expr, expected)?,
+                        None => self.check_expr(value_expr)?,
+                    };
 
                     // For integer literals, default to int, but allow coercion later
                     // The actual element type will be determined by the type annotation if present
@@ -4272,9 +4375,16 @@ impl TypeChecker {
                 } else {
                     // Regular array literal: [expr, expr, ...]
                     // Check all elements have the same type
-                    let first_elem_ty = self.check_expr(&arr_lit.elements[0])?;
+                    let expected_elem = self.expected_array_elem();
+                    let first_elem_ty = match &expected_elem {
+                        Some(expected) => {
+                            self.check_expr_with_expected(&arr_lit.elements[0], expected)?
+                        }
+                        None => self.check_expr(&arr_lit.elements[0])?,
+                    };
                     for elem in arr_lit.elements.iter().skip(1) {
-                        let elem_ty = self.check_expr(elem)?;
+                        let check_against = expected_elem.as_ref().unwrap_or(&first_elem_ty);
+                        let elem_ty = self.check_expr_with_expected(elem, check_against)?;
                         if !types_equal(&elem_ty, &first_elem_ty) {
                             return Err(TypeCheckError::TypeMismatch {
                                 expected: type_to_string(&first_elem_ty),
@@ -4354,152 +4464,126 @@ impl TypeChecker {
                 // Return the target type
                 Ok(resolved_target_type)
             }
-            Expr::Assign(assign_expr) => {
-                // Check the value expression
-                let value_ty = self.check_expr(&assign_expr.value)?;
-                let resolved_value_ty = self.resolve_type_name(&value_ty)?;
-
-                // Handle different assignment targets
-                match &*assign_expr.target {
-                    Expr::Var(var_expr) => {
-                        // Variable assignment: x = value
-                        // Check that variable exists and is mutable
+            Expr::Assign(assign_expr) => match &*assign_expr.target {
+                Expr::Var(var_expr) => {
+                    let var_ty = {
                         let var_info = self.variables.get(&var_expr.name).ok_or_else(|| {
                             TypeCheckError::UndefinedVariable {
                                 name: var_expr.name.clone(),
                                 span: var_expr.span,
                             }
                         })?;
+                        var_info.ty.clone()
+                    };
 
-                        self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
+                    self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
 
-                        // Check type compatibility with coercion
-                        let resolved_var_ty = self.resolve_type_name(&var_info.ty)?;
-                        let numeric_coerced =
-                            Self::can_coerce_numeric(&resolved_value_ty, &resolved_var_ty);
+                    let resolved_var_ty = self.resolve_type_name(&var_ty)?;
+                    let value_ty =
+                        self.check_expr_with_expected(&assign_expr.value, &resolved_var_ty)?;
+                    let resolved_value_ty = self.resolve_type_name(&value_ty)?;
+                    let numeric_coerced =
+                        Self::can_coerce_numeric(&resolved_value_ty, &resolved_var_ty);
 
-                        if !types_equal(&resolved_value_ty, &resolved_var_ty) && !numeric_coerced {
-                            return Err(TypeCheckError::TypeMismatch {
-                                expected: type_to_string(&resolved_var_ty),
-                                got: type_to_string(&resolved_value_ty),
-                                span: assign_expr.value.span(),
-                            });
-                        }
-
-                        // Assignment returns unit type (void) in Ion
-                        Ok(Type::Void)
+                    if !types_equal(&resolved_value_ty, &resolved_var_ty) && !numeric_coerced {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: type_to_string(&resolved_var_ty),
+                            got: type_to_string(&resolved_value_ty),
+                            span: assign_expr.value.span(),
+                        });
                     }
-                    Expr::Index(index_expr) => {
-                        // Array element assignment: arr[i] = value
-                        // Check the base of the index expression to get the array type
-                        if let Some((owner, owner_span)) =
-                            self.borrow_owner_from_expr(&index_expr.target)
-                        {
-                            self.check_owner_not_borrowed(&owner, owner_span)?;
-                        }
-                        let base_ty = self.check_expr(&index_expr.target)?;
-                        let target_ty_str = type_to_string(&base_ty);
-                        match base_ty {
-                            Type::Array { inner, .. } => {
-                                // Check value type matches element type (with coercion)
-                                let resolved_elem_ty = self.resolve_type_name(inner.as_ref())?;
-                                let numeric_coerced =
-                                    Self::can_coerce_numeric(&resolved_value_ty, &resolved_elem_ty);
 
-                                if !types_equal(&resolved_value_ty, &resolved_elem_ty)
-                                    && !numeric_coerced
-                                {
-                                    return Err(TypeCheckError::TypeMismatch {
-                                        expected: type_to_string(&resolved_elem_ty),
-                                        got: type_to_string(&resolved_value_ty),
-                                        span: assign_expr.value.span(),
-                                    });
-                                }
-
-                                // Assignment returns unit type
-                                Ok(Type::Void)
+                    Ok(Type::Void)
+                }
+                Expr::Index(index_expr) => {
+                    if let Some((owner, owner_span)) =
+                        self.borrow_owner_from_expr(&index_expr.target)
+                    {
+                        self.check_owner_not_borrowed(&owner, owner_span)?;
+                    }
+                    let base_ty = self.check_expr(&index_expr.target)?;
+                    let target_ty_str = type_to_string(&base_ty);
+                    let elem_ty = match &base_ty {
+                        Type::Array { inner, .. } => inner.as_ref().clone(),
+                        Type::Ref { inner, .. } => match inner.as_ref() {
+                            Type::Array { inner: elem_ty, .. } => elem_ty.as_ref().clone(),
+                            _ => {
+                                return Err(TypeCheckError::TypeMismatch {
+                                    expected: "array type for indexed assignment".to_string(),
+                                    got: target_ty_str,
+                                    span: assign_expr.span,
+                                });
                             }
-                            Type::Ref { inner, .. } => {
-                                // Indexing a reference to an array
-                                match inner.as_ref() {
-                                    Type::Array { inner: elem_ty, .. } => {
-                                        let resolved_elem_ty =
-                                            self.resolve_type_name(elem_ty.as_ref())?;
-                                        let numeric_coerced = Self::can_coerce_numeric(
-                                            &resolved_value_ty,
-                                            &resolved_elem_ty,
-                                        );
-
-                                        if !types_equal(&resolved_value_ty, &resolved_elem_ty)
-                                            && !numeric_coerced
-                                        {
-                                            return Err(TypeCheckError::TypeMismatch {
-                                                expected: type_to_string(&resolved_elem_ty),
-                                                got: type_to_string(&resolved_value_ty),
-                                                span: assign_expr.value.span(),
-                                            });
-                                        }
-
-                                        Ok(Type::Void)
-                                    }
-                                    _ => Err(TypeCheckError::TypeMismatch {
-                                        expected: "array type for indexed assignment".to_string(),
-                                        got: target_ty_str,
-                                        span: assign_expr.span,
-                                    }),
-                                }
-                            }
-                            _ => Err(TypeCheckError::TypeMismatch {
+                        },
+                        _ => {
+                            return Err(TypeCheckError::TypeMismatch {
                                 expected: "array type for indexed assignment".to_string(),
                                 got: target_ty_str,
                                 span: assign_expr.span,
-                            }),
-                        }
-                    }
-                    Expr::FieldAccess(acc) => {
-                        let base_ty = self.check_expr(&acc.base)?;
-                        let assignable = matches!(
-                            &base_ty,
-                            Type::Ref { mutable: true, .. }
-                                | Type::Struct(_)
-                                | Type::Generic { .. }
-                        );
-                        if !assignable {
-                            return Err(TypeCheckError::Message(
-                                "cannot assign to field: base must be an owned struct or &mut struct"
-                                    .to_string(),
-                            ));
-                        }
-                        if let Some((owner, owner_span)) = self.borrow_owner_from_expr(&acc.base) {
-                            self.check_owner_not_borrowed(&owner, owner_span)?;
-                        }
-                        let field_ty = self.check_expr(&Expr::FieldAccess(acc.clone()))?;
-                        let resolved_field_ty = self.resolve_type_name(&field_ty)?;
-                        let assign_expected = match &resolved_field_ty {
-                            Type::Ref {
-                                inner,
-                                mutable: true,
-                            } if Self::is_copy_type(inner) => inner.as_ref().clone(),
-                            other => other.clone(),
-                        };
-                        let numeric_coerced =
-                            Self::can_coerce_numeric(&resolved_value_ty, &assign_expected);
-                        if !types_equal(&resolved_value_ty, &assign_expected) && !numeric_coerced {
-                            return Err(TypeCheckError::TypeMismatch {
-                                expected: type_to_string(&assign_expected),
-                                got: type_to_string(&resolved_value_ty),
-                                span: assign_expr.value.span(),
                             });
                         }
-                        Ok(Type::Void)
+                    };
+                    let resolved_elem_ty = self.resolve_type_name(&elem_ty)?;
+                    let value_ty =
+                        self.check_expr_with_expected(&assign_expr.value, &resolved_elem_ty)?;
+                    let resolved_value_ty = self.resolve_type_name(&value_ty)?;
+                    let numeric_coerced =
+                        Self::can_coerce_numeric(&resolved_value_ty, &resolved_elem_ty);
+
+                    if !types_equal(&resolved_value_ty, &resolved_elem_ty) && !numeric_coerced {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: type_to_string(&resolved_elem_ty),
+                            got: type_to_string(&resolved_value_ty),
+                            span: assign_expr.value.span(),
+                        });
                     }
-                    _ => Err(TypeCheckError::TypeMismatch {
-                        expected: "variable, field, or indexed expression".to_string(),
-                        got: "invalid assignment target".to_string(),
-                        span: assign_expr.span,
-                    }),
+
+                    Ok(Type::Void)
                 }
-            }
+                Expr::FieldAccess(acc) => {
+                    let base_ty = self.check_expr(&acc.base)?;
+                    let assignable = matches!(
+                        &base_ty,
+                        Type::Ref { mutable: true, .. } | Type::Struct(_) | Type::Generic { .. }
+                    );
+                    if !assignable {
+                        return Err(TypeCheckError::Message(
+                            "cannot assign to field: base must be an owned struct or &mut struct"
+                                .to_string(),
+                        ));
+                    }
+                    if let Some((owner, owner_span)) = self.borrow_owner_from_expr(&acc.base) {
+                        self.check_owner_not_borrowed(&owner, owner_span)?;
+                    }
+                    let field_ty = self.check_expr(&Expr::FieldAccess(acc.clone()))?;
+                    let resolved_field_ty = self.resolve_type_name(&field_ty)?;
+                    let assign_expected = match &resolved_field_ty {
+                        Type::Ref {
+                            inner,
+                            mutable: true,
+                        } if Self::is_copy_type(inner) => inner.as_ref().clone(),
+                        other => other.clone(),
+                    };
+                    let value_ty =
+                        self.check_expr_with_expected(&assign_expr.value, &assign_expected)?;
+                    let resolved_value_ty = self.resolve_type_name(&value_ty)?;
+                    let numeric_coerced =
+                        Self::can_coerce_numeric(&resolved_value_ty, &assign_expected);
+                    if !types_equal(&resolved_value_ty, &assign_expected) && !numeric_coerced {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: type_to_string(&assign_expected),
+                            got: type_to_string(&resolved_value_ty),
+                            span: assign_expr.value.span(),
+                        });
+                    }
+                    Ok(Type::Void)
+                }
+                _ => Err(TypeCheckError::TypeMismatch {
+                    expected: "variable, field, or indexed expression".to_string(),
+                    got: "invalid assignment target".to_string(),
+                    span: assign_expr.span,
+                }),
+            },
             Expr::FnLiteral(lit) => {
                 let mut exclude = std::collections::HashSet::new();
                 for param in &lit.params {

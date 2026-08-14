@@ -30,7 +30,7 @@ cargo build --release --bin ion-compiler --bin ion-build
 cd tests && ./test_runner.sh
 ```
 
-One test or a substring (runs every matching `run` / `error` / `cgen` row):
+One test: `test_foo.ion` is an exact stem. A bare stem `test_foo` is a substring (runs every matching `run` / `error` / `cgen` row):
 
 ```bash
 cd tests && ./test_runner.sh test_foo.ion

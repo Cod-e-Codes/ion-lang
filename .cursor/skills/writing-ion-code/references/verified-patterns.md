@@ -22,7 +22,7 @@ let p: Point = Point { x: 1, y: 2 };
 
 ## Enum variants
 
-Tuple: `Option::Some(42)`, `Option::None`. `take(Option::None)` infers `T` from the parameter type ([tests/test_option_none_call_arg.ion](../../../../tests/test_option_none_call_arg.ion)); `send(&tx, Option::None)` infers from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)); `Box::new(Option::None)` infers from an expected `Box<Option<...>>` ([tests/test_box_new_option_none.ion](../../../../tests/test_box_new_option_none.ion)); unannotated `let empty = Option::None` still needs an annotation.
+Tuple: `Option::Some(42)`, `Option::None`. `take(Option::None)` infers `T` from the parameter type ([tests/test_option_none_call_arg.ion](../../../../tests/test_option_none_call_arg.ion)); `send(&tx, Option::None)` infers from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)); `Box::new(Option::None)` infers from an expected `Box<Option<...>>` ([tests/test_box_new_option_none.ion](../../../../tests/test_box_new_option_none.ion)); `[Option::None]` and `(Option::None, 1)` infer from an adjacent array or tuple type ([tests/test_array_option_none.ion](../../../../tests/test_array_option_none.ion), [tests/test_tuple_option_none.ion](../../../../tests/test_tuple_option_none.ion)); unannotated `let empty = Option::None` still needs an annotation.
 
 Struct: `Status::Ok { value: 10 }`.
 
