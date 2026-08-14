@@ -106,42 +106,56 @@ impl Codegen {
 
     /// True when inlined drop glue for this ADT would recurse in the compiler
     /// (for example `Node` containing `Option<Box<Node>>`).
+    ///
+    /// Only the types that appear on their own drop cycle get a helper.
+    /// `Option<Forest>` wrapping a cyclic `Vec<Forest>` inlines and calls
+    /// `_ion_drop_Forest`; emitting `_ion_drop_Option_Forest` would be unused.
     fn adt_needs_named_drop(&self, ty: &Type) -> bool {
         if !self.is_drop_adt(ty) || !self.type_needs_drop(ty) {
             return false;
         }
-        self.adt_drop_reaches_self(ty, &mut HashSet::new())
+        let start = self.drop_function_name(ty);
+        self.adt_drop_reaches_start(ty, &start, &mut HashSet::new(), true)
     }
 
-    fn adt_drop_reaches_self(&self, ty: &Type, visiting: &mut HashSet<String>) -> bool {
+    fn adt_drop_reaches_start(
+        &self,
+        ty: &Type,
+        start: &str,
+        visiting: &mut HashSet<String>,
+        is_root: bool,
+    ) -> bool {
         let resolved = resolve_type_alias(ty, &self.type_aliases);
         if let Type::Box { inner } = &resolved {
-            return self.adt_drop_reaches_self(inner, visiting);
+            return self.adt_drop_reaches_start(inner, start, visiting, is_root);
         }
         if let Type::Vec { elem_type } = &resolved {
-            return self.adt_drop_reaches_self(elem_type, visiting);
+            return self.adt_drop_reaches_start(elem_type, start, visiting, is_root);
         }
         if self.is_drop_adt(&resolved) {
             let key = self.drop_function_name(&resolved);
-            if !visiting.insert(key.clone()) {
+            if !is_root && key == start {
                 return true;
+            }
+            if !visiting.insert(key.clone()) {
+                return false;
             }
             let cyclic = if let Some((decl, substitutions)) = self.struct_decl_for_type(&resolved) {
                 decl.fields.iter().any(|field| {
                     let field_ty = Self::substitute_field_types(&field.ty, &substitutions);
-                    self.adt_drop_reaches_self(&field_ty, visiting)
+                    self.adt_drop_reaches_start(&field_ty, start, visiting, false)
                 })
             } else if let Some((decl, substitutions)) = self.enum_decl_for_type(&resolved) {
                 decl.variants.iter().any(|variant| {
                     if let Some(named_fields) = &variant.named_fields {
                         named_fields.iter().any(|(_, field_ty)| {
                             let ft = Self::substitute_field_types(field_ty, &substitutions);
-                            self.adt_drop_reaches_self(&ft, visiting)
+                            self.adt_drop_reaches_start(&ft, start, visiting, false)
                         })
                     } else {
                         variant.payload_types.iter().any(|payload_ty| {
                             let ft = Self::substitute_field_types(payload_ty, &substitutions);
-                            self.adt_drop_reaches_self(&ft, visiting)
+                            self.adt_drop_reaches_start(&ft, start, visiting, false)
                         })
                     }
                 })
