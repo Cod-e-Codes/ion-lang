@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.19 - 2026-08-13
+
+- **Codegen**: `Vec<T>` scope-exit drop now drops remaining elements when `T` needs destruction, then `ion_vec_free`. This impacts any `Vec<String>`, `Vec<Vec<U>>`, or `Vec` of structs/enums with owned fields (previously the backing array was freed and elements leaked). `Vec::get` of such `T` hollows the slot (already specified as move-out). `Vec::set` drops the previous element. `Vec<int>` and other Copy elements are unchanged. `Box<T>` drops `T` before `ion_box_free` when `T` needs destruction; `Box::unwrap` still does not drop `T`.
+- **Type checker**: unannotated `Option::None` / other no-payload generic variants infer `T` from a call argument's parameter type (any position), matching return and struct-field positions. Unannotated `let empty = Option::None` still requires an annotation. This impacts passing `Option::None` or `Result::Err(...)` directly into a function.
+- **Tests**: `test_vec_string_scope_drop.ion`, `test_vec_struct_string_scope_drop.ion`, `test_box_string_scope_drop.ion`, `test_option_none_call_arg.ion`, `test_option_none_call_arg_middle.ion`, `test_result_err_call_arg.ion`. Linux CI leak-sanitizer covers the Vec/Box string scope-drop tests.
+- **Docs**: ION_SPEC §4.4 / §5.5 / §8.2, ABI Vec/Box drop, bug hotspots, verified patterns.
+
 ## 0.1.18 - 2026-08-13
 
 - **Type checker**: `Box<&T>` / `Vec<&T>` (and arrays/channels of references) are `ReferenceEscape` as locals and parameters, not only as struct fields. This impacts any program that boxed or vectored a reference (`let b: Box<&int> = Box::new(&x)` previously compiled). Stack-local `Option<&T>` from `Vec::get_ref` is unchanged.

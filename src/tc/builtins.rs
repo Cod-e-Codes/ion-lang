@@ -137,7 +137,21 @@ impl TypeChecker {
                 });
             }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
-            let value_ty = self.check_expr(&call_expr.args[1])?;
+            let expected_elem = match &vec_ty {
+                Type::Ref {
+                    inner,
+                    mutable: true,
+                } => match inner.as_ref() {
+                    Type::Vec { elem_type } => Some(elem_type.as_ref().clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let value_ty = if let Some(elem) = &expected_elem {
+                self.check_expr_with_expected(&call_expr.args[1], elem)?
+            } else {
+                self.check_expr(&call_expr.args[1])?
+            };
             if let Type::Ref {
                 inner: ref inner_ty,
                 mutable: true,
@@ -325,7 +339,21 @@ impl TypeChecker {
             }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
             let index_ty = self.check_expr(&call_expr.args[1])?;
-            let value_ty = self.check_expr(&call_expr.args[2])?;
+            let expected_elem = match &vec_ty {
+                Type::Ref {
+                    inner,
+                    mutable: true,
+                } => match inner.as_ref() {
+                    Type::Vec { elem_type } => Some(elem_type.as_ref().clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let value_ty = if let Some(elem) = &expected_elem {
+                self.check_expr_with_expected(&call_expr.args[2], elem)?
+            } else {
+                self.check_expr(&call_expr.args[2])?
+            };
             if !self.is_integer_type(&index_ty) {
                 return Err(TypeCheckError::TypeMismatch {
                     expected: "integer type".to_string(),

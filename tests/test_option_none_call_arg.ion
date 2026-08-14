@@ -1,0 +1,20 @@
+// Option::None infers T from a function parameter's expected type.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn take(o: Option<int>) -> int {
+    match o {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 3;
+        }
+    }
+}
+
+fn main() -> int {
+    return take(Option::None);
+}

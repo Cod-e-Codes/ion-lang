@@ -236,13 +236,58 @@ impl Codegen {
 
             let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
             let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
-            code.push_str("ion_vec_get((ion_vec_t*)(");
-            code.push_str(&deref_vec);
-            code.push_str("), ");
-            code.push_str(&index_code);
-            code.push_str(", sizeof(");
-            code.push_str(&elem_c_type);
-            code.push_str("))");
+            let elem_ty = self.vec_elem_type_from_arg(&args[0]);
+            let hollow = elem_ty.as_ref().is_some_and(|t| self.type_needs_drop(t));
+            if hollow {
+                let n = self.temp_var_counter;
+                self.temp_var_counter += 1;
+                let gv = format!("_ion_gv{n}");
+                let gi = format!("_ion_gi{n}");
+                let gr = format!("_ion_gr{n}");
+                code.push_str("({ ion_vec_t* ");
+                code.push_str(&gv);
+                code.push_str(" = (ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("); int ");
+                code.push_str(&gi);
+                code.push_str(" = ");
+                code.push_str(&index_code);
+                code.push_str("; void* ");
+                code.push_str(&gr);
+                code.push_str(" = ion_vec_get(");
+                code.push_str(&gv);
+                code.push_str(", ");
+                code.push_str(&gi);
+                code.push_str(", sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str(")); if (");
+                code.push_str(&gr);
+                code.push_str(" && *(int*)");
+                code.push_str(&gr);
+                code.push_str(" == 0 && ");
+                code.push_str(&gv);
+                code.push_str(" && ");
+                code.push_str(&gv);
+                code.push_str("->data) { memset((char*)");
+                code.push_str(&gv);
+                code.push_str("->data + (size_t)");
+                code.push_str(&gi);
+                code.push_str(" * sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str("), 0, sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str(")); } ");
+                code.push_str(&gr);
+                code.push_str("; })");
+            } else {
+                code.push_str("ion_vec_get((ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("), ");
+                code.push_str(&index_code);
+                code.push_str(", sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str("))");
+            }
             return Some(code);
         }
 
@@ -348,6 +393,7 @@ impl Codegen {
             value_code = std::mem::replace(&mut self.output, old_output);
 
             let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
+            let drop_old = elem_ty.as_ref().is_some_and(|t| self.type_needs_drop(t));
 
             let value_is_lvalue = matches!(
                 args[2],
@@ -356,7 +402,56 @@ impl Codegen {
                     | IREexpr::Var(_)
                     | IREexpr::FieldAccess { .. }
             );
-            if value_is_lvalue {
+            if drop_old {
+                let n = self.temp_var_counter;
+                self.temp_var_counter += 1;
+                let sv = format!("_ion_sv{n}");
+                let si = format!("_ion_si{n}");
+                let slot = format!("(({elem_c_type}*)(({sv})->data))[{si}]");
+                let drop_old_stmt = elem_ty
+                    .as_ref()
+                    .map(|t| self.capture_drop_at_path(&slot, t))
+                    .unwrap_or_default();
+                code.push_str("({ ion_vec_t* ");
+                code.push_str(&sv);
+                code.push_str(" = (ion_vec_t*)(");
+                code.push_str(&deref_vec);
+                code.push_str("); int ");
+                code.push_str(&si);
+                code.push_str(" = ");
+                code.push_str(&index_code);
+                code.push_str("; ");
+                let value_ptr = if value_is_lvalue {
+                    format!("&{value_code}")
+                } else if matches!(args[2], IREexpr::Call { .. }) {
+                    code.push_str(&elem_c_type);
+                    code.push_str(" _ion_set_val = ");
+                    code.push_str(&value_code);
+                    code.push_str("; ");
+                    "&_ion_set_val".to_string()
+                } else {
+                    format!("&(({elem_c_type}){{{value_code}}})")
+                };
+                code.push_str("if (");
+                code.push_str(&sv);
+                code.push_str(" && ");
+                code.push_str(&si);
+                code.push_str(" >= 0 && (size_t)");
+                code.push_str(&si);
+                code.push_str(" < ");
+                code.push_str(&sv);
+                code.push_str("->len) { ");
+                code.push_str(&drop_old_stmt);
+                code.push_str(" } ion_vec_set(");
+                code.push_str(&sv);
+                code.push_str(", ");
+                code.push_str(&si);
+                code.push_str(", ");
+                code.push_str(&value_ptr);
+                code.push_str(", sizeof(");
+                code.push_str(&elem_c_type);
+                code.push_str(")); })");
+            } else if value_is_lvalue {
                 code.push_str("ion_vec_set((ion_vec_t*)(");
                 code.push_str(&deref_vec);
                 code.push_str("), ");

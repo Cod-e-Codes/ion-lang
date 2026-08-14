@@ -22,7 +22,7 @@ let p: Point = Point { x: 1, y: 2 };
 
 ## Enum variants
 
-Tuple: `Option::Some(42)`, `Option::None`.
+Tuple: `Option::Some(42)`, `Option::None`. `take(Option::None)` infers `T` from the parameter type ([tests/test_option_none_call_arg.ion](../../../../tests/test_option_none_call_arg.ion)); unannotated `let empty = Option::None` still needs an annotation.
 
 Struct: `Status::Ok { value: 10 }`.
 

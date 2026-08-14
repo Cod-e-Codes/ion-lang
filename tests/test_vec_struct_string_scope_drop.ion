@@ -1,0 +1,12 @@
+// Struct field Vec<String> drop must free elements, then the backing array.
+struct Bag {
+    items: Vec<String>;
+}
+
+fn main() -> int {
+    let mut b: Bag = Bag {
+        items: Vec::new(),
+    };
+    Vec::push(&mut b.items, String::from("leaked?"));
+    return 0;
+}

@@ -671,7 +671,7 @@ Ion supports a **local, Hindley–Milner-inspired inference**:
 The inference engine is intentionally limited:
 
 - No higher-rank polymorphism.
-- Generic enum variants with no payload (`Option::None`) infer type arguments only from an adjacent expected type (a `let` annotation, a struct field, or a return type). They do not take `T` from a later statement; without that context the compiler requires an annotation.
+- Generic enum variants with no payload (`Option::None`) infer type arguments only from an adjacent expected type (a `let` annotation, a struct field, a function parameter / call argument, or a return type). They do not take `T` from a later statement; without that context the compiler requires an annotation.
 - Generic type parameters may declare optional **trait bounds** (`Copy`, `Eq`, `Send`). Bounds are checked at monomorphization: each concrete instantiation must satisfy every bound on the corresponding parameter. There are no user-defined traits; bounds name structural capabilities checked by the compiler (see Section 4.8).
 - Structural `Send` still applies per instantiation even without an explicit bound: for a generic type `Wrapper<T>`, each monomorphized `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`.
 
@@ -896,8 +896,8 @@ fn process() {
 
 When a binding goes out of scope (block exit, function return), owned values with heap resources are dropped automatically:
 
-- `Box<T>`: `ion_box_free`
-- `Vec<T>`: `ion_vec_free`
+- `Box<T>`: drop `T` (when it needs destruction), then `ion_box_free`
+- `Vec<T>`: drop remaining elements (when `T` needs destruction), then `ion_vec_free`
 - `String`: `ion_string_free`
 - `Sender<T>` / `Receiver<T>`: `ion_channel_handle_drop` (refcounted; freed when both ends are dropped)
 - Struct fields with owned heap types (`Box`, `Vec`, `String`, channels, or nested structs/enums containing them) are dropped in declaration order when the struct goes out of scope.
@@ -1078,9 +1078,9 @@ Note that:
 
 - `Vec<T>` is `Send` if `T: Send`.
 - `Vec::new()` and `Vec::with_capacity()` infer `T` from a `let` type annotation when present (e.g. `let v: Vec<i32> = Vec::new()`).
-- `Vec::get()` and `Vec::pop()` return `Option<T>` to handle out-of-bounds or empty cases. Both **move** the element out of the vector. To preserve vector length after a read-only scan, either use `Vec::get_ref()` (below) or copy fields and `Vec::set()` a rebuilt struct literal to put the value back (nested `Vec` fields still move on put-back).
+- `Vec::get()` and `Vec::pop()` return `Option<T>` to handle out-of-bounds or empty cases. Both **move** the element out of the vector. For a `T` that needs destruction, `Vec::get` hollows the slot (zero-fills it) so later vector drop does not free the moved value again. Copy `T` is left in place (move and copy are indistinguishable). To preserve vector length after a read-only scan, either use `Vec::get_ref()` (below) or copy fields and `Vec::set()` a rebuilt struct literal to put the value back (nested `Vec` fields still move on put-back).
 - `Vec::get_ref()` returns `Option<&T>`: a **local, stack-only borrow** of an in-place element. It does not move or hollow the slot. The result is only valid as a short-lived binding within the current function (for example in a `match` arm). Match arms bind the element as `&T`; for enum elements, an inner `match` on that binding dispatches variants directly (no unary `*` deref). Copy fields in struct or enum variant patterns bind as `T`; non-copy fields bind as `&T`. Codegen uses `T*` for types with owned fields and copies by value for copy types, so repeated scans over `Vec<struct-with-nested-Vec>` do not double-free nested fields. It cannot be returned, stored in structs or enums, sent on channels, or cross `spawn`. While an `&T` from `get_ref` is active, the root owner of the vector (the binding behind `&Vec<T>`) is shared-borrowed: `&mut Vec<T>` on that owner, `Vec::set`, `Vec::push`, and `Vec::pop` on the same vector are rejected until the borrow ends. Out-of-range or negative indices yield `Option::None`. Nested inspection (`order.lines` then `get_ref`) follows the same root-owner borrow rules as field paths (Section 5.3). Field paths through `&Struct` that are already references (for example `order.lines` when `order: &Order`) are passed to `Vec` methods without an extra `&`.
-- `Vec::set()` requires a mutable reference and returns an error code (0 for success, non-zero for failure). After shared borrows from `get_ref` end, `Vec::set` on the same index is allowed.
+- `Vec::set()` requires a mutable reference and returns an error code (0 for success, non-zero for failure). When `T` needs destruction, the previous element at that index is dropped before the new value is written. After shared borrows from `get_ref` end, `Vec::set` on the same index is allowed.
 
 For cross-function or long-lived access, Ion still favors an **index/handle style**: helpers return indices or keys and callers re-index within their own function bodies. When slots in a growable table can be reused, prefer `Handle` / `Arena<T>` in Section 8.6 over a raw `int` index.
 

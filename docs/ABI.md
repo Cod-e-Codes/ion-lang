@@ -44,7 +44,8 @@ Stable beta expectations:
 
 - `Vec::new`, `Vec::push`, `Vec::pop`, `Vec::get`, `Vec::get_ref`, `Vec::set`, `Vec::len`, and
   `Vec::capacity` remain available through the stdlib/builtin surface.
-- Dropping `Vec<T>` drops owned elements when `T` needs destruction.
+- Dropping `Vec<T>` drops owned elements when `T` needs destruction (compiler drop glue over `0..len`, then `ion_vec_free`). The runtime helper does not take a destructor callback.
+- `Vec::get` of a dropping `T` copies the element into `Option<T>` and hollows the slot. `Vec::set` of a dropping `T` drops the previous element before overwrite.
 - Bounds-sensitive operations either return `Option<T>` where documented or
   trigger the runtime panic path for checked indexing.
 - `Vec::get` / `Vec::pop` return heap `Option` blobs from the runtime; generated
@@ -79,7 +80,8 @@ Stable beta expectations:
 - `Box::new` allocates and owns a value.
 - `Box::unwrap` consumes the box, copies the payload out by value, and
   `ion_box_free`s the allocation. It does not drop `T`; the caller owns the copy.
-- Dropping a `Box<T>` drops the payload and releases the allocation once.
+- Dropping a `Box<T>` drops the payload when `T` needs destruction, then
+  releases the allocation once.
 
 ## Arrays and slices
 
