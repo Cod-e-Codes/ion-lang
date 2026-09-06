@@ -83,10 +83,18 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_send_basic.ion` - Send/Send smoke test
 - `test_defer_basic.ion` - Defer statements
 - `test_defer_block.ion` - Block-scoped defer
+- `test_defer_before_break.ion` - `defer` before `break` runs; exit 1
 - `test_scope_drop_block.ion` - Automatic Vec drop at block exit
 - `test_vec_string_scope_drop.ion` - `Vec<String>` scope-exit drop frees each `String` then the backing array (exit 0); cgen asserts element `ion_string_free` and `ion_vec_free`; Linux CI leak-sanitizer
 - `test_vec_struct_string_scope_drop.ion` - struct field `Vec<String>` drops elements then the array (exit 0)
 - `test_box_string_scope_drop.ion` - `Box<String>` drops the `String` then `ion_box_free` (exit 0); Linux CI leak-sanitizer
+- `test_loop_continue_nested_if_drop.ion` - nested `if` `continue` drops inner and loop-body Strings; fall-through still uses `a` (exit 4); Linux CI leak-sanitizer
+- `test_for_continue_drop_step.ion` - `for` `continue` frees a body `String` and still visits later elements (exit 8); Linux CI leak-sanitizer
+- `test_loop_break_drop.ion` - `loop` `break` drops a body `String` (exit 0); Linux CI leak-sanitizer
+- `test_nested_loop_inner_break_drop.ion` - inner `break` drops the inner `String` and leaves outer Strings usable (exit 11); Linux CI leak-sanitizer
+- `test_tuple_string_scope_drop.ion` - `(String, String)` whole-value drop frees `f0` then `f1` (exit 3); Linux CI leak-sanitizer
+- `test_array_string_scope_drop.ion` - `[String; 2]` whole-value drop frees `path[i]` in increasing index (exit 0); Linux CI leak-sanitizer
+- `test_drop_order_locals_struct_defer.ion` - defers then reverse-local drops; struct fields in declaration order (exit 0); Linux CI leak-sanitizer
 - `test_struct_field_drop.ion` - Struct and enum field drops at block exit (nested String fields, enum payload)
 - `test_struct_field_drop_vec.ion` - Struct field holding `Vec<int>` drop at block exit (exit 46)
 - `test_struct_field_drop_box.ion` - Box field drop at block exit (exit 44)
@@ -149,6 +157,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_match_complex.ion` - Complex pattern matching scenarios
 - `test_while_basic.ion` - While loops
 - `test_break_continue.ion` - `break` and `continue` in `while` and `for` loops
+- `test_match_break_in_while.ion` - `break` inside `match` within `while` exits the loop (exit 3)
 - `test_call_basic.ion` - Function calls
 - `test_string_basic.ion` - String literals
 - `test_string_from.ion` - String::from() function
@@ -189,6 +198,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_new.ion` - Vec::new() function
 - `test_vec_push_pop.ion` - Vec push and pop operations
 - `test_vec_get_set.ion` - Vec get and set operations
+- `test_vec_set_string.ion` - `Vec::set` of `String` drops the previous element (exit 0); Linux CI leak-sanitizer
 - `test_vec_capacity.ion` - Vec capacity management
 - `test_vec_i32.ion` - `Vec<i32>` with annotated `Vec::new`, `i32` indices
 - `test_vec_struct.ion` - `Vec` with struct elements, annotated `Vec::new`, and `for` iteration
@@ -220,7 +230,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_push_nested_call.ion` - `Vec::push` with nested call expression value
 - `test_vec_push_struct_var.ion` - `Vec::push` with a struct variable (address-of lvalue)
 - `test_struct_field_move_vec.ion` - move a `Vec` out of a struct field without double-free
-- `test_tuple_vec_int.ion` - tuple `(Vec<T>, int)` mangling and return
+- `test_tuple_vec_int.ion` - tuple `(Vec<T>, int)` mangling, return, and `t.f0` drop; Linux CI leak-sanitizer
 - `test_tuple_vec_int_epilogue.ion` - tuple return with loop body before epilogue `return`
 - `test_tuple_fn_lit.ion` - fn literal returning a tuple; `ret_val` compound init
 - `test_call_struct_field_move.ion` - struct field moved into a call argument without broken C
@@ -441,7 +451,7 @@ Special cases (not in the manifest):
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
 - `ION_BUILD`: Path to the ion-build binary (default: `../target/release/ion-build`)
 - `CC`: C compiler to use (default: `gcc`)
-- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`) and a leak-sanitizer step (`detect_leaks=1`) on `Box::unwrap` tests plus `Vec<String>` / `Box<String>` scope-drop tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux.
+- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`) and a leak-sanitizer step (`detect_leaks=1`) on `Box::unwrap` tests plus named heap-drop `run` tests (Vec/Box/tuple/array/`break`/`continue`/`Vec::set` of `String`), and runs the full harness with `-Wall -Wextra -Werror` on Linux.
 - `LDFLAGS`: Extra C linker flags for generated test executables (default: empty). Pair with `CFLAGS` for sanitizer runtime flags when needed.
 - `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 

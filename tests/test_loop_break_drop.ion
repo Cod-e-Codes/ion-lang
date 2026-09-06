@@ -1,0 +1,8 @@
+// break from loop must drop owned body locals.
+fn main() -> int {
+    loop {
+        let s: String = String::from("break");
+        break;
+    }
+    return 0;
+}

@@ -82,6 +82,8 @@ pub struct Codegen {
     loop_continue_label: Option<String>,
     loop_break_label: Option<String>,
     loop_break_label_used: bool,
+    /// Index of the current loop body frame (`scope_stack.len()` before `generate_block` of the body).
+    loop_unwind_depth: usize,
     match_in_switch: u32,
     /// When true (single-file merge), module calls use `{alias}_{func}` C names.
     mangle_merged_module_calls: bool,
@@ -130,6 +132,7 @@ impl Codegen {
             loop_continue_label: None,
             loop_break_label: None,
             loop_break_label_used: false,
+            loop_unwind_depth: 0,
             match_in_switch: 0,
             mangle_merged_module_calls: false,
             multi_file_module: None,
@@ -1233,9 +1236,16 @@ impl Codegen {
                         Type::Ref { inner, .. } => inner.as_ref(),
                         other => other,
                     };
-                    let (decl, substitutions) = self.struct_decl_for_type(struct_ty)?;
-                    let field_decl = decl.fields.iter().find(|f| f.name == *field)?;
-                    Self::substitute_field_types(&field_decl.ty, &substitutions)
+                    if let Type::Tuple { elements } = struct_ty {
+                        let idx = field
+                            .strip_prefix('f')
+                            .and_then(|s| s.parse::<usize>().ok())?;
+                        elements.get(idx)?.clone()
+                    } else {
+                        let (decl, substitutions) = self.struct_decl_for_type(struct_ty)?;
+                        let field_decl = decl.fields.iter().find(|f| f.name == *field)?;
+                        Self::substitute_field_types(&field_decl.ty, &substitutions)
+                    }
                 };
                 match base_ty {
                     Type::Ref { mutable, .. } if self.type_needs_drop(&field_ty) => {
@@ -1741,6 +1751,20 @@ impl Codegen {
         }
     }
 
+    /// Emit cleanup for frames from the loop body through the innermost nested block.
+    /// Clones only; does not pop or mark `dropped` (fall-through after `if` still uses those bindings).
+    fn scope_emit_loop_unwind(&mut self) {
+        let depth = self.loop_unwind_depth;
+        if depth >= self.scope_stack.len() {
+            return;
+        }
+        let frames: Vec<ScopeFrame> = self.scope_stack[depth..].iter().rev().cloned().collect();
+        for frame in frames {
+            self.emit_frame_cleanup(&frame);
+        }
+    }
+
+    /// Specified interleaving: this block's defers (LIFO), then remaining locals (LIFO).
     fn emit_frame_cleanup(&mut self, frame: &ScopeFrame) {
         for defer_expr in frame.defers.iter().rev() {
             self.write_indent();
@@ -2248,16 +2272,23 @@ impl Codegen {
     }
 
     fn emit_break_statement(&mut self) {
+        self.scope_emit_loop_unwind();
         self.write_indent();
-        if self.match_in_switch > 0 {
-            if let Some(ref label) = self.loop_break_label {
-                self.loop_break_label_used = true;
-                self.writeln(&format!("goto {};", label));
-            } else {
-                self.writeln("break;");
-            }
+        if let Some(ref label) = self.loop_break_label {
+            self.loop_break_label_used = true;
+            self.writeln(&format!("goto {};", label));
         } else {
             self.writeln("break;");
+        }
+    }
+
+    fn emit_continue_statement(&mut self) {
+        self.scope_emit_loop_unwind();
+        self.write_indent();
+        if let Some(ref label) = self.loop_continue_label {
+            self.writeln(&format!("goto {};", label));
+        } else {
+            self.writeln("continue;");
         }
     }
 
@@ -2327,8 +2358,11 @@ impl Codegen {
             self.generate_stmt(&block.statements[i]);
             i += 1;
         }
-        let ends_with_return = matches!(block.statements.last(), Some(IRStmt::Return(_)));
-        if ends_with_return {
+        let ends_with_jump = matches!(
+            block.statements.last(),
+            Some(IRStmt::Return(_) | IRStmt::Break | IRStmt::Continue)
+        );
+        if ends_with_jump {
             while self.scope_stack.len() > depth_at_entry {
                 self.scope_stack.pop();
             }
@@ -2585,12 +2619,7 @@ impl Codegen {
                 self.emit_break_statement();
             }
             IRStmt::Continue => {
-                self.write_indent();
-                if let Some(ref label) = self.loop_continue_label {
-                    self.writeln(&format!("goto {};", label));
-                } else {
-                    self.writeln("continue;");
-                }
+                self.emit_continue_statement();
             }
             IRStmt::Expr(expr) => {
                 // Special handling: match expressions used as statements should be blocks, not statement expressions
@@ -2683,28 +2712,21 @@ impl Codegen {
                 }
             }
             IRStmt::While(ir_while) => {
-                let is_infinite = matches!(&ir_while.cond, IREexpr::BoolLiteral(true));
-                let break_label = if is_infinite {
-                    Some(format!("loop_break_{}", self.temp_var_counter))
-                } else {
-                    None
-                };
-                if is_infinite {
-                    self.temp_var_counter += 1;
-                }
+                let break_label = format!("loop_break_{}", self.temp_var_counter);
+                self.temp_var_counter += 1;
                 let prev_break = self.loop_break_label.take();
                 let prev_break_used = self.loop_break_label_used;
+                let prev_continue_label = self.loop_continue_label.take();
+                let prev_unwind_depth = self.loop_unwind_depth;
                 self.loop_break_label_used = false;
-                if let Some(ref label) = break_label {
-                    self.loop_break_label = Some(label.clone());
-                }
+                self.loop_break_label = Some(break_label.clone());
+                self.loop_continue_label = ir_while.continue_label.clone();
+                self.loop_unwind_depth = self.scope_stack.len();
                 self.write_indent();
                 self.write("while (");
                 self.generate_expr_conditional(&ir_while.cond);
                 self.writeln(") {");
                 self.indent_level += 1;
-                let prev_continue_label = self.loop_continue_label.take();
-                self.loop_continue_label = ir_while.continue_label.clone();
                 self.generate_block(&ir_while.body);
                 if let Some(ref step) = ir_while.step {
                     if let Some(ref label) = ir_while.continue_label {
@@ -2715,18 +2737,17 @@ impl Codegen {
                     }
                     self.generate_block(step);
                 }
-                self.loop_continue_label = prev_continue_label;
                 self.indent_level -= 1;
                 self.write_indent();
                 self.writeln("}");
-                if let Some(label) = break_label
-                    && self.loop_break_label_used
-                {
+                if self.loop_break_label_used {
                     self.write_indent();
-                    self.writeln(&format!("{}:", label));
+                    self.writeln(&format!("{}:", break_label));
                 }
                 self.loop_break_label = prev_break;
                 self.loop_break_label_used = prev_break_used;
+                self.loop_continue_label = prev_continue_label;
+                self.loop_unwind_depth = prev_unwind_depth;
             }
             IRStmt::UnsafeBlock(unsafe_block) => {
                 // Unsafe blocks lower to regular C blocks (no special syntax)
@@ -4539,8 +4560,7 @@ impl Codegen {
                 self.emit_break_statement();
             }
             IRStmt::Continue => {
-                self.write_indent();
-                self.writeln("continue;");
+                self.emit_continue_statement();
             }
             IRStmt::Expr(expr) => {
                 if is_last {

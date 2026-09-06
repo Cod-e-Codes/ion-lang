@@ -331,10 +331,10 @@ While `&mut s` is active, do not move or assign `s` or other fields of the same 
 ## defer
 
 ```ion
-defer expr;  // runs at scope exit, LIFO order
+defer expr;  // LIFO; runs before that block's remaining locals
 ```
 
-See [tests/test_defer_basic.ion](../../../../tests/test_defer_basic.ion).
+`break` and `continue` still run those defers and drops, through and including the loop body. See [tests/test_defer_basic.ion](../../../../tests/test_defer_basic.ion) and [tests/test_defer_before_break.ion](../../../../tests/test_defer_before_break.ion).
 
 ## Compound assignment
 

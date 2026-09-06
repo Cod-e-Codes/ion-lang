@@ -34,8 +34,8 @@ APIs that would return `&T` in Rust must use owned values, indices, or the patte
 ## Memory
 
 - Stack by default; `Box<T>` for explicit heap
-- `defer` for deterministic cleanup at scope exit
-- `Vec<T>`, `String` drop at scope end (elements of a dropping `T`, then the backing array)
+- `defer` for deterministic cleanup at scope exit (`break` / `continue` included)
+- `Vec<T>`, `String`, tuples, and arrays drop at scope end (elements of a dropping `T`, then the backing array for `Vec`)
 
 ## Unsafe boundaries
 

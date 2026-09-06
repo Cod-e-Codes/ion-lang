@@ -1,0 +1,18 @@
+// inner break drops the inner String and leaves the outer-loop String usable.
+fn main() -> int {
+    let outer: String = String::from("outer");
+    let mut i: int = 0;
+    let mut acc: int = 0;
+    while i < 2 {
+        let mid: String = String::from("mid");
+        let mut j: int = 0;
+        while j < 2 {
+            let inner: String = String::from("inner");
+            j = j + 1;
+            break;
+        }
+        acc = acc + String::len(&mid);
+        i = i + 1;
+    }
+    return String::len(&outer) + acc;
+}

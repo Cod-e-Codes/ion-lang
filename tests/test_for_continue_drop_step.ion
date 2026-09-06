@@ -1,0 +1,13 @@
+// continue in a for body must drop the local and still run the iteration step.
+fn main() -> int {
+    let arr: [int; 4] = [1, 2, 3, 4];
+    let mut sum: int = 0;
+    for x in arr {
+        let s: String = String::from("x");
+        if x == 2 {
+            continue;
+        }
+        sum = sum + x;
+    }
+    return sum;
+}

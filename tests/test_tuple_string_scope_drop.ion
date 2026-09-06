@@ -1,0 +1,5 @@
+// Whole-value drop of (String, String) frees f0 then f1.
+fn main() -> int {
+    let t: (String, String) = (String::from("ab"), String::from("c"));
+    return String::len(&t.0) + String::len(&t.1);
+}

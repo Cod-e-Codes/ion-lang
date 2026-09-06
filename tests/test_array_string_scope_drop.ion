@@ -1,0 +1,5 @@
+// Whole-value drop of [String; N] frees elements in increasing index order.
+fn main() -> int {
+    let a: [String; 2] = [String::from("a"), String::from("bb")];
+    return 0;
+}
