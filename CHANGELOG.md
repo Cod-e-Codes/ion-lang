@@ -2,8 +2,12 @@
 
 ## Unreleased
 
+## 0.1.23 - 2026-09-06
+
 - **Fix**: loop `break` and `continue` skipped drops and defers (they jumped without frame cleanup). Nested block locals and `defer` before `break` now unwind through the loop body. `break` inside `match` inside `while`/`for` jumps to the loop exit, not the `switch`. `for` `continue` still runs the iteration step. This impacts any owned local or `defer` in a loop that `break`s or `continue`s, including nested `if`/`match`.
 - **Fix**: tuple and array values with owned contents were not dropped. Whole-value drop now walks `f0`..`fN` and `path[i]` in increasing index. This impacts `(String, String)`, `(Vec<T>, int)`, `[String; N]`, and `Box`/`Vec` of those types.
+- **CI**: `dtolnay/rust-toolchain` in `ci.yml` is pinned to the same v1 commit as `release.yml`, with `toolchain: "1.96.0"` in `with:`. Dependabot ignores that action because its tag is the Rust version, not an action release; the `@1.96.0` to `@1.100.0` bump tried to install a nonexistent toolchain.
+- **CI**: `softprops/action-gh-release` in `release.yml` is pinned to v3.0.3.
 - **Tests**: `test_loop_continue_nested_if_drop.ion`, `test_for_continue_drop_step.ion`, `test_loop_break_drop.ion`, `test_defer_before_break.ion`, `test_nested_loop_inner_break_drop.ion`, `test_tuple_string_scope_drop.ion`, `test_array_string_scope_drop.ion`, `test_drop_order_locals_struct_defer.ion`, `test_vec_set_string.ion`, `test_match_break_in_while.ion`. Linux CI leak-sanitizer covers the heap-drop run tests plus `test_tuple_vec_int`.
 - **Docs**: ION_SPEC §4.7 / §5.5 / §6.2, ABI, skills.
 
