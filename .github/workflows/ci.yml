@@ -14,8 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@1.96.0
+      # Pin the action commit (v1 line). The toolchain version is `with:`, matching
+      # rust-toolchain.toml. Do not use dtolnay/rust-toolchain@1.96.0; Dependabot
+      # treats that tag as an action release and bumps it to a nonexistent Rust.
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
+          toolchain: "1.96.0"
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -167,7 +171,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.96.0"
 
       - uses: Swatinem/rust-cache@v2
 

@@ -4,6 +4,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # The dtolnay/rust-toolchain tag is the Rust compiler version, not an action
+    # release. Dependabot otherwise bumps @1.96.0 to @1.100.0 (a nonexistent toolchain).
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
     groups:
       github-actions:
         patterns:
