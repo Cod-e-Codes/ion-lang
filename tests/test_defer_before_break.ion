@@ -1,0 +1,9 @@
+// defer before break must run; the deferred assignment is visible after the loop.
+fn main() -> int {
+    let mut n: int = 0;
+    loop {
+        defer n = n + 1;
+        break;
+    }
+    return n;
+}

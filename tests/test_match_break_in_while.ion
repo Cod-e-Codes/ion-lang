@@ -1,0 +1,29 @@
+// break inside match inside while must exit the loop, not only the switch.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    Vec::push(&mut v, 2);
+    Vec::push(&mut v, 3);
+    Vec::push(&mut v, 4);
+    Vec::push(&mut v, 5);
+    let mut i: int = 0;
+    while i < 5 {
+        match Vec::get_ref(&v, i) {
+            Option::Some(_) => {
+                i = i + 1;
+                if i >= 3 {
+                    break;
+                }
+            }
+            Option::None => {
+                break;
+            }
+        };
+    }
+    return i;
+}

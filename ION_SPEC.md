@@ -697,6 +697,7 @@ The inference engine is intentionally limited:
 - **`break`**: exits the innermost enclosing `while`, `loop`, or `for` loop.
 - **`continue`**: skips to the next iteration of the innermost enclosing `while`, `loop`, or `for` loop. In `for` loops, the step (index increment) still runs.
 - Both `break` and `continue` are compile errors outside of a loop body.
+- Owned values and `defer`s in scopes exited by `break` or `continue` are cleaned up as specified in Section 5.5.
 - **Match guards**: `pattern if expr => { ... }` where `expr` must be `bool`.
 - **Struct-style enum variants**: `enum E { Ok { value: int }; }` with matching literals and patterns.
 
@@ -875,14 +876,30 @@ fn main() -> int {
 
 #### 5.5 Destruction and `defer`
 
-When a binding goes out of scope (e.g., block exit, function return, panic unwinding), its owned value is **dropped** exactly once:
+When a binding goes out of scope, its remaining owned value is dropped exactly once. Scope exit includes block fall-through, `return`, `break`, `continue`, and panic unwinding (if implemented).
 
-- For structs, fields are dropped in declaration order.
-- For enums, the active variant’s payload is dropped.
-- For `Box<T>`, `T` is dropped, then the allocation is freed.
-- `Box::unwrap` moves `T` out first, then frees the allocation; it does not drop `T`.
+Drop order:
 
-`defer` schedules an expression to be executed when the **current block** scope is left, in **last-in, first-out** order. On `return`, all enclosing block defers and drops run innermost-first before the function returns.
+- Locals in one drop scope: reverse declaration order.
+- Struct fields: declaration order.
+- Enum variant payloads: declaration order of the active variant's fields or positional payloads.
+- Tuple fields: positional order (`f0`, `f1`, ...).
+- Array and `Vec<T>` elements at whole-value destruction: increasing index `0 .. len` (then `ion_vec_free` for `Vec`).
+- `Box<T>`: drop `T` (when it needs destruction), then `ion_box_free`.
+- `String`: `ion_string_free`.
+- `Sender<T>` / `Receiver<T>`: `ion_channel_handle_drop` (refcounted; freed when both ends are dropped).
+
+`Box::unwrap` moves `T` out first, then frees the allocation; it does not drop `T`.
+
+Within one block, that block's `defer`s run in last-in, first-out order, then that block's remaining locals drop in reverse declaration order. Nested exit is innermost-first.
+
+`defer` schedules an expression to run when the **current block** scope is left. On `return`, every enclosing block is unwound to the function epilogue (defers then locals, innermost-first).
+
+`break` destroys owned values and runs defers in scopes exited by the break, through and including the loop body scope, then exits the loop. `continue` performs the same cleanup for scopes exited by the continue, then begins the next iteration. For a `for` loop, the iteration step runs after continue cleanup.
+
+Partial moves drop only remaining owned parts. Moved-out pointer fields stay nulled (structs and tuple `fN` slots).
+
+Library methods that drop as a side effect of an algorithm stay unspecified until that method documents an order. `Vec::set` drops the previous element before overwrite (Section 8.2).
 
 ```ion
 fn process() {
@@ -894,15 +911,6 @@ fn process() {
     }
 }
 ```
-
-When a binding goes out of scope (block exit, function return), owned values with heap resources are dropped automatically:
-
-- `Box<T>`: drop `T` (when it needs destruction), then `ion_box_free`
-- `Vec<T>`: drop remaining elements (when `T` needs destruction), then `ion_vec_free`
-- `String`: `ion_string_free`
-- `Sender<T>` / `Receiver<T>`: `ion_channel_handle_drop` (refcounted; freed when both ends are dropped)
-- Struct fields with owned heap types (`Box`, `Vec`, `String`, channels, or nested structs/enums containing them) are dropped in declaration order when the struct goes out of scope.
-- Enum payloads are dropped for the active variant when the enum goes out of scope.
 
 Uninitialized `Box`/`Vec`/`String` bindings are zero-initialized to `NULL` so drop is a no-op.
 
@@ -931,6 +939,7 @@ Ion guarantees that every owned value is dropped exactly once when its owner’s
 In particular:
 
 - Early `return` from a function drops all owned locals (and runs block defers) before returning.
+- `break` and `continue` drop owned values and run defers in the scopes they exit, through and including the loop body (Section 5.5). For `for`, the iteration step runs after continue cleanup.
 - `spawn` thread entry functions use the same scope-exit machinery; captures are dropped when the thread body finishes.
 - Panics (if implemented) unwind the stack, dropping owned values on each frame.
 - `spawn`ed threads manage their own stacks independently.

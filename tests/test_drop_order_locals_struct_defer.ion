@@ -1,0 +1,15 @@
+// Defers run before remaining locals (LIFO); struct fields drop in declaration order.
+struct Pair {
+    a: String;
+    b: String;
+}
+
+fn main() -> int {
+    let first: String = String::from("first");
+    let second: Pair = Pair {
+        a: String::from("sa"),
+        b: String::from("sb"),
+    };
+    defer 0;
+    return 0;
+}

@@ -56,6 +56,14 @@ impl Codegen {
             return result;
         }
         let resolved = resolve_type_alias(ty, &self.type_aliases);
+        if let Type::Tuple { elements } = &resolved {
+            return elements
+                .iter()
+                .any(|elem| self.type_needs_drop_rec(elem, visiting));
+        }
+        if let Type::Array { inner, .. } = &resolved {
+            return self.type_needs_drop_rec(inner, visiting);
+        }
         matches!(
             resolved,
             Type::Box { .. }
@@ -131,6 +139,14 @@ impl Codegen {
         }
         if let Type::Vec { elem_type } = &resolved {
             return self.adt_drop_reaches_start(elem_type, start, visiting, is_root);
+        }
+        if let Type::Array { inner, .. } = &resolved {
+            return self.adt_drop_reaches_start(inner, start, visiting, is_root);
+        }
+        if let Type::Tuple { elements } = &resolved {
+            return elements
+                .iter()
+                .any(|elem| self.adt_drop_reaches_start(elem, start, visiting, is_root));
         }
         if self.is_drop_adt(&resolved) {
             let key = self.drop_function_name(&resolved);
@@ -366,6 +382,30 @@ impl Codegen {
                 self.writeln(&format!(
                     "if ({path}.channel) {{ ion_channel_handle_drop({path}.channel); }}"
                 ));
+            }
+            Type::Tuple { elements } => {
+                let fields: Vec<(usize, Type)> = elements
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, elem_ty)| self.type_needs_drop(elem_ty))
+                    .map(|(i, elem_ty)| (i, elem_ty.clone()))
+                    .collect();
+                for (i, elem_ty) in fields {
+                    self.emit_drop_at_path(&format!("{path}.f{i}"), &elem_ty);
+                }
+            }
+            Type::Array { inner, size } if self.type_needs_drop(&inner) => {
+                let elem_ty = *inner;
+                let idx = self.fresh_temp("_ion_di");
+                self.write_indent();
+                self.writeln(&format!(
+                    "for (size_t {idx} = 0; {idx} < {size}; {idx}++) {{"
+                ));
+                self.indent_level += 1;
+                self.emit_drop_at_path(&format!("({path})[{idx}]"), &elem_ty);
+                self.indent_level -= 1;
+                self.write_indent();
+                self.writeln("}");
             }
             _ => {}
         }

@@ -10,7 +10,10 @@ promise that every internal helper symbol is stable before 1.0.
 - Ion values are owned by exactly one binding unless borrowed through `&T` or
   `&mut T`.
 - Owned values with runtime resources are dropped exactly once by generated
-  scope-exit code.
+  scope-exit code. Loop `break` and `continue` run the same generated drops and
+  `defer`s as other scope exits, through and including the loop body.
+  Whole-value drop of a tuple walks `f0`, `f1`, ...; `[T; N]` walks `path[i]`
+  from `0` to `N`.
 - References are stack-only views and must not be stored in runtime containers
   or sent across threads.
 

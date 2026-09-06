@@ -338,3 +338,27 @@ test_handle_arena_stale.ion	run	42
 test_handle_arena_get_ref.ion	run	42			
 test_handle_arena_copy_struct.ion	run	42			
 test_handle_arena_escape_error.ion	error		ReferenceEscape		
+test_loop_continue_nested_if_drop.ion	run	4
+test_loop_continue_nested_if_drop.ion	cgen			ion_string_free(b)
+test_loop_continue_nested_if_drop.ion	cgen			ion_string_free(a)
+test_for_continue_drop_step.ion	run	8
+test_for_continue_drop_step.ion	cgen			goto __for_step_
+test_loop_break_drop.ion	run	0
+test_loop_break_drop.ion	cgen			ion_string_free(s)
+test_defer_before_break.ion	run	1
+test_defer_before_break.ion	cgen			n = (n + 1)
+test_nested_loop_inner_break_drop.ion	run	11
+test_tuple_string_scope_drop.ion	run	3
+test_tuple_string_scope_drop.ion	cgen			ion_string_free(t.f0)
+test_tuple_string_scope_drop.ion	cgen			ion_string_free(t.f1)
+test_drop_order_locals_struct_defer.ion	run	0
+test_drop_order_locals_struct_defer.ion	cgen			(void)(0);
+test_drop_order_locals_struct_defer.ion	cgen			ion_string_free(second.a)
+test_drop_order_locals_struct_defer.ion	cgen			ion_string_free(second.b)
+test_drop_order_locals_struct_defer.ion	cgen			ion_string_free(first)
+test_vec_set_string.ion	run	0
+test_array_string_scope_drop.ion	run	0
+test_array_string_scope_drop.ion	cgen			ion_string_free((a)[
+test_match_break_in_while.ion	run	3
+test_match_break_in_while.ion	cgen			goto loop_break_
+test_tuple_vec_int.ion	cgen			ion_vec_free((ion_vec_t*)(t.f0))

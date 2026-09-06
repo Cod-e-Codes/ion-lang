@@ -1,0 +1,7 @@
+// Vec::set of String must drop the previous element (not only Copy slots).
+fn main() -> int {
+    let mut v: Vec<String> = Vec::new();
+    Vec::push(&mut v, String::from("old"));
+    Vec::set(&mut v, 0, String::from("new"));
+    return 0;
+}
