@@ -23,15 +23,6 @@ enum BoundsCheck {
     SliceLen { by_ref: bool },
 }
 
-fn is_send_value_lvalue(expr: &IREexpr) -> bool {
-    match expr {
-        IREexpr::Var(_) => true,
-        IREexpr::FieldAccess { base, .. } => is_send_value_lvalue(base),
-        IREexpr::Index { target, .. } => is_send_value_lvalue(target),
-        _ => false,
-    }
-}
-
 fn escape_c_comment_text(s: &str) -> String {
     s.replace("*/", "* /")
 }
@@ -213,6 +204,71 @@ impl Codegen {
             .variants
             .iter()
             .position(|v| v.name == variant_name)
+    }
+
+    fn capture_expr_code(&mut self, expr: &IREexpr) -> String {
+        let mut captured = String::new();
+        let old_output = std::mem::replace(&mut self.output, captured);
+        self.generate_expr(expr);
+        captured = std::mem::replace(&mut self.output, old_output);
+        captured
+    }
+
+    fn c_enum_literal(
+        &self,
+        c_type_name: &str,
+        enum_name: &str,
+        variant_name: &str,
+        payload_c: Option<&str>,
+    ) -> String {
+        let idx = self
+            .enum_map
+            .get(enum_name)
+            .and_then(|d| Self::enum_variant_index(d, variant_name))
+            .unwrap_or(0);
+        if let Some(payload) = payload_c {
+            format!(
+                "({c_type_name}){{ .tag = {idx}, .data = {{ .variant_{idx} = {{ .arg0 = {payload} }} }} }}"
+            )
+        } else {
+            format!("({c_type_name}){{ .tag = {idx}, .data = {{ }} }}")
+        }
+    }
+
+    fn channel_drop_fn_ptr(&self, elem_type: &Type) -> String {
+        if self.type_needs_drop(elem_type) {
+            self.channel_elem_drop_name(elem_type)
+        } else {
+            "NULL".to_string()
+        }
+    }
+
+    fn emit_ion_channel_new(
+        &mut self,
+        elem_type: &Type,
+        args: &[IREexpr],
+        tx_name: &str,
+        rx_name: &str,
+    ) {
+        let elem_c_type = self.type_to_c(elem_type);
+        let cap = if let Some(arg) = args.first() {
+            self.capture_expr_code(arg)
+        } else {
+            "1".to_string()
+        };
+        let drop_fn = self.channel_drop_fn_ptr(elem_type);
+        self.write_indent();
+        self.writeln(&format!(
+            "if (ion_channel_new(sizeof({elem_c_type}), {cap}, {drop_fn}, &{tx_name}, &{rx_name}) != 0) ion_panic(\"channel create failed\");"
+        ));
+    }
+
+    fn sender_addr_code(&mut self, channel: &IREexpr) -> String {
+        if let IREexpr::AddressOf { inner, .. } = channel {
+            format!("&{}", self.capture_expr_code(inner))
+        } else {
+            format!("&{}", self.capture_expr_code(channel))
+        }
     }
 
     fn monomorphized_payload_type(
@@ -598,6 +654,7 @@ impl Codegen {
         self.emit_ready_array_typedefs(&array_typedefs);
 
         self.emit_named_drop_functions();
+        self.emit_channel_drop_functions(program);
 
         // Generate extern function prototypes
         for extern_block in &program.extern_blocks {
@@ -913,6 +970,7 @@ impl Codegen {
         self.emit_ready_array_typedefs(&array_typedefs);
 
         self.emit_named_drop_functions();
+        self.emit_channel_drop_functions(program);
 
         // Generate extern function prototypes (declarations only, implementations come from headers)
         for extern_block in &program.extern_blocks {
@@ -2323,11 +2381,8 @@ impl Codegen {
                 if let Some(Type::Tuple { elements }) = return_type1
                     && elements.len() == 2
                     && let Type::Sender { elem_type } = &elements[0]
+                    && let Some(IREexpr::Call { args, .. }) = &let1.init
                 {
-                    let elem_c_type = self.type_to_c(elem_type);
-                    let elem_size = format!("sizeof({})", elem_c_type);
-
-                    // Generate both variable declarations
                     self.write_indent();
                     self.write(&format!("{} {}", self.type_to_c(&let1.ty), let1.name));
                     self.writeln(";");
@@ -2335,20 +2390,11 @@ impl Codegen {
                     self.write(&format!("{} {}", self.type_to_c(&let2.ty), let2.name));
                     self.writeln(";");
 
-                    // Generate channel_new call
-                    self.write_indent();
-                    self.write("ion_channel_new(");
-                    self.write(&elem_size);
-                    self.write(", 1, &");
-                    self.write(&let1.name);
-                    self.write(", &");
-                    self.write(&let2.name);
-                    self.writeln(");");
+                    self.emit_ion_channel_new(elem_type, args, &let1.name, &let2.name);
 
                     self.scope_register_binding(&let1.name, &let1.ty);
                     self.scope_register_binding(&let2.name, &let2.ty);
 
-                    // Skip both statements
                     i += 2;
                     continue;
                 }
@@ -2460,7 +2506,6 @@ impl Codegen {
                 }
 
                 if let Some(ref init) = let_stmt.init {
-                    // Special handling for channel() tuple destructuring
                     if let IREexpr::Call {
                         callee,
                         args: _,
@@ -2470,57 +2515,32 @@ impl Codegen {
                         && callee == "channel"
                         && tuple_destructure_index.is_some()
                     {
-                        // For tuple destructuring, we need to handle this specially
-                        // Index 0 = sender, Index 1 = receiver
                         if *tuple_destructure_index == Some(0) {
-                            // First variable (sender) - generate the full channel_new call
-                            // Extract element type from return_type
                             if let Some(Type::Tuple { elements }) = return_type
                                 && elements.len() == 2
                                 && let Type::Sender { elem_type } = &elements[0]
                             {
-                                let elem_c_type = self.type_to_c(elem_type);
-                                let elem_size = format!("sizeof({})", elem_c_type);
-
-                                // Generate temporary receiver variable and channel_new call
                                 let temp_rx_name = format!("_channel_rx_{}", let_stmt.name);
-                                self.writeln("");
+                                self.writeln(";");
                                 self.write_indent();
-                                self.write(&format!(
+                                self.writeln(&format!(
                                     "{} {};",
                                     self.type_to_c(&elements[1]),
                                     temp_rx_name
                                 ));
-                                self.writeln("");
-                                self.write_indent();
-                                self.write(" = {0};");
-                                self.writeln("");
-                                self.write_indent();
-                                self.write("ion_channel_new(");
-                                self.write(&elem_size);
-                                self.write(", 1, &");
-                                self.write(&let_stmt.name);
-                                self.write(", &");
-                                self.write(&temp_rx_name);
-                                self.write(");");
-                                self.writeln("");
-                                // Store temp receiver name for next statement
-                                // We'll use a simple naming convention: _channel_rx_<sender_name>
-                                return; // Skip normal initialization
+                                self.emit_ion_channel_new(
+                                    elem_type,
+                                    &[],
+                                    &let_stmt.name,
+                                    &temp_rx_name,
+                                );
+                                self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
+                                return;
                             }
                         } else if *tuple_destructure_index == Some(1) {
-                            // Second variable (receiver) - copy from temporary
-                            // The temp variable name is _channel_rx_<previous_variable>
-                            // We need to find the previous let statement...
-                            // Actually, simpler: use a fixed naming pattern based on this variable name
-                            // But we don't know the sender name...
-
-                            // Let's use a different approach: generate the assignment from temp
-                            // The temp name should be _channel_rx_<something>
-                            // For now, let's assume it's _channel_rx_temp
                             self.write(" = _channel_rx_temp;");
                             self.writeln("");
-                            return; // Skip normal initialization
+                            return;
                         }
                     }
 
@@ -2645,33 +2665,33 @@ impl Codegen {
                         value,
                         value_type,
                     } => {
-                        // Send is used as a statement - generate it as a block to handle temp variables
-                        // This avoids statement expression syntax issues with comma operator
+                        let sender_addr = self.sender_addr_code(channel);
+                        let val_tmp = format!("_send_val_{}", self.temp_var_counter);
+                        self.temp_var_counter += 1;
+                        let st_tmp = format!("_send_st_{}", self.temp_var_counter);
+                        self.temp_var_counter += 1;
+                        let c_ty = self.type_to_c(value_type);
                         self.write_indent();
-                        self.write("{ ");
-                        let needs_temp = !is_send_value_lvalue(value);
-                        if needs_temp {
-                            self.write(&format!("{} _send_val = ", self.type_to_c(value_type)));
-                            self.generate_expr_with_type(value, Some(value_type));
-                            self.write("; ");
-                        }
-                        self.write("ion_channel_send(");
-                        if let IREexpr::AddressOf { inner, mutable: _ } = channel.as_ref() {
-                            self.write("&");
-                            self.generate_expr(inner);
-                        } else {
-                            self.write("&");
-                            self.generate_expr(channel);
-                        }
-                        self.write(", ");
-                        if needs_temp {
-                            self.write("&_send_val");
-                        } else {
-                            self.write("&");
-                            self.generate_expr(value);
-                        }
-                        self.write("); }");
-                        self.writeln("");
+                        self.writeln("{");
+                        self.indent_level += 1;
+                        self.write_indent();
+                        self.write(&format!("{c_ty} {val_tmp} = "));
+                        self.generate_expr_with_type(value, Some(value_type));
+                        self.writeln(";");
+                        self.write_indent();
+                        self.writeln(&format!(
+                            "int {st_tmp} = ion_channel_send({sender_addr}, &{val_tmp});"
+                        ));
+                        self.write_indent();
+                        self.writeln(&format!("if ({st_tmp} != 0) {{"));
+                        self.indent_level += 1;
+                        self.emit_drop_at_path(&val_tmp, value_type);
+                        self.indent_level -= 1;
+                        self.write_indent();
+                        self.writeln("}");
+                        self.indent_level -= 1;
+                        self.write_indent();
+                        self.writeln("}");
                         self.mark_moves_in_expr(value.as_ref());
                         self.flush_pending_field_nulls();
                     }
@@ -2876,62 +2896,56 @@ impl Codegen {
                 value,
                 value_type,
             } => {
-                // ion_channel_send(sender, &value)
-                // channel is &Sender<T>, which should be passed as the sender value
-                // value needs to be in a variable (can't take address of literal)
-                // When used as a statement, we use a statement expression to handle temp variables
+                let sender_addr = self.sender_addr_code(channel);
+                let val_tmp = format!("_send_val_{}", self.temp_var_counter);
+                self.temp_var_counter += 1;
+                let st_tmp = format!("_send_st_{}", self.temp_var_counter);
+                self.temp_var_counter += 1;
+                let c_ty = self.type_to_c(value_type);
+                let result_ty = Type::Generic {
+                    name: "SendResult".to_string(),
+                    params: vec![value_type.clone()],
+                };
+                let result_c = self.type_to_c(&result_ty);
+                let sent = self.c_enum_literal(&result_c, "SendResult", "Sent", None);
+                let closed = self.c_enum_literal(&result_c, "SendResult", "Closed", Some(&val_tmp));
                 self.write("({ ");
-                let needs_temp = !is_send_value_lvalue(value);
-                if needs_temp {
-                    self.write(&format!("{} _send_val = ", self.type_to_c(value_type)));
-                    self.generate_expr_with_type(value, Some(value_type));
-                    self.write("; ");
-                }
-                self.write("ion_channel_send(");
-                // channel is &Sender<T>, so we need to pass &tx where tx is the Sender value
-                // If channel is AddressOf { inner: Var("tx") }, then tx is Sender, and &tx is &Sender
-                // ion_channel_send expects const ion_sender_t*, so we pass &tx
-                if let IREexpr::AddressOf { inner, mutable: _ } = channel.as_ref() {
-                    // If it's &tx where tx is Sender, pass &tx (address of the struct)
-                    self.write("&");
-                    self.generate_expr(inner);
-                } else {
-                    // If it's already a reference expression, pass it directly
-                    self.write("&");
-                    self.generate_expr(channel);
-                }
-                self.write(", ");
-                if needs_temp {
-                    self.write("&_send_val");
-                } else {
-                    self.write("&");
-                    self.generate_expr(value);
-                }
-                // Statement expression: last thing must be an expression (no semicolon)
-                // Wrap the comma expression in parentheses to ensure proper parsing
-                self.write("), (0)) })");
+                self.write(&format!("{c_ty} {val_tmp} = "));
+                self.generate_expr_with_type(value, Some(value_type));
+                self.write("; ");
+                self.write(&format!(
+                    "int {st_tmp} = ion_channel_send({sender_addr}, &{val_tmp}); "
+                ));
+                self.write(&format!("{result_c} _send_res; "));
+                self.write(&format!(
+                    "if ({st_tmp} == 0) {{ _send_res = {sent}; }} else {{ _send_res = {closed}; }} "
+                ));
+                self.write("_send_res; })");
             }
             IREexpr::Recv { channel, elem_type } => {
-                // recv(rx) lowers to:
-                // ({ T tmp; ion_channel_recv(&rx, &tmp); tmp; })
-                // This uses a GCC statement-expression, which is supported by gcc.
-                // channel is &mut Receiver<T>, so we need to pass &rx where rx is the Receiver value
+                let recv_addr = self.sender_addr_code(channel);
+                let tmp = format!("_recv_tmp_{}", self.temp_var_counter);
+                self.temp_var_counter += 1;
+                let st_tmp = format!("_recv_st_{}", self.temp_var_counter);
+                self.temp_var_counter += 1;
+                let c_ty = self.type_to_c(elem_type);
+                let option_ty = Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![elem_type.clone()],
+                };
+                let option_c = self.type_to_c(&option_ty);
+                let some = self.c_enum_literal(&option_c, "Option", "Some", Some(&tmp));
+                let none = self.c_enum_literal(&option_c, "Option", "None", None);
                 self.write("({ ");
-                self.write(&format!("{} tmp;", self.type_to_c(elem_type)));
-                self.write(" ion_channel_recv(");
-                // channel is &mut Receiver<T>, so we need to pass &rx
-                // If channel is AddressOf { inner: Var("rx"), mutable: true }, then rx is Receiver, and &mut rx is &mut Receiver
-                // ion_channel_recv expects ion_receiver_t*, so we pass &rx
-                if let IREexpr::AddressOf { inner, mutable: _ } = channel.as_ref() {
-                    // If it's &mut rx where rx is Receiver, pass &rx (address of the struct)
-                    self.write("&");
-                    self.generate_expr(inner);
-                } else {
-                    // If it's already a reference expression, pass it directly
-                    self.write("&");
-                    self.generate_expr(channel);
-                }
-                self.write(", &tmp); tmp; })");
+                self.write(&format!("{c_ty} {tmp} = {{0}}; "));
+                self.write(&format!(
+                    "int {st_tmp} = ion_channel_recv({recv_addr}, &{tmp}); "
+                ));
+                self.write(&format!("{option_c} _recv_opt; "));
+                self.write(&format!(
+                    "if ({st_tmp} == 0) {{ _recv_opt = {some}; }} else {{ _recv_opt = {none}; }} "
+                ));
+                self.write("_recv_opt; })");
             }
             IREexpr::StructLit { type_name, fields } => {
                 // C99 compound literal: (Type){ .field1 = v1, .field2 = v2 }
@@ -6303,7 +6317,7 @@ fn close_generic_instantiations(
 }
 
 fn known_type_names(program: &IRProgram) -> HashSet<String> {
-    let mut names: HashSet<String> = ["Vec", "Box", "Option", "Result"]
+    let mut names: HashSet<String> = ["Vec", "Box", "Option", "Result", "SendResult"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -6500,15 +6514,30 @@ fn collect_generic_from_expr(
         IREexpr::AddressOf { inner, .. } => {
             collect_generic_from_expr(inner, instantiations);
         }
-        IREexpr::Send { channel, value, .. } => {
+        IREexpr::Send {
+            channel,
+            value,
+            value_type,
+        } => {
             collect_generic_from_expr(channel, instantiations);
             collect_generic_from_expr(value, instantiations);
+            collect_generic_from_type(value_type, instantiations);
+            let send_result = Type::Generic {
+                name: "SendResult".to_string(),
+                params: vec![value_type.clone()],
+            };
+            collect_generic_from_type(&send_result, instantiations);
         }
         IREexpr::Recv {
             channel, elem_type, ..
         } => {
             collect_generic_from_expr(channel, instantiations);
             collect_generic_from_type(elem_type, instantiations);
+            let option_ty = Type::Generic {
+                name: "Option".to_string(),
+                params: vec![elem_type.clone()],
+            };
+            collect_generic_from_type(&option_ty, instantiations);
         }
         IREexpr::StructLit { fields, .. } => {
             for field in fields {
@@ -6825,8 +6854,7 @@ fn main() -> int {
         let src = r#"fn main() -> int {
     let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
     let mut rx_mut: Receiver<int> = rx;
-    let result: int = recv(&mut rx_mut);
-    if result == 42 {
+    if 1 == 1 {
         return 0;
     }
     return 1;
@@ -6840,11 +6868,15 @@ fn main() -> int {
             .and_then(|tail| tail.split("goto epilogue;").next())
             .unwrap_or("");
         assert!(
-            outer.contains("ion_channel_handle_drop(tx.channel)"),
+            outer.contains("ion_channel_sender_drop(&(tx))"),
+            "expected sender drop in:\n{outer}"
+        );
+        assert!(
+            outer.contains("ion_channel_receiver_drop(&(rx_mut))"),
             "expected outer return to drop sender in:\n{c}"
         );
         assert!(
-            outer.contains("ion_channel_handle_drop(rx_mut.channel)"),
+            outer.contains("ion_channel_receiver_drop(&(rx_mut))"),
             "expected outer return to drop receiver in:\n{c}"
         );
     }
@@ -6881,11 +6913,15 @@ fn main() -> int {
             .and_then(|tail| tail.split("goto epilogue;").next())
             .unwrap_or("");
         assert!(
-            outer.contains("ion_channel_handle_drop(tx.channel)"),
+            outer.contains("ion_channel_sender_drop(&(tx))"),
+            "expected sender drop in:\n{outer}"
+        );
+        assert!(
+            outer.contains("ion_channel_receiver_drop(&(rx_mut))"),
             "expected outer return after match arm to drop sender in:\n{c}"
         );
         assert!(
-            outer.contains("ion_channel_handle_drop(rx_mut.channel)"),
+            outer.contains("ion_channel_receiver_drop(&(rx_mut))"),
             "expected outer return after match arm to drop receiver in:\n{c}"
         );
     }
@@ -7021,7 +7057,7 @@ fn main() -> int {
             "expected goto epilogue, not bare C return, in:\n{c}"
         );
         assert!(
-            divergent_arm.contains("ion_channel_handle_drop(tx.channel)"),
+            divergent_arm.contains("ion_channel_sender_drop(&(tx))"),
             "expected channel unwind in divergent rvalue arm in:\n{c}"
         );
         assert!(

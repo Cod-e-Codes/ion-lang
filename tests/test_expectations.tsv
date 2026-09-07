@@ -225,6 +225,12 @@ test_channel_send_call_expr.ion	run	7
 test_channel_send_field_call_expr.ion	run	11			
 test_channel_contention.ion	run	73			
 test_channel_shutdown.ion	run	91			
+test_channel_send_closed.ion	run	9			
+test_channel_queued_string_drop.ion	run	0			
+test_send_result_send_ok.ion	run	7			
+test_channel_capacity.ion	run	10			
+test_send_result_ref_error.ion	error		Send element type for channel		
+test_channel_capacity_literal_error.ion	error		channel capacity >= 1		
 test_vec_search_index_ok.ion	run	84			
 test_enum_struct_variant.ion	run	42			
 test_for_loop.ion	run	0			
@@ -296,10 +302,13 @@ test_array_bounds_panic.ion	cgen			ion_panic("Array index out of bounds")
 test_slice_bounds_panic.ion	cgen			ion_panic("Slice index out of bounds")	
 test_fmt_println_int.ion	cgen			io_print_int	^[[:space:]]+print_int\(
 test_doc_comments.ion	run	42			
-test_channel_shutdown.ion	cgen			ion_channel_handle_drop	
+test_channel_shutdown.ion	cgen			ion_channel_sender_drop	
 test_channel_shutdown.ion	cgen			ion_spawn	
 test_channel_shutdown.ion	cgen			ion_channel_recv	
 test_channel_contention.ion	cgen			ion_spawn	
+test_channel_contention.ion	cgen			ion_channel_clone_sender	
+test_spawn_channel.ion	cgen			_recv_opt	
+test_channel_send_closed.ion	cgen			_send_res	
 test_vm_execute.ion	run	42
 test_field_assign_plus.ion	run	42
 test_vec_enum_push_set.ion	run	50

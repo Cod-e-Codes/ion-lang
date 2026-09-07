@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.1.24 - 2026-09-06
+
+- **Language**: `recv(&mut rx)` returns `Option<T>` (`Some` while messages remain, `None` after the last sender is dropped and the buffer is empty). This impacts every `let x = recv(...)` that expected `T`.
+- **Language**: `send(&tx, v)` returns `SendResult<T>` (`Sent` or `Closed(T)`). An unused statement `send(...)` still drops `Closed(T)`. This impacts every program that treated send as `Void`.
+- **Language**: `clone_sender(&tx) -> Sender<T>` increments the sender count so MPSC is expressible. `Receiver<T>` stays unique. This impacts programs that used one channel per producer as a stand-in for sharing a sender.
+- **Language**: `channel<T>()` stays capacity 1; `channel<T>(cap)` sets the bound (`cap < 1` is a compile error for a literal and a runtime panic otherwise). This impacts any code that assumed the only constructor was `channel<T>()`.
+- **Language**: `SendResult<T>` is `Send` iff `T: Send` (ION_SPEC §7.3).
+- **Runtime**: separate `sender_count` / `receiver_count`, disconnect wakes waiters, destroy drops leftover buffered `T` through a cgen drop thunk, and generated code consumes send/recv C status. Last sender drop unblocks `recv`. This impacts programs that assumed a hung recv after the sender was dropped.
+- **Fix**: `recv` no longer yields uninitialized `T` when the channel is disconnected.
+- **Tests**: disconnect-until-`None`, `Closed(T)`, queued `String` drop, `clone_sender` MPSC, `SendResult` thread crossing, `SendResult<&int>` rejection, capacity literal error; existing Send/ownership negatives kept. Linux leak-sanitizer covers queued-string and string-channel tests.
+- **Docs**: ION_SPEC §5.5 / §7.2 / §7.3 / §8.4, ABI, BETA, README, tests/README, skills.
+
 ## 0.1.23 - 2026-09-06
 
 - **Fix**: loop `break` and `continue` skipped drops and defers (they jumped without frame cleanup). Nested block locals and `defer` before `break` now unwind through the loop body. `break` inside `match` inside `while`/`for` jumps to the loop exit, not the `switch`. `for` `continue` still runs the iteration step. This impacts any owned local or `defer` in a loop that `break`s or `continue`s, including nested `if`/`match`.

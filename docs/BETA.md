@@ -29,6 +29,8 @@ library may rely on without an unstable marker:
 - channels and `spawn` with structural `Send`;
 - `ion-build` projects with `ion.toml` fields documented in `ION_SPEC.md`.
 
+0.1.24 is a breaking 0.x channel change: `recv` returns `Option<T>`, `send` returns `SendResult<T>`, `clone_sender` makes MPSC real, and `channel<T>(cap)` sets capacity. Last sender drop unblocks `recv` with `None`. See CHANGELOG 0.1.24.
+
 ## Unstable or constrained in beta
 
 The following features may change shape before 1.0:

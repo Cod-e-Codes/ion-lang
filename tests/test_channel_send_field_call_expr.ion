@@ -1,3 +1,13 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 struct Pair {
     x: int;
     y: int;
@@ -10,5 +20,12 @@ fn make_pair() -> Pair {
 fn main() -> int {
     let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
     send(&tx, make_pair().x);
-    return recv(&mut rx);
+    match recv(&mut rx) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
 }

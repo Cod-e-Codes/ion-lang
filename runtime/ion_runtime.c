@@ -324,23 +324,51 @@ int ion_spawn(void *(*start_routine)(void *), void *arg) {
 // ============================================================================
 
 struct ion_channel_t {
-  void *buffer;     // Circular buffer
-  size_t elem_size; // Size of each element
-  int capacity;     // Maximum number of elements
-  int head;         // Read position
-  int tail;         // Write position
-  int count;        // Current number of elements
+  void *buffer;
+  size_t elem_size;
+  int capacity;
+  int head;
+  int tail;
+  int count;
   pthread_mutex_t mutex;
-  pthread_cond_t not_full;  // Signaled when space available
-  pthread_cond_t not_empty; // Signaled when data available
-  int closed;               // 1 if channel is closed
-  int ref_count;            // Sender + receiver handle count
+  pthread_cond_t not_full;
+  pthread_cond_t not_empty;
+  int sender_count;
+  int receiver_count;
+  int recv_closed;
+  int send_closed;
+  void (*drop_fn)(void *);
 };
 
-int ion_channel_new(size_t elem_size, int capacity, ion_sender_t *sender_out,
-                    ion_receiver_t *receiver_out) {
-  if (!sender_out || !receiver_out || capacity < 0)
+static void ion_channel_drop_buffered(struct ion_channel_t *ch) {
+  if (!ch->drop_fn || !ch->buffer)
+    return;
+  while (ch->count > 0) {
+    void *slot = (char *)ch->buffer + (ch->head * ch->elem_size);
+    ch->drop_fn(slot);
+    ch->head = (ch->head + 1) % ch->capacity;
+    ch->count--;
+  }
+}
+
+static void ion_channel_destroy(struct ion_channel_t *ch) {
+  if (!ch)
+    return;
+  ion_channel_drop_buffered(ch);
+  if (ch->buffer)
+    free(ch->buffer);
+  pthread_cond_destroy(&ch->not_full);
+  pthread_cond_destroy(&ch->not_empty);
+  pthread_mutex_destroy(&ch->mutex);
+  free(ch);
+}
+
+int ion_channel_new(size_t elem_size, int capacity, void (*drop_fn)(void *),
+                    ion_sender_t *sender_out, ion_receiver_t *receiver_out) {
+  if (!sender_out || !receiver_out)
     return -1;
+  if (capacity < 1)
+    ion_panic("channel capacity must be >= 1");
 
   struct ion_channel_t *ch =
       (struct ion_channel_t *)malloc(sizeof(struct ion_channel_t));
@@ -348,14 +376,17 @@ int ion_channel_new(size_t elem_size, int capacity, ion_sender_t *sender_out,
     return -1;
 
   ch->elem_size = elem_size;
-  ch->capacity = capacity > 0 ? capacity : 1;
+  ch->capacity = capacity;
   ch->head = 0;
   ch->tail = 0;
   ch->count = 0;
-  ch->closed = 0;
-  ch->ref_count = 2;
+  ch->sender_count = 1;
+  ch->receiver_count = 1;
+  ch->recv_closed = 0;
+  ch->send_closed = 0;
+  ch->drop_fn = drop_fn;
 
-  ch->buffer = malloc(elem_size * ch->capacity);
+  ch->buffer = malloc(elem_size * (size_t)ch->capacity);
   if (!ch->buffer) {
     free(ch);
     return -1;
@@ -382,7 +413,6 @@ int ion_channel_new(size_t elem_size, int capacity, ion_sender_t *sender_out,
     return -1;
   }
 
-  // Initialize sender and receiver handles
   sender_out->channel = (ion_channel_t *)ch;
   sender_out->elem_size = elem_size;
   receiver_out->channel = (ion_channel_t *)ch;
@@ -399,17 +429,15 @@ int ion_channel_send(const ion_sender_t *sender, const void *value) {
 
   pthread_mutex_lock(&ch->mutex);
 
-  // Wait until there's space or channel is closed
-  while (ch->count >= ch->capacity && !ch->closed) {
+  while (ch->count >= ch->capacity && !ch->send_closed) {
     pthread_cond_wait(&ch->not_full, &ch->mutex);
   }
 
-  if (ch->closed) {
+  if (ch->send_closed) {
     pthread_mutex_unlock(&ch->mutex);
     return -1;
   }
 
-  // Copy value into buffer
   memcpy((char *)ch->buffer + (ch->tail * ch->elem_size), value, ch->elem_size);
   ch->tail = (ch->tail + 1) % ch->capacity;
   ch->count++;
@@ -428,17 +456,15 @@ int ion_channel_recv(ion_receiver_t *receiver, void *out_value) {
 
   pthread_mutex_lock(&ch->mutex);
 
-  // Wait until there's data or channel is closed
-  while (ch->count == 0 && !ch->closed) {
+  while (ch->count == 0 && !ch->recv_closed) {
     pthread_cond_wait(&ch->not_empty, &ch->mutex);
   }
 
-  if (ch->closed && ch->count == 0) {
+  if (ch->count == 0 && ch->recv_closed) {
     pthread_mutex_unlock(&ch->mutex);
     return -1;
   }
 
-  // Copy value from buffer
   memcpy(out_value, (char *)ch->buffer + (ch->head * ch->elem_size),
          ch->elem_size);
   ch->head = (ch->head + 1) % ch->capacity;
@@ -450,37 +476,60 @@ int ion_channel_recv(ion_receiver_t *receiver, void *out_value) {
   return 0;
 }
 
-static void ion_channel_destroy(struct ion_channel_t *ch) {
-  if (!ch)
-    return;
-  if (ch->buffer)
-    free(ch->buffer);
-  pthread_cond_destroy(&ch->not_full);
-  pthread_cond_destroy(&ch->not_empty);
+int ion_channel_clone_sender(const ion_sender_t *src, ion_sender_t *dst) {
+  if (!src || !src->channel || !dst)
+    return -1;
+
+  struct ion_channel_t *ch = (struct ion_channel_t *)src->channel;
+  pthread_mutex_lock(&ch->mutex);
+  ch->sender_count++;
   pthread_mutex_unlock(&ch->mutex);
-  pthread_mutex_destroy(&ch->mutex);
-  free(ch);
+
+  dst->channel = src->channel;
+  dst->elem_size = src->elem_size;
+  return 0;
 }
 
-void ion_channel_handle_drop(ion_channel_t *ch) {
-  if (!ch)
+void ion_channel_sender_drop(ion_sender_t *sender) {
+  if (!sender || !sender->channel)
     return;
 
+  struct ion_channel_t *ch = (struct ion_channel_t *)sender->channel;
   int destroy = 0;
+
   pthread_mutex_lock(&ch->mutex);
-  ch->ref_count--;
-  if (ch->ref_count <= 0) {
-    ch->closed = 1;
+  ch->sender_count--;
+  if (ch->sender_count <= 0) {
+    ch->recv_closed = 1;
     pthread_cond_broadcast(&ch->not_empty);
-    pthread_cond_broadcast(&ch->not_full);
-    destroy = 1;
   }
+  if (ch->sender_count <= 0 && ch->receiver_count <= 0)
+    destroy = 1;
+  sender->channel = NULL;
   pthread_mutex_unlock(&ch->mutex);
 
-  if (!destroy)
+  if (destroy)
+    ion_channel_destroy(ch);
+}
+
+void ion_channel_receiver_drop(ion_receiver_t *receiver) {
+  if (!receiver || !receiver->channel)
     return;
 
-  // Re-lock to ensure no send/recv holds the mutex before tearing down.
+  struct ion_channel_t *ch = (struct ion_channel_t *)receiver->channel;
+  int destroy = 0;
+
   pthread_mutex_lock(&ch->mutex);
-  ion_channel_destroy((struct ion_channel_t *)ch);
+  ch->receiver_count--;
+  if (ch->receiver_count <= 0) {
+    ch->send_closed = 1;
+    pthread_cond_broadcast(&ch->not_full);
+  }
+  if (ch->sender_count <= 0 && ch->receiver_count <= 0)
+    destroy = 1;
+  receiver->channel = NULL;
+  pthread_mutex_unlock(&ch->mutex);
+
+  if (destroy)
+    ion_channel_destroy(ch);
 }

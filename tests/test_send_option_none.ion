@@ -4,15 +4,27 @@ enum Option<T> {
     None;
 }
 
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 fn main() -> int {
     let (tx, rx): (Sender<Option<int>>, Receiver<Option<int>>) = channel<Option<int>>();
     send(&tx, Option::None);
     match recv(&mut rx) {
-        Option::Some(v) => {
-            return v;
+        Option::Some(inner) => {
+            match inner {
+                Option::Some(v) => {
+                    return v;
+                }
+                Option::None => {
+                    return 0;
+                }
+            }
         }
         Option::None => {
-            return 0;
+            return 1;
         }
     }
 }

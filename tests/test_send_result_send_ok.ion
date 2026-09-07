@@ -1,0 +1,42 @@
+// SendResult<T> is Send when T is Send: worker sends Closed(T) on a second channel.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+fn discard_receiver(rx: Receiver<int>) {
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let (back_tx, back_rx): (Sender<SendResult<int>>, Receiver<SendResult<int>>) =
+        channel<SendResult<int>>();
+    discard_receiver(rx);
+
+    spawn {
+        let result: SendResult<int> = send(&tx, 7);
+        send(&back_tx, result);
+    };
+
+    let mut back_rx_mut: Receiver<SendResult<int>> = back_rx;
+    match recv(&mut back_rx_mut) {
+        Option::Some(sr) => {
+            match sr {
+                SendResult::Closed(v) => {
+                    return v;
+                }
+                SendResult::Sent => {
+                    return 1;
+                }
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    }
+}

@@ -1,0 +1,26 @@
+// Last receiver drop returns Closed(T); the value is usable.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+fn discard_receiver(rx: Receiver<int>) {
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    discard_receiver(rx);
+    match send(&tx, 9) {
+        SendResult::Sent => {
+            return 1;
+        }
+        SendResult::Closed(v) => {
+            return v;
+        }
+    }
+}

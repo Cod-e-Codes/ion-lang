@@ -1,0 +1,11 @@
+// SendResult<&int> is not Send.
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<SendResult<&int>>, Receiver<SendResult<&int>>) =
+        channel<SendResult<&int>>();
+    return 0;
+}

@@ -1,3 +1,13 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 fn main() -> int {
     let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
     let mut rx_mut: Receiver<int> = rx;

@@ -55,6 +55,6 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 
 ## Runtime
 
-- Channel send/recv pairing, closed channel behavior
+- Channel send/recv status, last-sender disconnect (`None`), last-receiver `Closed(T)`, queued `T` drop, `clone_sender` counts
 - `spawn` thread lifecycle and stack size
 - Windows: `-lws2_32` for socket examples; pthread via MinGW

@@ -9,12 +9,11 @@ enum SendResult<T> {
 }
 
 fn main() -> int {
-    let (tx, rx): (Sender<String>, Receiver<String>) = channel<String>();
-    let a = String::from("abc");
-    send(&tx, a);
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>(0);
+    send(&tx, 1);
     match recv(&mut rx) {
-        Option::Some(s) => {
-            return s.len();
+        Option::Some(v) => {
+            return v;
         }
         Option::None => {
             return 0;

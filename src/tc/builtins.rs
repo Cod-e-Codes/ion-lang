@@ -546,19 +546,41 @@ impl TypeChecker {
             });
         }
 
-        // channel<T>() -> (Sender<T>, Receiver<T>)
-        // This should only be called with tuple destructuring, handled in check_stmt
+        // channel<T>() / channel<T>(cap) -> (Sender<T>, Receiver<T>)
+        // Tuple destructuring is handled in check_stmt.
         if callee == "channel" {
-            if !call_expr.args.is_empty() {
+            self.check_channel_capacity_args(call_expr)?;
+            return Ok(None);
+        }
+
+        // clone_sender(&Sender<T>) -> Sender<T>
+        if callee == "clone_sender" {
+            if call_expr.args.len() != 1 {
                 return Err(TypeCheckError::TypeMismatch {
-                    expected: "0 arguments".to_string(),
+                    expected: "1 argument".to_string(),
                     got: format!("{} arguments", call_expr.args.len()),
                     span: call_expr.span,
                 });
             }
-            // channel() needs type context from tuple destructuring
-            // Return None so it can be handled in tuple destructuring context
-            return Ok(None);
+            let sender_ref = self.check_expr(&call_expr.args[0])?;
+            return match sender_ref {
+                Type::Ref {
+                    inner,
+                    mutable: false,
+                } => match *inner {
+                    Type::Sender { elem_type } => Ok(Some(Type::Sender { elem_type })),
+                    other => Err(TypeCheckError::TypeMismatch {
+                        expected: "&Sender<T>".to_string(),
+                        got: type_to_string(&other),
+                        span: call_expr.args[0].span(),
+                    }),
+                },
+                other => Err(TypeCheckError::TypeMismatch {
+                    expected: "&Sender<T>".to_string(),
+                    got: type_to_string(&other),
+                    span: call_expr.args[0].span(),
+                }),
+            };
         }
 
         // Not a built-in function

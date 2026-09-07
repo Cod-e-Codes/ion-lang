@@ -1,7 +1,25 @@
-// Channel worker: main sends job ids on a channel; a spawned thread sums them and replies.
+// Channel worker: main sends job ids; a spawned thread sums them until disconnect.
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
 
 fn job_count() -> int {
     return 5;
+}
+
+fn send_jobs(tx: Sender<int>) {
+    let mut next_job: int = 1;
+    while next_job <= job_count() {
+        send(&tx, next_job);
+        next_job += 1;
+    }
 }
 
 fn main() -> int {
@@ -11,29 +29,31 @@ fn main() -> int {
     spawn {
         let mut rx: Receiver<int> = job_rx;
         let mut sum: int = 0;
-        let mut received: int = 0;
         loop {
-            if received >= job_count() {
-                break;
+            match recv(&mut rx) {
+                Option::Some(job) => {
+                    sum += job;
+                }
+                Option::None => {
+                    break;
+                }
             }
-            let job: int = recv(&mut rx);
-            sum += job;
-            received += 1;
         }
         send(&done_tx, sum);
     };
 
-    let mut next_job: int = 1;
-    while next_job <= job_count() {
-        send(&job_tx, next_job);
-        next_job += 1;
-    }
+    send_jobs(job_tx);
 
     let mut done_rx_mut: Receiver<int> = done_rx;
-    let total: int = recv(&mut done_rx_mut);
-
-    if total != 15 {
-        return 1;
+    match recv(&mut done_rx_mut) {
+        Option::Some(total) => {
+            if total != 15 {
+                return 1;
+            }
+            return 0;
+        }
+        Option::None => {
+            return 2;
+        }
     }
-    return 0;
 }

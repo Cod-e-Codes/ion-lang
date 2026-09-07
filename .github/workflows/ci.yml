@@ -112,6 +112,9 @@ jobs:
           test_drop_order_locals_struct_defer 0
           test_vec_set_string 0
           test_tuple_vec_int 42
+          test_channel_queued_string_drop 0
+          test_channel_string 3
+          test_channel_send_closed 9
           EOF
 
       - name: Generated C thread sanitizer (Linux)

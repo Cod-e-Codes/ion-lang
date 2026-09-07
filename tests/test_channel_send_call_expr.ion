@@ -1,3 +1,13 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 fn make() -> int {
     return 7;
 }
@@ -5,5 +15,12 @@ fn make() -> int {
 fn main() -> int {
     let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
     send(&tx, make());
-    return recv(&mut rx);
+    match recv(&mut rx) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
 }

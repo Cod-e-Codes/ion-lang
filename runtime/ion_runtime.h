@@ -67,48 +67,59 @@ typedef struct {
 
 /**
  * Creates a bounded MPSC (multi-producer, single-consumer) channel.
- * Returns a tuple of (Sender, Receiver) handles.
+ * Returns a tuple of (Sender, Receiver) handles. Capacity must be >= 1.
+ * drop_fn is called on each remaining buffered element when the channel is
+ * destroyed (NULL if T needs no destructor). The argument is a pointer to the slot.
  *
  * @param elem_size Size of each element in bytes
- * @param capacity Maximum number of elements that can be buffered
+ * @param capacity Maximum number of elements that can be buffered (>= 1)
+ * @param drop_fn Optional destructor for queued elements
  * @param sender_out Output parameter for the sender handle
  * @param receiver_out Output parameter for the receiver handle
  * @return 0 on success, non-zero on failure
  */
-int ion_channel_new(size_t elem_size, int capacity, ion_sender_t *sender_out,
-                    ion_receiver_t *receiver_out);
+int ion_channel_new(size_t elem_size, int capacity, void (*drop_fn)(void *),
+                    ion_sender_t *sender_out, ion_receiver_t *receiver_out);
 
 /**
  * Sends a value into the channel using a sender handle. Blocks if the buffer is
- * full.
+ * full and a receiver still exists.
  *
  * @param sender Sender handle
  * @param value Pointer to the value to send (must be elem_size bytes)
- * @return 0 on success, non-zero on failure (e.g., channel closed)
+ * @return 0 on success, non-zero if no receiver remains (value is not copied)
  */
 int ion_channel_send(const ion_sender_t *sender, const void *value);
 
 /**
  * Receives a value from the channel using a receiver handle. Blocks if the
- * buffer is empty.
+ * buffer is empty and a sender still exists.
  *
  * @param receiver Receiver handle
  * @param out_value Pointer to buffer to write the received value (must be
  * elem_size bytes)
- * @return 0 on success, non-zero on failure (e.g., channel closed)
+ * @return 0 on success, non-zero if disconnected and empty (out_value unchanged)
  */
 int ion_channel_recv(ion_receiver_t *receiver, void *out_value);
 
 /**
- * Drops one sender or receiver handle. Frees the channel when the last handle
- * is dropped.
+ * Copies a sender handle and increments the sender count.
+ *
+ * @param src Existing sender
+ * @param dst Output handle
+ * @return 0 on success, non-zero on failure
  */
-void ion_channel_handle_drop(ion_channel_t *ch);
+int ion_channel_clone_sender(const ion_sender_t *src, ion_sender_t *dst);
 
-// Legacy channel API (deprecated, kept for backward compatibility)
-ion_channel_t *ion_channel_new_legacy(size_t elem_size, int capacity);
-int ion_channel_send_legacy(ion_channel_t *ch, const void *value);
-int ion_channel_recv_legacy(ion_channel_t *ch, void *out_value);
+/**
+ * Drops a sender handle. Last sender disconnects receive.
+ */
+void ion_channel_sender_drop(ion_sender_t *sender);
+
+/**
+ * Drops a receiver handle. Last receiver disconnects send.
+ */
+void ion_channel_receiver_drop(ion_receiver_t *receiver);
 
 // ============================================================================
 // Heap Allocation (for Box<T> and collections)
