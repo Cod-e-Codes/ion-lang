@@ -3,6 +3,11 @@ enum Option<T> {
     None;
 }
 
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 struct Payload0 {
     id: int;
     tag: int;
@@ -259,7 +264,14 @@ fn main() -> int {
         let mut sum: int = 0;
         let mut n: int = 0;
         while n < 20 {
-            sum = sum + recv(&mut rx);
+            match recv(&mut rx) {
+                Option::Some(v) => {
+                    sum = sum + v;
+                }
+                Option::None => {
+                    break;
+                }
+            }
             n = n + 1;
         }
         send(&done_tx, sum);
@@ -291,9 +303,15 @@ fn main() -> int {
     Vec::push(&mut items, built);
 
     let mut done_rx_mut: Receiver<int> = done_rx;
-    let total: int = recv(&mut done_rx_mut);
-    if total != 190 {
-        return 1;
+    match recv(&mut done_rx_mut) {
+        Option::Some(total) => {
+            if total != 190 {
+                return 1;
+            }
+            return 0;
+        }
+        Option::None => {
+            return 2;
+        }
     }
-    return 0;
 }

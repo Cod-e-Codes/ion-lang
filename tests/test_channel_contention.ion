@@ -1,4 +1,14 @@
-// Four spawns each send on a dedicated channel; main sums received values.
+// Four cloned senders, one receiver; disconnect after producers drop.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 fn producer_count() -> int {
     return 4;
 }
@@ -9,17 +19,31 @@ fn spawn_producer(value: int, tx: Sender<int>) {
     };
 }
 
+fn discard_sender(tx: Sender<int>) {
+}
+
 fn main() -> int {
-    let mut sum: int = 0;
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>(4);
     let mut i: int = 0;
     while i < producer_count() {
-        let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
         let value: int = (i + 1) * 10;
-        spawn_producer(value, tx);
-        let mut rx_mut: Receiver<int> = rx;
-        let received: int = recv(&mut rx_mut);
-        sum = sum + received;
+        let tx_i: Sender<int> = clone_sender(&tx);
+        spawn_producer(value, tx_i);
         i = i + 1;
+    }
+    discard_sender(tx);
+
+    let mut rx_mut: Receiver<int> = rx;
+    let mut sum: int = 0;
+    loop {
+        match recv(&mut rx_mut) {
+            Option::Some(received) => {
+                sum = sum + received;
+            }
+            Option::None => {
+                break;
+            }
+        }
     }
 
     if sum != 100 {

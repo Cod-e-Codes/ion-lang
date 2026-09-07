@@ -1,4 +1,14 @@
-// Worker recv loop; Sender dropped when send_jobs returns.
+// Worker recvs until last sender drop returns None.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 fn job_count() -> int {
     return 5;
 }
@@ -18,11 +28,15 @@ fn main() -> int {
     spawn {
         let mut rx: Receiver<int> = job_rx;
         let mut sum: int = 0;
-        let mut received: int = 0;
-        while received < job_count() {
-            let job: int = recv(&mut rx);
-            sum = sum + job;
-            received = received + 1;
+        loop {
+            match recv(&mut rx) {
+                Option::Some(job) => {
+                    sum = sum + job;
+                }
+                Option::None => {
+                    break;
+                }
+            }
         }
         send(&done_tx, sum);
     };
@@ -30,10 +44,15 @@ fn main() -> int {
     send_jobs(job_tx);
 
     let mut done_rx_mut: Receiver<int> = done_rx;
-    let total: int = recv(&mut done_rx_mut);
-
-    if total != 15 {
-        return 1;
+    match recv(&mut done_rx_mut) {
+        Option::Some(total) => {
+            if total != 15 {
+                return 1;
+            }
+            return 91;
+        }
+        Option::None => {
+            return 2;
+        }
     }
-    return 91;
 }

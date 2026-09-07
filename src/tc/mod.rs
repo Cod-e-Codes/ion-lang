@@ -895,9 +895,10 @@ impl TypeChecker {
             "String::push_byte" => Some("fn String::push_byte(s: &mut String, b: u8)"),
             "Box::new" => Some("fn Box::new<T>(value: T) -> Box<T>"),
             "Box::unwrap" => Some("fn Box::unwrap<T>(box: Box<T>) -> T"),
-            "channel" => Some("fn channel<T>() -> (Sender<T>, Receiver<T>)"),
-            "send" => Some("fn send(sender: &Sender<T>, value: T)"),
-            "recv" => Some("fn recv(receiver: &mut Receiver<T>) -> T"),
+            "channel" => Some("fn channel<T>() / channel<T>(cap: int) -> (Sender<T>, Receiver<T>)"),
+            "clone_sender" => Some("fn clone_sender(sender: &Sender<T>) -> Sender<T>"),
+            "send" => Some("fn send(sender: &Sender<T>, value: T) -> SendResult<T>"),
+            "recv" => Some("fn recv(receiver: &mut Receiver<T>) -> Option<T>"),
             _ => None,
         }
     }
@@ -1551,6 +1552,8 @@ impl TypeChecker {
                                     span: let_stmt.span,
                                 });
                             }
+
+                            self.check_channel_capacity_args(call_expr)?;
 
                             // Create Sender and Receiver types
                             let sender_ty = Type::Sender {
@@ -3168,14 +3171,14 @@ impl TypeChecker {
             }
             Expr::Send(send_expr) => {
                 // send(sender, value): sender must be &Sender<T>, value must have type T,
-                // and T must be Send. Returns int (status code).
+                // and T must be Send. Returns SendResult<T>.
                 let sender_ref_type = self.check_expr(&send_expr.channel)?;
                 let (elem_type, span) = match sender_ref_type {
                     Type::Ref {
                         inner,
                         mutable: false,
                     } => match *inner {
-                        Type::Sender { ref elem_type } => ((*elem_type).clone(), send_expr.span),
+                        Type::Sender { ref elem_type } => ((**elem_type).clone(), send_expr.span),
                         other => {
                             return Err(TypeCheckError::TypeMismatch {
                                 expected: "&Sender<T>".to_string(),
@@ -3214,17 +3217,36 @@ impl TypeChecker {
                     });
                 }
 
-                Ok(Type::Void)
+                self.require_named_enum(
+                    "SendResult",
+                    &[("Sent", false), ("Closed", true)],
+                    send_expr.span,
+                )?;
+
+                Ok(Type::Generic {
+                    name: "SendResult".to_string(),
+                    params: vec![elem_type],
+                })
             }
             Expr::Recv(recv_expr) => {
-                // recv(receiver): receiver must be &mut Receiver<T>, expression type is T.
+                // recv(receiver): receiver must be &mut Receiver<T>, expression type is Option<T>.
                 let receiver_mut_ref_type = self.check_expr(&recv_expr.channel)?;
                 match receiver_mut_ref_type {
                     Type::Ref {
                         inner,
                         mutable: true,
                     } => match *inner {
-                        Type::Receiver { ref elem_type } => Ok((**elem_type).clone()),
+                        Type::Receiver { ref elem_type } => {
+                            self.require_named_enum(
+                                "Option",
+                                &[("Some", true), ("None", false)],
+                                recv_expr.span,
+                            )?;
+                            Ok(Type::Generic {
+                                name: "Option".to_string(),
+                                params: vec![(**elem_type).clone()],
+                            })
+                        }
                         other => Err(TypeCheckError::TypeMismatch {
                             expected: "&mut Receiver<T>".to_string(),
                             got: type_to_string(&other),
@@ -4684,6 +4706,81 @@ impl TypeChecker {
                 | Type::U64
                 | Type::UInt
         )
+    }
+
+    fn int_literal_value(expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::Lit(lit) => Some(lit.value),
+            Expr::UnOp(un) if matches!(un.op, crate::ast::UnOp::Neg) => {
+                Self::int_literal_value(&un.operand).map(|n| n.saturating_neg())
+            }
+            _ => None,
+        }
+    }
+
+    fn require_named_enum(
+        &self,
+        name: &str,
+        variants: &[(&str, bool)],
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        let Some(decl) = self.enums.get(name) else {
+            return Err(TypeCheckError::Message(format!(
+                "{name} must be declared as a generic enum to use this builtin"
+            )));
+        };
+        for (variant_name, has_payload) in variants {
+            let Some(variant) = decl.variants.iter().find(|v| v.name == *variant_name) else {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: format!("{name}::{variant_name}"),
+                    got: format!("enum {name} without {variant_name}"),
+                    span,
+                });
+            };
+            let payload = !variant.payload_types.is_empty() || variant.named_fields.is_some();
+            if payload != *has_payload {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: format!("{name}::{variant_name} payload mismatch"),
+                    got: format!("enum {name}::{variant_name}"),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_channel_capacity_args(
+        &mut self,
+        call_expr: &crate::ast::CallExpr,
+    ) -> Result<(), TypeCheckError> {
+        match call_expr.args.len() {
+            0 => Ok(()),
+            1 => {
+                let cap_ty = self.check_expr(&call_expr.args[0])?;
+                if !self.is_integer_type(&cap_ty) {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "int".to_string(),
+                        got: type_to_string(&cap_ty),
+                        span: call_expr.args[0].span(),
+                    });
+                }
+                if let Some(n) = Self::int_literal_value(&call_expr.args[0])
+                    && n < 1
+                {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "channel capacity >= 1".to_string(),
+                        got: n.to_string(),
+                        span: call_expr.args[0].span(),
+                    });
+                }
+                Ok(())
+            }
+            n => Err(TypeCheckError::TypeMismatch {
+                expected: "0 or 1 arguments".to_string(),
+                got: format!("{n} arguments"),
+                span: call_expr.span,
+            }),
+        }
     }
 
     /// Check if a type is an unsigned integer type

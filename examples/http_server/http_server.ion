@@ -5,6 +5,16 @@
 import "stdlib/fmt.ion" as fmt;
 import "stdlib/io.ion" as io;
 
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 extern "C" {
     fn ion_net_init();
     fn read(fd: int, buf: *u8, count: int) -> int;
@@ -187,7 +197,15 @@ fn main() -> int {
     };
 
     let mut fd_rx_mut: Receiver<int> = fd_rx;
-    let server_fd: int = recv(&mut fd_rx_mut);
+    let mut server_fd: int = -1;
+    match recv(&mut fd_rx_mut) {
+        Option::Some(fd) => {
+            server_fd = fd;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
 
     io::println("listening on http://127.0.0.1:8080 (type quit)");
 
@@ -198,6 +216,12 @@ fn main() -> int {
     }
 
     let mut stopped_rx_mut: Receiver<int> = stopped_rx;
-    let status: int = recv(&mut stopped_rx_mut);
-    return status;
+    match recv(&mut stopped_rx_mut) {
+        Option::Some(status) => {
+            return status;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
 }

@@ -105,22 +105,45 @@ Tuple values (flat only, no nesting): `let t: (int, int) = (1, 2);` then `t.0`, 
 From [examples/spawn_channel/spawn_channel.ion](../../../examples/spawn_channel/spawn_channel.ion):
 
 ```ion
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
 let (tx_back, rx_back): (Sender<int>, Receiver<int>) = channel<int>();
 
 spawn {
     let mut rx_mut: Receiver<int> = rx;
-    let value: int = recv(&mut rx_mut);
-    send(&tx_back, value);
+    match recv(&mut rx_mut) {
+        Option::Some(value) => {
+            send(&tx_back, value);
+        }
+        Option::None => {
+            send(&tx_back, -1);
+        }
+    }
 };
 
 send(&tx, 42);
 
 let mut rx_back_mut: Receiver<int> = rx_back;
-let result: int = recv(&mut rx_back_mut);
+match recv(&mut rx_back_mut) {
+    Option::Some(result) => {
+        return result;
+    }
+    Option::None => {
+        return 1;
+    }
+}
 ```
 
-`spawn` captures owned values by move. `T` in `channel<T>()` must be `Send`.
+`spawn` captures owned values by move. `T` in `channel<T>()` must be `Send`. `clone_sender(&tx)` shares one channel across producers.
 
 **Fn literals (capture-free)**
 

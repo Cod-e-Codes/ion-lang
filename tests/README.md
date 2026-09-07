@@ -107,8 +107,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_move_nested_loop_inner_break_ok.ion` - Inner break after move does not exit-snapshot the outer loop (exit 3)
 - `test_scope_drop_elif.ion` - Vec drop inside an else-if branch
 - `test_channel_basic.ion` - Channel operations
-- `test_channel_contention.ion` - Four producer spawns, one channel each; sum exit 73
-- `test_channel_shutdown.ion` - Worker recv loop; `Sender` dropped in `send_jobs` (exit 91)
+- `test_channel_contention.ion` - Four `clone_sender` producers, one receiver until `None`; sum exit 73
+- `test_channel_shutdown.ion` - Worker `recv` until `None` after `send_jobs` drops the sender (exit 91)
+- `test_channel_send_closed.ion` - Send after last receiver drop returns `Closed(T)` (exit 9)
+- `test_channel_queued_string_drop.ion` - Queued `String` values dropped on channel destroy (exit 0)
+- `test_channel_capacity.ion` - `channel<int>(4)` same-thread send/recv (exit 10)
 - `test_spawn_basic.ion` - Spawn statements
 - `test_spawn_channel.ion` - Cross-thread channel send/recv via spawn (channel handle drop at scope exit)
 - `test_if_basic.ion` - If statements with else
@@ -128,6 +131,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_result_err_call_arg.ion` - `take(Result::Err(7))` infers `T` from the parameter (exit 7)
 - `test_send_option_none.ion` - `send(&tx, Option::None)` infers `T` from `Sender<Option<int>>` (exit 0)
 - `test_send_result_err.ion` - `send(&tx, Result::Err(4))` infers `T` from `Sender<Result<int, int>>` (exit 4)
+- `test_send_result_send_ok.ion` - `SendResult<int>` crosses a thread (exit 7)
 - `test_box_new_option_none.ion` - `Box::new(Option::None)` infers from expected `Box<Option<int>>` (exit 0)
 - `test_array_option_none.ion` - `[Option::None]` infers `T` from `[Option<int>; 1]` (exit 2)
 - `test_tuple_option_none.ion` - `(Option::None, 3)` infers `T` from `(Option<int>, int)` (exit 3)
@@ -287,7 +291,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 
 ### Split channels, struct variants, and for loops
 - `test_channel_split.ion` - Split Channel API (`Sender<T>`, `Receiver<T>` types)
-- `test_channel_string.ion` - `channel<String>` send/recv; IR recv uses `String` element type (exit 3)
+- `test_channel_string.ion` - `channel<String>` send/recv; `recv` yields `Option<String>` (exit 3)
 - `test_channel_send_call_expr.ion` - `send(&tx, make())` with non-lvalue operand codegen (exit 7)
 - `test_channel_send_field_call_expr.ion` - `send(&tx, make_pair().x)` temps field of call result (exit 11)
 - `test_send_option_none.ion` - `send(&tx, Option::None)` infers from `Sender<T>` (exit 0); also listed under Enums
@@ -387,6 +391,8 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 - `test_ref_return_error2.ion` - Additional reference escape errors
 - `test_channel_ref_error.ion` - Non-Send channel elements
 - `test_send_ref_error.ion` - Non-Send send operations
+- `test_send_result_ref_error.ion` - `SendResult<&int>` is not Send as a channel element
+- `test_channel_capacity_literal_error.ion` - Literal `channel<T>(0)` is a compile error
 - `test_spawn_ref_error.ion` - Non-Send spawn captures
 - `test_spawn_borrow_error.ion` - Spawn capture while lasting borrow is active (negative)
 - `test_spawn_move_error.ion` - Move errors in spawn blocks

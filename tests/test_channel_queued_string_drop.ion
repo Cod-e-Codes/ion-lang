@@ -1,0 +1,17 @@
+// Disconnect with owned payloads still queued; drop thunk must free them.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<String>, Receiver<String>) = channel<String>(2);
+    send(&tx, String::from("queued"));
+    send(&tx, String::from("also"));
+    return 0;
+}

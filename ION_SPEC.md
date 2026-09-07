@@ -191,7 +191,7 @@ Ion uses the following operators:
 - Type casting: `as` keyword for explicit type conversions
 - Field access: `.`
 - Address-of / borrow: `&` (borrow shared) and `&mut` (borrow exclusive)
-- Channel I/O: `send(sender, value)` and `recv(receiver)` built-ins (see Section 7.2)
+- Channel I/O: `send(sender, value)`, `recv(receiver)`, `clone_sender(sender)`, and `channel<T>()` / `channel<T>(cap)` built-ins (see Section 7.2)
 
 Delimiters:
 
@@ -446,7 +446,7 @@ match_expr       = "match" , expr , "{" , { match_arm } , "}" ;
 
 send_expr        = "send" , "(" , expr , "," , expr , ")" ;
 recv_expr        = "recv" , "(" , expr , ")" ;
-channel_expr     = "channel" , "<" , type_expr , ">" , "(" , ")" ;
+channel_expr     = "channel" , "<" , type_expr , ">" , "(" , [ expr ] , ")" ;
 
 fn_literal       = "fn" , "(" , params? , ")" , [ "->" , type_expr ] , block ;
 
@@ -476,7 +476,7 @@ named_pattern_fields = named_pattern_field , { "," , named_pattern_field } ;
 named_pattern_field = identifier , ":" , pattern ;
 ```
 
-Channel send and receive use the `send` and `recv` built-ins. `channel<T>()` takes no arguments.
+Channel send and receive use the `send` and `recv` built-ins. `channel<T>()` uses capacity 1. `channel<T>(cap)` sets a program-visible bound (`cap` is `int`, must be `>= 1`). `clone_sender` is a built-in call (Section 7.2).
 
 ### 4. Type System
 
@@ -887,7 +887,8 @@ Drop order:
 - Array and `Vec<T>` elements at whole-value destruction: increasing index `0 .. len` (then `ion_vec_free` for `Vec`).
 - `Box<T>`: drop `T` (when it needs destruction), then `ion_box_free`.
 - `String`: `ion_string_free`.
-- `Sender<T>` / `Receiver<T>`: `ion_channel_handle_drop` (refcounted; freed when both ends are dropped).
+- `Sender<T>` / `Receiver<T>`: `ion_channel_sender_drop` / `ion_channel_receiver_drop` (separate sender and receiver counts; the backing channel is freed when both counts reach 0). Remaining buffered elements of `T` are dropped before the buffer is freed.
+- `SendResult<T>`: drop `Closed(T)` payload when that variant is destroyed; `Sent` has no payload.
 
 `Box::unwrap` moves `T` out first, then frees the allocation; it does not drop `T`.
 
@@ -997,24 +998,33 @@ Attempting to use `v` after `spawn` is a compile-time error.
 
 #### 7.2 Channels
 
-Ion provides typed, bounded MPSC channels via built-in `Sender<T>` and `Receiver<T>` types and the `channel<T>()` function:
+Ion provides typed, bounded MPSC channels via built-in `Sender<T>` and `Receiver<T>` types and the `channel<T>()` / `channel<T>(cap)` function. Programs declare the conventional enums (same pattern as `Vec::get` returning `Option<T>`):
 
 ```ion
+enum Option<T> {
+    Some(T);
+    None;
+}
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
 send(&tx, 42);
-let value = recv(&mut rx);
+let value: Option<int> = recv(&mut rx);
 ```
 
 Semantics:
 
-- `channel<T>()` is a built-in that returns `(Sender<T>, Receiver<T>)`. It takes no arguments. Element type `T` must be `Send`. The runtime buffer capacity is fixed at **1** slot per channel in the current compiler.
-- `Sender<T>` and `Receiver<T>` are move-only value types (not pointers).
-- `send(&tx, value)` moves a value into the channel. Requires `&Sender<T>`. The value is checked against `T`, so `send(&tx, Option::None)` infers from the sender.
-- `recv(&mut rx)` moves a value out of the channel. Requires `&mut Receiver<T>`. Blocks until a value is available.
-- `send` blocks when the buffer is full; `recv` blocks when empty.
-- Tuple destructuring is supported: `let (tx, rx) = channel<int>();`
-- Both `Sender<T>` and `Receiver<T>` are `Send` when `T: Send`, so either end may be moved between threads.
-- Channel handles share a refcounted backing channel. Dropping either handle decrements the refcount; the channel is freed when the last handle is dropped at scope exit.
+- `channel<T>()` returns `(Sender<T>, Receiver<T>)` with buffer capacity **1**. `channel<T>(cap)` uses `cap` slots. `cap` has type `int`. A literal `cap < 1` is a compile-time error. A non-literal `cap < 1` panics at runtime. Element type `T` must be `Send`. There is no unbounded channel.
+- `Sender<T>` and `Receiver<T>` are move-only value types (not pointers). `Sender<T>` is not `Copy`.
+- `clone_sender(&tx) -> Sender<T>` copies the sender handle and increments the sender count. `Receiver<T>` cannot be cloned.
+- `send(&tx, value) -> SendResult<T>` moves a value into the channel. Requires `&Sender<T>`. The value is checked against `T`, so `send(&tx, Option::None)` infers from the sender. Returns `SendResult::Sent` when ownership moved into the buffer. Returns `SendResult::Closed(value)` when no receiver remains, giving `T` back. An unused result at `send(&tx, v);` still drops `Closed(T)` so the value cannot leak. `send` blocks while the buffer is full and a receiver still exists.
+- `recv(&mut rx) -> Option<T>` moves a value out of the channel. Requires `&mut Receiver<T>`. Returns `Option::Some(v)` while messages remain. Returns `Option::None` after every sender has been dropped and the buffer is empty. Blocks until one of those holds. Does not yield an uninitialized `T`.
+- Tuple destructuring: `let (tx, rx): (Sender<T>, Receiver<T>) = channel<T>();` (annotation required).
+- `Sender<T>` and `Receiver<T>` are `Send` when `T: Send`, so either end may be moved between threads.
+- Disconnect: the runtime tracks `sender_count` and `receiver_count` separately. Last `Sender` drop (including clones) disconnects receive, wakes waiters, and does not destroy the channel while a `Receiver` lives. Last `Receiver` drop disconnects send and wakes waiters. The backing channel is freed when both counts reach 0. Remaining buffered elements of `T` are dropped first.
 
 #### 7.3 `Send` Property
 
@@ -1027,6 +1037,7 @@ The `Send` property marks types that are safe to transfer to another thread by v
 - `Option<T>` is `Send` if `T: Send`.
 - `Result<T, E>` is `Send` if both `T: Send` and `E: Send`.
 - `Sender<T>` and `Receiver<T>` are `Send` if `T: Send`.
+- `SendResult<T>` is `Send` if `T: Send`.
 - `(T1, T2, ...)` is `Send` if every element type is `Send`.
 - Any type containing a reference (`&T`, `&mut T`) is **not** `Send`.
 
@@ -1126,7 +1137,7 @@ Note that:
 
 #### 8.4 Channels
 
-See Section 7.2 for channel semantics and API.
+Programs declare conventional `Option<T>` and `SendResult<T>` enums (same pattern as `Vec::get`). `channel<T>()` has capacity 1; `channel<T>(cap)` sets the bound. `clone_sender(&tx)` is MPSC. `send` returns `SendResult<T>`; `recv` returns `Option<T>`. Last sender drop unblocks `recv` with `None`. See Section 7.2.
 
 #### 8.5 File I/O
 

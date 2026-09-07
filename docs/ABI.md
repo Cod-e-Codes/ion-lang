@@ -125,7 +125,12 @@ thread context.
 Stable beta expectations:
 
 - References do not cross channel or thread boundaries.
-- Channel handles are runtime resources and are released by generated drops.
+- `ion_channel_new(elem_size, capacity, drop_fn, sender_out, receiver_out)` panics if `capacity < 1`. `drop_fn` may be NULL when `T` needs no destructor.
+- Runtime tracks `sender_count` and `receiver_count` separately. Last sender drop disconnects receive; last receiver drop disconnects send. Destroy runs when both counts are 0 and drops remaining buffered `T` through `drop_fn`.
+- `ion_channel_send` returns 0 on success and non-zero when no receiver remains (value is not copied). `ion_channel_recv` returns 0 on success and non-zero when disconnected and empty (`out_value` unchanged).
+- `ion_channel_clone_sender` copies a sender handle and increments `sender_count`.
+- Generated Ion `send` / `recv` consume those status codes (`SendResult<T>` / `Option<T>`). Statement `send` still drops `Closed(T)`.
+- Channel handles are runtime resources released by `ion_channel_sender_drop` / `ion_channel_receiver_drop`.
 - Runtime failures such as allocation or thread creation failures call the Ion
   panic path.
 

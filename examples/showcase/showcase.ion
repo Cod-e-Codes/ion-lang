@@ -7,6 +7,11 @@ enum Option<T> {
     None;
 }
 
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 enum DemoErr {
     Bad;
 }
@@ -344,18 +349,30 @@ fn spawn_channel_example() -> int {
 
     spawn {
         let mut rx_mut: Receiver<int> = rx;
-        let value: int = recv(&mut rx_mut);
-        send(&tx_back, value);
+        match recv(&mut rx_mut) {
+            Option::Some(value) => {
+                send(&tx_back, value);
+            }
+            Option::None => {
+                send(&tx_back, -1);
+            }
+        }
     };
 
     send(&tx, 99);
 
     let mut rx_back_mut: Receiver<int> = rx_back;
-    let result: int = recv(&mut rx_back_mut);
-    if result != 99 {
-        return 1;
+    match recv(&mut rx_back_mut) {
+        Option::Some(result) => {
+            if result != 99 {
+                return 1;
+            }
+            return 0;
+        }
+        Option::None => {
+            return 2;
+        }
     }
-    return 0;
 }
 
 fn fn_literal_example() -> int {

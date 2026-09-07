@@ -253,14 +253,12 @@ fn record_match_arm_bindings(pattern: &Pattern, scrutinee_ty: &Type, ctx: &mut L
         }
         Pattern::Wildcard { .. } => {}
         Pattern::Variant {
-            variant,
+            variant: _,
             sub_patterns,
             named_fields,
             ..
         } => {
-            if let Type::Generic { name, params } = scrutinee_ty
-                && name == "Option"
-                && variant == "Some"
+            if let Type::Generic { params, .. } = scrutinee_ty
                 && let Some(payload_ty) = params.first()
             {
                 if let Some(sub) = sub_patterns.first() {

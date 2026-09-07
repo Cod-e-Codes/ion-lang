@@ -18,7 +18,7 @@ Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 - **Borrowing**: `&T` and `&mut T` are stack-local; references cannot escape the function (no return, no struct fields, no channels, no `spawn`)
 - **Types**: primitives, structs, enums (tuple and struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String`
 - **Control flow**: `if`/`while` (bool conditions), `loop { }`, `break`/`continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, `defer`
-- **Concurrency**: `channel<T>()` returns `(Sender<T>, Receiver<T>)`; `send(&tx, v)` and `recv(&mut rx)`; `spawn { ... }` with structural `Send`
+- **Concurrency**: `channel<T>()` / `channel<T>(cap)` returns `(Sender<T>, Receiver<T>)`; `clone_sender(&tx)`; `send(&tx, v) -> SendResult<T>` and `recv(&mut rx) -> Option<T>`; `spawn { ... }` with structural `Send`
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`
 - **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, `stdlib/result.ion`, and `stdlib/handle.ion`
 
@@ -182,7 +182,7 @@ On Linux or macOS, use `./target/release/ion-build` and drop `.exe`. Windows cha
 | [minimal/](examples/minimal/) | Smallest valid program |
 | [spawn_channel/](examples/spawn_channel/) | `spawn` with cross-thread channels |
 | [channel_worker/](examples/channel_worker/) | Channel worker |
-| [worker_pool/](examples/worker_pool/) | Three workers with per-worker job/result channels |
+| [worker_pool/](examples/worker_pool/) | Shared job channel, `clone_sender` producers, one consumer |
 | [showcase/](examples/showcase/) | Mixed language features (Slice, recursive Box, stdlib Result, bytecode VM) |
 | [bytecode_vm/](examples/bytecode_vm/) | Stack VM: `get_ref` enum dispatch, field `+=`, method calls on `&mut` struct fields |
 | [access_log/](examples/access_log/) | Log parsing, spawn, channels, fmt/io |

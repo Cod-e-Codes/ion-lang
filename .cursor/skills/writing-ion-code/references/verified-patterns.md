@@ -10,7 +10,7 @@ Primitives: `int`, `bool`, `f32`, `f64`, `i8`..`i64`, `u8`..`u64`, `*T`.
 
 Collections: `Vec<T>`, `String`, `Box<T>`, `[T; N]`, `[]T` (slice).
 
-Channels: `Sender<T>`, `Receiver<T>` from `channel<T>()`.
+Channels: `Sender<T>`, `Receiver<T>` from `channel<T>()` / `channel<T>(cap)`; `clone_sender`; `send` -> `SendResult<T>`; `recv` -> `Option<T>`.
 
 Function types (named functions only): `let f: fn(int) -> int = add;`
 
@@ -232,6 +232,16 @@ fn compare(a: &Customer, b: &Customer) -> int {
 Move owned values into `spawn` and channels; no shared mutable state across threads. See [examples/spawn_channel/spawn_channel.ion](../../../../examples/spawn_channel/spawn_channel.ion) and [examples/channel_worker/channel_worker.ion](../../../../examples/channel_worker/channel_worker.ion).
 
 ```ion
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 struct Job {
     data: Vec<u8>;
 }
@@ -239,8 +249,14 @@ struct Job {
 fn worker(rx: Receiver<Job>) {
     let mut rx_mut: Receiver<Job> = rx;
     loop {
-        let job: Job = recv(&mut rx_mut);
-        // use job.data
+        match recv(&mut rx_mut) {
+            Option::Some(job) => {
+                // use job.data
+            }
+            Option::None => {
+                break;
+            }
+        }
     }
 }
 
@@ -383,7 +399,7 @@ Multi-file mode prefixes each module's C symbols (`io_print_int`, `fmt_print_int
 
 ## Channel send expressions
 
-`send(&tx, make())` is valid ([tests/test_channel_send_call_expr.ion](../../../../tests/test_channel_send_call_expr.ion)). `send(&tx, Option::None)` infers `T` from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)). Use `send(&tx, value)` and `recv(&mut rx)` (see [examples/spawn_channel/spawn_channel.ion](../../../../examples/spawn_channel/spawn_channel.ion)).
+`send(&tx, make())` is valid ([tests/test_channel_send_call_expr.ion](../../../../tests/test_channel_send_call_expr.ion)). `send(&tx, Option::None)` infers `T` from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)). `send` returns `SendResult<T>`; a statement `send(&tx, v);` still drops `Closed(T)`. `recv(&mut rx)` returns `Option<T>` (see [examples/spawn_channel/spawn_channel.ion](../../../../examples/spawn_channel/spawn_channel.ion)). `clone_sender(&tx)` is MPSC ([tests/test_channel_contention.ion](../../../../tests/test_channel_contention.ion)).
 
 ## if / ownership merge
 

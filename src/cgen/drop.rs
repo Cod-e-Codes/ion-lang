@@ -96,7 +96,7 @@ impl Codegen {
         format!("{prefix}{n}")
     }
 
-    fn drop_function_name(&self, ty: &Type) -> String {
+    pub(crate) fn drop_function_name(&self, ty: &Type) -> String {
         let c = self.type_to_c(ty);
         let sanitized: String = c
             .chars()
@@ -377,11 +377,13 @@ impl Codegen {
                 self.write_indent();
                 self.writeln(&format!("if ({path}) {{ ion_string_free({path}); }}"));
             }
-            Type::Sender { .. } | Type::Receiver { .. } => {
+            Type::Sender { .. } => {
                 self.write_indent();
-                self.writeln(&format!(
-                    "if ({path}.channel) {{ ion_channel_handle_drop({path}.channel); }}"
-                ));
+                self.writeln(&format!("ion_channel_sender_drop(&({path}));"));
+            }
+            Type::Receiver { .. } => {
+                self.write_indent();
+                self.writeln(&format!("ion_channel_receiver_drop(&({path}));"));
             }
             Type::Tuple { elements } => {
                 let fields: Vec<(usize, Type)> = elements
@@ -408,6 +410,60 @@ impl Codegen {
                 self.writeln("}");
             }
             _ => {}
+        }
+    }
+
+    pub(crate) fn channel_elem_drop_name(&self, ty: &Type) -> String {
+        self.drop_function_name(ty)
+            .replacen("_ion_drop_", "_ion_chan_drop_", 1)
+    }
+
+    pub(crate) fn emit_channel_drop_functions(&mut self, program: &IRProgram) {
+        let mut seen = HashSet::new();
+        let mut types = Vec::new();
+        let mut consider = |ty: &Type| {
+            if let Type::Sender { elem_type } | Type::Receiver { elem_type } = ty {
+                let key = self.drop_function_name(elem_type);
+                if seen.insert(key) {
+                    types.push((**elem_type).clone());
+                }
+            }
+        };
+        for func in &program.functions {
+            for param in &func.params {
+                consider(&param.ty);
+            }
+            for block in &func.blocks {
+                for stmt in &block.statements {
+                    if let IRStmt::Let(let_stmt) = stmt {
+                        consider(&let_stmt.ty);
+                    }
+                }
+            }
+        }
+        let types: Vec<Type> = types
+            .into_iter()
+            .filter(|ty| self.type_needs_drop(ty))
+            .collect();
+        if types.is_empty() {
+            return;
+        }
+        for ty in &types {
+            let name = self.channel_elem_drop_name(ty);
+            self.writeln(&format!("static void {name}(void *elem);"));
+        }
+        self.writeln("");
+        for ty in &types {
+            let name = self.channel_elem_drop_name(ty);
+            let c_ty = self.type_to_c(ty);
+            self.writeln(&format!("static void {name}(void *elem) {{"));
+            self.indent_level += 1;
+            self.write_indent();
+            self.writeln(&format!("{c_ty} *p = ({c_ty} *)elem;"));
+            self.emit_drop_at_path("(*p)", ty);
+            self.indent_level -= 1;
+            self.writeln("}");
+            self.writeln("");
         }
     }
 }

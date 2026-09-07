@@ -1,0 +1,33 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>(4);
+    send(&tx, 1);
+    send(&tx, 2);
+    send(&tx, 3);
+    send(&tx, 4);
+
+    let mut rx_mut: Receiver<int> = rx;
+    let mut sum: int = 0;
+    let mut n: int = 0;
+    while n < 4 {
+        match recv(&mut rx_mut) {
+            Option::Some(v) => {
+                sum = sum + v;
+            }
+            Option::None => {
+                return 1;
+            }
+        }
+        n = n + 1;
+    }
+    return sum;
+}

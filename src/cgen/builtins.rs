@@ -10,7 +10,26 @@ impl Codegen {
         args: &[IREexpr],
         return_type: Option<&Type>,
     ) -> Option<String> {
-        // Box::new<T>(value: T) -> Box<T>
+        // clone_sender(&Sender<T>) -> Sender<T>
+        if callee == "clone_sender" && args.len() == 1 {
+            let mut src = String::new();
+            let old_output = std::mem::replace(&mut self.output, src);
+            if let IREexpr::AddressOf { inner, .. } = &args[0] {
+                self.write("&");
+                self.generate_expr(inner);
+            } else {
+                self.write("&");
+                self.generate_expr(&args[0]);
+            }
+            src = std::mem::replace(&mut self.output, old_output);
+            let mut code = String::new();
+            code.push_str("({ ion_sender_t _cloned; ");
+            code.push_str(&format!(
+                "if (ion_channel_clone_sender({src}, &_cloned) != 0) ion_panic(\"clone_sender failed\"); "
+            ));
+            code.push_str("_cloned; })");
+            return Some(code);
+        }
         if callee.starts_with("Box::new") && args.len() == 1 {
             // Get the type from the return type
             let inner_type = return_type

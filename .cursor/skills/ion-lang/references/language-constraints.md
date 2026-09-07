@@ -27,8 +27,10 @@ APIs that would return `&T` in Rust must use owned values, indices, or the patte
 ## Concurrency
 
 - `spawn { ... }` creates an OS thread
-- `channel<T>()` → `(Sender<T>, Receiver<T>)` - bounded MPSC
-- `send(&tx, v)` moves `v` into channel; the value is checked against `T`. `recv(&mut rx)` receives by move
+- `channel<T>()` / `channel<T>(cap)` → `(Sender<T>, Receiver<T>)` - bounded MPSC
+- `clone_sender(&tx) -> Sender<T>` (Receiver stays unique)
+- `send(&tx, v) -> SendResult<T>` moves `v` into the channel; unused `Closed(T)` still drops `T`
+- `recv(&mut rx) -> Option<T>`; `None` after the last sender is dropped and the buffer is empty
 - Only `Send` types cross thread boundaries
 
 ## Memory
