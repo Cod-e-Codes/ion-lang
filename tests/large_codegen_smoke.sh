@@ -18,6 +18,11 @@ enum Option<T> {
     None;
 }
 
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
 HEADER
 
 i=0
@@ -50,7 +55,14 @@ fn main() -> int {
         let mut sum: int = 0;
         let mut n: int = 0;
         while n < SPAWN_PLACEHOLDER {
-            sum = sum + recv(&mut rx);
+            match recv(&mut rx) {
+                Option::Some(v) => {
+                    sum = sum + v;
+                }
+                Option::None => {
+                    break;
+                }
+            }
             n = n + 1;
         }
         send(&done_tx, sum);
@@ -74,11 +86,17 @@ cat >>"$OUT_ION" <<'FOOTER'
     Vec::push(&mut items, built);
 
     let mut done_rx_mut: Receiver<int> = done_rx;
-    let total: int = recv(&mut done_rx_mut);
-    if total != EXPECTED_SUM_PLACEHOLDER {
-        return 1;
+    match recv(&mut done_rx_mut) {
+        Option::Some(total) => {
+            if total != EXPECTED_SUM_PLACEHOLDER {
+                return 1;
+            }
+            return 0;
+        }
+        Option::None => {
+            return 2;
+        }
     }
-    return 0;
 }
 FOOTER
 
