@@ -231,7 +231,7 @@ impl Codegen {
                 "({c_type_name}){{ .tag = {idx}, .data = {{ .variant_{idx} = {{ .arg0 = {payload} }} }} }}"
             )
         } else {
-            format!("({c_type_name}){{ .tag = {idx}, .data = {{0}} }}")
+            format!("({c_type_name}){{ .tag = {idx}, .data = {{ }} }}")
         }
     }
 
