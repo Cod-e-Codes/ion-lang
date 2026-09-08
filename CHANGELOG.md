@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-09-08
+
 - **Language**: integer `+ - *` wrap in two's complement via same-width unsigned C ops (not `-fwrapv`). `/` and `%` panic on `0` and signed `MIN / -1`. Shifts panic if the right operand is `>=` bitwidth. Signed `>>` is arithmetic. This impacts every integer expression and any program that assumed C signed overflow was undefined or wrapping-by-flag.
 - **Language**: `arr[i] =` now bounds-checks like `arr[i]` (panic unless `unsafe`). This impacts index assignment that previously skipped checks.
 - **Language**: `String` is well-formed UTF-8 (RFC 3629). `push_byte` is ASCII-only. `String::from_utf8(Vec<u8>) -> Option<String>`. `fs::read_to_string_result` validates or `Err(-3)`. This impacts programs that stored raw bytes in `String` or copied strings with `push_byte` of non-ASCII bytes.
@@ -9,12 +11,12 @@
 - **Language**: `try_send` / `try_recv` return conventional `TrySendResult<T>` / `TryRecvResult<T>`. `select` waits on recv arms (`default` polls, `timeout(ms)` waits). `spawn { }` as an expression yields `JoinHandle`; unused drop detaches; `join` consumes. Statement `spawn { };` stays detached. This impacts programs that needed nonblocking or joinable threads.
 - **Language**: nested tuples, elementwise tuple `==` / `!=` when elements are `Eq`, tuples as struct fields, and generic `(T1, T2)` parameters. This impacts programs that previously hit those compiler holes.
 - **Language**: `Vec::set` returns `SetResult` (`Ok` / `OutOfBounds`), not `int`. Call sites must declare the enum. This impacts every `Vec::set` user.
-- **Language**: `Arena::get_ref(&Arena<T>, Handle) -> Option<&T>` (stack-local, same no-escape as `Vec::get_ref`).
-- **Language**: owned `File` (`open` / `create` / `read` / `write` / `close`). Not `Send`. Drop closes. POSIX and MinGW.
+- **Language**: `Arena::get_ref(&Arena<T>, Handle) -> Option<&T>` (stack-local, same no-escape as `Vec::get_ref`). This impacts code that peeked arena slots only through `Vec::get_ref` on `arena.slots`.
+- **Language**: owned `File` (`open` / `create` / `read` / `write` / `close`). Not `Send`. Drop closes. POSIX and MinGW. This impacts programs that needed streaming I/O with an owned handle.
 - **Runtime**: `ion_panic` prints and `abort()`s; drops do not run. `Box::new`, `Vec`/`String` grow, and alloc failure panic instead of returning NULL. This impacts code that treated OOM as a null pointer.
-- **Runtime**: `ion_channel_try_send` / `try_recv`, `ion_channel_select`, `ion_spawn_joinable` / `ion_join` / `ion_thread_detach`, `ion_file_*`.
-- **ABI**: enums are `int tag` plus `union { struct variant_N { ... } } data`. No unary `*` deref. FFI: C callee owns nothing Ion still owns.
-- **CI**: macOS `macos-14` integration job (builds `ion-lsp` before `cargo test`, same as Linux). Release verify runs the integration harness under `-Wall -Wextra -Werror` like Linux CI. MSVC stays out.
+- **Runtime**: `ion_channel_try_send` / `try_recv`, `ion_channel_select`, `ion_spawn_joinable` / `ion_join` / `ion_thread_detach`, `ion_file_*`. This impacts generated C that calls the new channel, thread, and file entry points.
+- **ABI**: enums are `int tag` plus `union { struct variant_N { ... } } data`. No unary `*` deref. FFI: C callee owns nothing Ion still owns. This impacts FFI and any code that assumed a different enum layout or unary `*` deref.
+- **CI**: macOS `macos-14` integration job (builds `ion-lsp` before `cargo test`, same as Linux). Release verify runs the integration harness under `-Wall -Wextra -Werror` like Linux CI. MSVC stays out. This impacts treating macOS as best-effort only, and generated C that is not warning-clean.
 - **Tests**: wrap, div0/shift/index-assign panics, UTF-8 reject, match move join, try_send/try_recv, select, join, Arena::get_ref, nested tuple eq, SetResult, File I/O, File not Send, negative select timeout.
 - **Docs**: ION_SPEC, ABI, BETA, CONTRIBUTING/tests README, skills.
 

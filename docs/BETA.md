@@ -32,6 +32,8 @@ library may rely on without an unstable marker:
 
 0.1.24 is a breaking 0.x channel change: `recv` returns `Option<T>`, `send` returns `SendResult<T>`, `clone_sender` makes MPSC real, and `channel<T>(cap)` sets capacity. Last sender drop unblocks `recv` with `None`. See CHANGELOG 0.1.24.
 
+0.2.0 is a breaking 0.x contract and language-surface change: wrapping arithmetic, abort panics, UTF-8 `String`, match ownership join, `Vec::set` as `SetResult`, joinable `spawn`, `select`, nested tuples, and owned `File`. See CHANGELOG 0.2.0.
+
 ## Unstable or constrained in beta
 
 The following features may change shape before 1.0:
