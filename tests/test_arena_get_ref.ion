@@ -1,0 +1,33 @@
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut arena: Arena<int> = handle::new();
+    let h: Handle = handle::insert(&mut arena, 42);
+    let peek: Handle = handle::copy(&h);
+    match arena.get_ref(peek) {
+        Option::Some(v) => {
+            if v != 42 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    match handle::remove(&mut arena, h) {
+        Take::Hit(n) => {
+            if n != 42 {
+                return 3;
+            }
+        }
+        Take::Miss => {
+            return 4;
+        }
+    };
+    return 0;
+}

@@ -38,6 +38,12 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 - **`Vec<T>` element drop**: scope-exit drop must iterate remaining elements when `T` needs destruction, then `ion_vec_free`. `Vec::get` of such `T` hollows the slot; `Vec::set` drops the previous element. Copy `T` stays memcpy-only (`test_vec_string_scope_drop.ion`, `test_vec_get_set.ion`). Do not drop nested owned fields through a `get_ref` binding.
 - **`String::len`**: null-check the `String*` value, not `&local` (`-Waddress` under CI `-Werror`)
 - **`len` method routing**: `"len"` is a Vec, String, and Slice method. IR/cgen must classify the receiver first (`receiver_is_slice` / `receiver_is_string`) before the `vec_methods` table, or `s.len()` on `&[]T` becomes `Vec::len` (same class as the v0.1.1 `String::len` mis-route). `vec.len()` must still become `Vec::len` (`test_slice_len.ion`, `test_method_call_basic.ion`).
+- **`get_ref` method routing**: `"get_ref"` is a Vec, Slice, and Arena method. IR/cgen must classify the receiver first or `arena.get_ref(h)` becomes `Vec::get_ref` (`test_arena_get_ref.ion`).
+- **Tuple typedef order**: emit inner tuples before outer (`tuple_int_int` before `tuple_tuple_int_int_int`). HashMap order is not inner-first (`test_nested_tuple_eq.ion`).
+- **`Vec::set`**: wrap runtime int in `SetResult`; statement form still emits the enum then `(void)` (`test_vec_set_result.ion`).
+- **`select`**: chosen arm must `try_recv` the message (no TOCTOU). `default` is timeout 0; no default/timeout is `-1`; Ion `timeout(ms)` with `ms < 0` panics at runtime and a literal is a type error (`test_select.ion`, `test_select_timeout.ion`).
+- **`spawn` statement vs expr**: `spawn { };` stays `ion_spawn`. `let h = spawn { };` is `ion_spawn_joinable`. Drop of `JoinHandle` is `ion_thread_detach` (`test_join.ion`).
+- **`Vec` typedef collect**: `collect_vec_types_from_expr` must walk `Match` arm bodies. A `let buf: Vec<u8>` only inside `Option::Some` otherwise never emits `Vec_uint8_t` (`test_file_rw.ion`).
 - **String literal call args**: parameters typed `String` need `ion_string_from_literal` at the call site, not only on `let s: String = "…"`. Pass compilation-wide `TypeInfo.function_params` into multi-file cgen (`println`, `io::println`, `io_println`) so imported callees see `String` (`test_string_call_arg_literal.ion`, `test_multi_fmt_io.ion`).
 - **Reborrowed field → `&Vec` / `&String` param**: non-copy `FieldAccess` through `&Struct` is already `&T` in Ion but loads as `T*` in C; user calls need `&(base->field)` so arity matches `T**` (see `test_ref_struct_field_to_ref_vec_param.ion`). Nested embedded paths use `.` after the first hop (`&(w->inner.data)`). Builtins keep bare field loads via `vec_ion_ptr_expr`.
 - Single-file merge (`merge_modules`) vs `--mode multi` divergences
@@ -57,6 +63,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 
 ## Runtime
 
-- Channel send/recv status, last-sender disconnect (`None`), last-receiver `Closed(T)`, queued `T` drop, `clone_sender` counts
-- `spawn` thread lifecycle and stack size
+- Channel send/recv status, last-sender disconnect (`None`), last-receiver `Closed(T)`, queued `T` drop, `clone_sender` counts, try_send/try_recv, select waiters
+- `spawn` thread lifecycle, joinable `ion_thread_t`, detach-on-drop
+- `ion_file_t` fopen/fread/fwrite/fclose
 - Windows: `-lws2_32` for socket examples; pthread via MinGW

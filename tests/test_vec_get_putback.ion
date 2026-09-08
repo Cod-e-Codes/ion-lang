@@ -4,6 +4,11 @@ enum Option<T> {
     None;
 }
 
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 struct Product {
     id: int;
     price_cents: int;

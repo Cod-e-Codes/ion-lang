@@ -12,6 +12,11 @@ enum Option<T> {
     None;
 }
 
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 enum ParseError {
     Bad;
 }

@@ -88,13 +88,14 @@ enum Status {
 }
 ```
 
-Tuple values (flat only, no nesting): `let t: (int, int) = (1, 2);` then `t.0`, `t.1`, or `let (a, b) = t;`.
+Tuple values: `let t: (int, int) = (1, 2);` then `t.0`, `t.1`, or `let (a, b) = t;`. Nested tuples, `==`/`!=` when elements are `Eq`, struct fields holding tuples, and generic `(T1, T2)` parameters are supported.
 
 **Control flow**
 
 - `if` / `else if` / `else` conditions must be `bool`.
 - `while`, `loop`, `break`, `continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`)
 - `match expr { Pattern => { ... } }` with guards `pattern if cond =>`.
+- `select { let v = recv(&mut rx) => { ... } default => { ... } }` (or `timeout(ms)` instead of `default`).
 
 **Methods**
 
@@ -143,7 +144,7 @@ match recv(&mut rx_back_mut) {
 }
 ```
 
-`spawn` captures owned values by move. `T` in `channel<T>()` must be `Send`. `clone_sender(&tx)` shares one channel across producers.
+`spawn` captures owned values by move. `T` in `channel<T>()` must be `Send`. `clone_sender(&tx)` shares one channel across producers. `try_send` / `try_recv` are nonblocking (`TrySendResult` / `TryRecvResult`). `let h: JoinHandle = spawn { }; join(h);` waits; unused handle drop detaches. Statement `spawn { };` stays fire-and-forget.
 
 **Fn literals (capture-free)**
 
@@ -172,11 +173,11 @@ Import with paths like `import "stdlib/io.ion" as io;`:
 | `fmt.ion` | `int_to_string`, `print_int`, `println_int` |
 | `fs.ion` | `read_to_string_result(path: String) -> ReadResult` (POSIX/MinGW) |
 | `result.ion` | generic `Result<T, E>` for library authors |
-| `handle.ion` | `Handle`, `Arena<T>`, `copy` / `invalid` / `insert` / `remove` / `contains` / `len`; peek via `Vec::get_ref` on `arena.slots` |
+| `handle.ion` | `Handle`, `Arena<T>`, `copy` / `invalid` / `insert` / `remove` / `contains` / `len`; peek via `Arena::get_ref` or `Vec::get_ref` on `arena.slots` |
 
 No stdlib stdin/line input. For POSIX `read` on fd 0, see [examples/todo_demo/](../../../examples/todo_demo/).
 
-Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (define enums in-file or import). `Vec::get` / `Vec::pop` move elements out; use `Vec::get_ref(&v, i)` for read-only in-function peek (`Option<&T>`, local only). `Slice::len(&s)` returns the element count as `int` (`s.len()` desugars; arrays coerce). `Slice::get_ref(&s, i)` is the same peek as `Vec::get_ref` for `&[]T` (and arrays via coercion). `String` is well-formed UTF-8; `String::from_utf8(bytes)` returns `Option<String>`; `push_byte` is ASCII only (`0x00..=0x7F`). `String::get(&s, i)` returns `Option<u8>` without panicking. Match on `&Enum` from `get_ref` dispatches variants directly (no `*` deref). Match arms that fall through join ownership like `if`. Struct field paths support `=` and `+=` on owned and `&mut` receivers; there is no assign-through a bound scalar `&mut int`. Nested generics such as `Vec<Vec<int>>` parse as consecutive `>` closings. String literals and `&String` coerce to `&str` at call sites; string literals also coerce to owned `String` in `let` bindings and when passed to `String` parameters.
+Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (define enums in-file or import). `Vec::get` / `Vec::pop` move elements out; use `Vec::get_ref(&v, i)` for read-only in-function peek (`Option<&T>`, local only). `Vec::set` returns `SetResult` (`Ok` / `OutOfBounds`; declare the enum). `Slice::len(&s)` returns the element count as `int` (`s.len()` desugars; arrays coerce). `Slice::get_ref(&s, i)` is the same peek as `Vec::get_ref` for `&[]T` (and arrays via coercion). `Arena::get_ref(&arena, h)` is the same peek for a generational handle. Owned `File` is `File::open` / `create` / `read` / `write` / `close` (not `Send`; POSIX/MinGW). `String` is well-formed UTF-8; `String::from_utf8(bytes)` returns `Option<String>`; `push_byte` is ASCII only (`0x00..=0x7F`). `String::get(&s, i)` returns `Option<u8>` without panicking. Match on `&Enum` from `get_ref` dispatches variants directly (no `*` deref). Match arms that fall through join ownership like `if`. Struct field paths support `=` and `+=` on owned and `&mut` receivers; there is no assign-through a bound scalar `&mut int`. Nested generics such as `Vec<Vec<int>>` parse as consecutive `>` closings. String literals and `&String` coerce to `&str` at call sites; string literals also coerce to owned `String` in `let` bindings and when passed to `String` parameters.
 
 ## Build and verify
 
@@ -203,16 +204,15 @@ These are **not** in Ion today. Check ION_SPEC.md section 10.3 before using anyt
 
 - Capturing closures (fn literals that reference outer variables), or `impl` blocks in user code
 - User-defined traits, `where` clauses, or bounds other than built-in `Copy`, `Eq`, and `Send`
-- Returning `&T` / `&mut T` or `Option<&T>` from functions
+- Returning `&T` / `&mut T` or `Option<&T>` from functions (`Arena::get_ref` / `Vec::get_ref` stay stack-local)
 - References in struct fields, enum payloads, or channels
 - Shared mutable state across threads (only channels + move)
 - Macros (`println!`, `vec!`, etc.)
 - `?` operator, `async`/`await`, `panic!`, `unwrap()` except `Box::unwrap`
 - Union types `A | B` (reserved; use enums)
-- Nested tuples, tuple `==`, or generic tuple type parameters
+- `==` / `!=` on `JoinHandle` or `File` (not `Eq`)
 - `mut` on function parameters (use `&mut T` in the signature instead)
 - `///` / `//!` doc comment syntax (use adjacent `//` instead; see ION_SPEC §12.1)
-- File APIs beyond `fs::read_to_string_result` (streaming `File` is deferred in spec)
 
 When unsure, **grep** `tests/` and `examples/` for the construct. If nothing matches, tell the user it is likely unsupported rather than inventing syntax.
 

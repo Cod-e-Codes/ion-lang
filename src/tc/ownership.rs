@@ -364,6 +364,7 @@ impl TypeChecker {
                 self.check_expr(&recv_expr.channel)?;
                 Ok(())
             }
+            Expr::Spawn(_) => Ok(()),
             Expr::EnumLit(enum_lit) => {
                 // Check moves in enum literal arguments
                 for arg in &enum_lit.args {

@@ -6,10 +6,17 @@
 - **Language**: `arr[i] =` now bounds-checks like `arr[i]` (panic unless `unsafe`). This impacts index assignment that previously skipped checks.
 - **Language**: `String` is well-formed UTF-8 (RFC 3629). `push_byte` is ASCII-only. `String::from_utf8(Vec<u8>) -> Option<String>`. `fs::read_to_string_result` validates or `Err(-3)`. This impacts programs that stored raw bytes in `String` or copied strings with `push_byte` of non-ASCII bytes.
 - **Language**: match arms that fall through join ownership (same lattice as `if`). Moving on one arm and using after the match is `UseAfterMove`. This impacts programs that relied on the checker restoring the pre-match environment.
+- **Language**: `try_send` / `try_recv` return conventional `TrySendResult<T>` / `TryRecvResult<T>`. `select` waits on recv arms (`default` polls, `timeout(ms)` waits). `spawn { }` as an expression yields `JoinHandle`; unused drop detaches; `join` consumes. Statement `spawn { };` stays detached. This impacts programs that needed nonblocking or joinable threads.
+- **Language**: nested tuples, elementwise tuple `==` / `!=` when elements are `Eq`, tuples as struct fields, and generic `(T1, T2)` parameters. This impacts programs that previously hit those compiler holes.
+- **Language**: `Vec::set` returns `SetResult` (`Ok` / `OutOfBounds`), not `int`. Call sites must declare the enum. This impacts every `Vec::set` user.
+- **Language**: `Arena::get_ref(&Arena<T>, Handle) -> Option<&T>` (stack-local, same no-escape as `Vec::get_ref`).
+- **Language**: owned `File` (`open` / `create` / `read` / `write` / `close`). Not `Send`. Drop closes. POSIX and MinGW.
 - **Runtime**: `ion_panic` prints and `abort()`s; drops do not run. `Box::new`, `Vec`/`String` grow, and alloc failure panic instead of returning NULL. This impacts code that treated OOM as a null pointer.
+- **Runtime**: `ion_channel_try_send` / `try_recv`, `ion_channel_select`, `ion_spawn_joinable` / `ion_join` / `ion_thread_detach`, `ion_file_*`.
 - **ABI**: enums are `int tag` plus `union { struct variant_N { ... } } data`. No unary `*` deref. FFI: C callee owns nothing Ion still owns.
-- **Tests**: wrap, div0/shift/index-assign panics, UTF-8 reject, match move join.
-- **Docs**: ION_SPEC, ABI, CONTRIBUTING/tests README LSan+TSan, skills.
+- **CI**: macOS `macos-14` integration job (builds `ion-lsp` before `cargo test`, same as Linux). Release verify runs the integration harness under `-Wall -Wextra -Werror` like Linux CI. MSVC stays out.
+- **Tests**: wrap, div0/shift/index-assign panics, UTF-8 reject, match move join, try_send/try_recv, select, join, Arena::get_ref, nested tuple eq, SetResult, File I/O, File not Send, negative select timeout.
+- **Docs**: ION_SPEC, ABI, BETA, CONTRIBUTING/tests README, skills.
 
 ## 0.1.24 - 2026-09-06
 

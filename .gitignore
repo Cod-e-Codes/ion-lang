@@ -28,7 +28,13 @@ examples/**/*.c
 examples/**/*.o
 
 # ------------------------------------
-# 5. Editor / OS Files
+# 5. Test artifacts
+# ------------------------------------
+tests/*.tmp
+tests/*.c
+
+# ------------------------------------
+# 6. Editor / OS Files
 # ------------------------------------
 # Visual Studio Code
 .vscode/

@@ -30,6 +30,102 @@ impl Codegen {
             code.push_str("_cloned; })");
             return Some(code);
         }
+        if callee == "try_send" && args.len() == 2 {
+            let sender_addr = self.sender_addr_code(&args[0]);
+            let value_type = return_type
+                .and_then(|t| match t {
+                    Type::Generic { name, params }
+                        if name == "TrySendResult" && params.len() == 1 =>
+                    {
+                        Some(params[0].clone())
+                    }
+                    _ => None,
+                })
+                .or_else(|| self.infer_irexpr_type(&args[1]))
+                .unwrap_or(Type::Int);
+            let val_tmp = format!("_try_send_val_{}", self.temp_var_counter);
+            self.temp_var_counter += 1;
+            let st_tmp = format!("_try_send_st_{}", self.temp_var_counter);
+            self.temp_var_counter += 1;
+            let c_ty = self.type_to_c(&value_type);
+            let result_ty = Type::Generic {
+                name: "TrySendResult".to_string(),
+                params: vec![value_type.clone()],
+            };
+            let result_c = self.type_to_c(&result_ty);
+            let sent = self.c_enum_literal(&result_c, "TrySendResult", "Sent", None);
+            let full = self.c_enum_literal(&result_c, "TrySendResult", "Full", Some(&val_tmp));
+            let closed = self.c_enum_literal(&result_c, "TrySendResult", "Closed", Some(&val_tmp));
+            let mut code = String::new();
+            code.push_str("({ ");
+            code.push_str(&format!("{c_ty} {val_tmp} = "));
+            let mut val_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, val_code);
+            self.generate_expr_with_type(&args[1], Some(&value_type));
+            val_code = std::mem::replace(&mut self.output, old_output);
+            code.push_str(&val_code);
+            code.push_str("; ");
+            code.push_str(&format!(
+                "int {st_tmp} = ion_channel_try_send({sender_addr}, &{val_tmp}); "
+            ));
+            code.push_str(&format!("{result_c} _try_send_res; "));
+            code.push_str(&format!(
+                "if ({st_tmp} == 0) {{ _try_send_res = {sent}; }} else if ({st_tmp} == -2) {{ _try_send_res = {full}; }} else {{ _try_send_res = {closed}; }} "
+            ));
+            code.push_str("_try_send_res; })");
+            return Some(code);
+        }
+        if callee == "try_recv" && args.len() == 1 {
+            let recv_addr = self.sender_addr_code(&args[0]);
+            let elem_type = return_type
+                .and_then(|t| {
+                    if let Type::Generic { name, params } = t {
+                        if name == "TryRecvResult" && params.len() == 1 {
+                            Some(params[0].clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(Type::Int);
+            let tmp = format!("_try_recv_tmp_{}", self.temp_var_counter);
+            self.temp_var_counter += 1;
+            let st_tmp = format!("_try_recv_st_{}", self.temp_var_counter);
+            self.temp_var_counter += 1;
+            let c_ty = self.type_to_c(&elem_type);
+            let result_ty = Type::Generic {
+                name: "TryRecvResult".to_string(),
+                params: vec![elem_type.clone()],
+            };
+            let result_c = self.type_to_c(&result_ty);
+            let msg = self.c_enum_literal(&result_c, "TryRecvResult", "Msg", Some(&tmp));
+            let empty = self.c_enum_literal(&result_c, "TryRecvResult", "Empty", None);
+            let closed = self.c_enum_literal(&result_c, "TryRecvResult", "Closed", None);
+            let mut code = String::new();
+            code.push_str("({ ");
+            code.push_str(&format!("{c_ty} {tmp} = {{0}}; "));
+            code.push_str(&format!(
+                "int {st_tmp} = ion_channel_try_recv({recv_addr}, &{tmp}); "
+            ));
+            code.push_str(&format!("{result_c} _try_recv_res; "));
+            code.push_str(&format!(
+                "if ({st_tmp} == 0) {{ _try_recv_res = {msg}; }} else if ({st_tmp} == -2) {{ _try_recv_res = {empty}; }} else {{ _try_recv_res = {closed}; }} "
+            ));
+            code.push_str("_try_recv_res; })");
+            return Some(code);
+        }
+        if callee == "join" && args.len() == 1 {
+            let mut arg_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, arg_code);
+            self.generate_expr(&args[0]);
+            arg_code = std::mem::replace(&mut self.output, old_output);
+            let code = format!(
+                "({{ ion_thread_t _ion_jh = {arg_code}; if (ion_join(&_ion_jh) != 0) ion_panic(\"join failed\"); }})"
+            );
+            return Some(code);
+        }
         if callee.starts_with("Box::new") && args.len() == 1 {
             // Get the type from the return type
             let inner_type = return_type
@@ -532,7 +628,7 @@ impl Codegen {
                 code.push_str(&elem_c_type);
                 code.push_str("))");
             }
-            return Some(code);
+            return Some(self.wrap_set_result(code));
         }
 
         // String::new() -> String
@@ -841,7 +937,127 @@ impl Codegen {
             return Some(code);
         }
 
+        if callee == "Arena::get_ref" && args.len() == 2 {
+            let elem_type = return_type
+                .and_then(|t| {
+                    if let Type::Generic { name, params } = t
+                        && name == "Option"
+                        && params.len() == 1
+                        && let Type::Ref { inner, .. } = &params[0]
+                    {
+                        return Some((**inner).clone());
+                    }
+                    None
+                })
+                .unwrap_or(Type::Int);
+            let option_name = return_type
+                .map(|t| {
+                    mangle_type_name(
+                        "Option",
+                        match t {
+                            Type::Generic { params, .. } => params.as_slice(),
+                            _ => &[],
+                        },
+                    )
+                })
+                .unwrap_or_else(|| "Option".to_string());
+            let ref_c_type = self.type_to_c(&Type::Ref {
+                inner: Box::new(elem_type.clone()),
+                mutable: false,
+            });
+            let slot_c = mangle_type_name("Slot", std::slice::from_ref(&elem_type));
+            let mut arena_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, arena_code);
+            self.generate_expr(&args[0]);
+            arena_code = std::mem::replace(&mut self.output, old_output);
+            let mut handle_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, handle_code);
+            self.generate_expr(&args[1]);
+            handle_code = std::mem::replace(&mut self.output, old_output);
+            let mut code = String::new();
+            code.push_str("({ ");
+            code.push_str(&option_name);
+            code.push_str(" _ion_get_ref; ");
+            code.push_str(&format!(
+                "Handle _ion_h = {handle_code}; ion_vec_t* _ion_v = (ion_vec_t*)(({arena_code})->slots); "
+            ));
+            code.push_str(
+                "if (_ion_v && _ion_h.index >= 0 && (size_t)_ion_h.index < _ion_v->len) { ",
+            );
+            code.push_str(&format!(
+                "{slot_c}* _ion_slot = &(({slot_c}*)_ion_v->data)[_ion_h.index]; if (_ion_slot->tag == 0 && _ion_slot->data.variant_0.generation == _ion_h.generation) {{ _ion_get_ref.tag = 0; _ion_get_ref.data.variant_0.arg0 = ({ref_c_type})(&_ion_slot->data.variant_0.value); }} else {{ _ion_get_ref.tag = 1; }} "
+            ));
+            code.push_str("} else { _ion_get_ref.tag = 1; } _ion_get_ref; })");
+            return Some(code);
+        }
+
+        if (callee == "File::open" || callee == "File::create") && args.len() == 1 {
+            let mode = if callee == "File::open" { "rb" } else { "w+b" };
+            let mut path_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, path_code);
+            self.generate_expr(&args[0]);
+            path_code = std::mem::replace(&mut self.output, old_output);
+            let path_ptr = self.string_ion_ptr_expr(&args[0], &path_code);
+            let option_name = mangle_type_name("Option", std::slice::from_ref(&Type::File));
+            let some = self.c_enum_literal(&option_name, "Option", "Some", Some("_ion_f"));
+            let none = self.c_enum_literal(&option_name, "Option", "None", None);
+            let code = format!(
+                "({{ ion_string_t* _ion_p = {path_ptr}; const char* _ion_path = (_ion_p && _ion_p->data) ? (const char*)_ion_p->data : \"\"; ion_file_t _ion_f = ion_file_open(_ion_path, \"{mode}\"); {option_name} _ion_fo; if (_ion_f.fp) {{ _ion_fo = {some}; }} else {{ _ion_fo = {none}; }} _ion_fo; }})"
+            );
+            return Some(code);
+        }
+
+        if callee == "File::read" && args.len() == 2 {
+            let mut file_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, file_code);
+            self.generate_expr(&args[0]);
+            file_code = std::mem::replace(&mut self.output, old_output);
+            let mut buf_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, buf_code);
+            self.generate_expr(&args[1]);
+            buf_code = std::mem::replace(&mut self.output, old_output);
+            let buf_ptr = self.vec_ion_ptr_expr(&args[1], &buf_code);
+            let code = format!(
+                "({{ ion_file_t* _ion_f = {file_code}; ion_vec_t* _ion_b = (ion_vec_t*)({buf_ptr}); size_t _ion_got = 0; int _ion_n = -1; if (_ion_f && _ion_b) {{ if (ion_file_read(_ion_f, _ion_b->data, _ion_b->capacity, &_ion_got) == 0) {{ _ion_b->len = _ion_got; _ion_n = (int)_ion_got; }} }} _ion_n; }})"
+            );
+            return Some(code);
+        }
+
+        if callee == "File::write" && args.len() == 2 {
+            let mut file_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, file_code);
+            self.generate_expr(&args[0]);
+            file_code = std::mem::replace(&mut self.output, old_output);
+            let mut buf_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, buf_code);
+            self.generate_expr(&args[1]);
+            buf_code = std::mem::replace(&mut self.output, old_output);
+            let buf_ptr = self.vec_ion_ptr_expr(&args[1], &buf_code);
+            let code = format!(
+                "({{ ion_file_t* _ion_f = {file_code}; ion_vec_t* _ion_b = (ion_vec_t*)({buf_ptr}); size_t _ion_got = 0; int _ion_n = -1; if (_ion_f && _ion_b) {{ if (ion_file_write(_ion_f, _ion_b->data, _ion_b->len, &_ion_got) == 0) {{ _ion_n = (int)_ion_got; }} }} _ion_n; }})"
+            );
+            return Some(code);
+        }
+
+        if callee == "File::close" && args.len() == 1 {
+            let mut file_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, file_code);
+            self.generate_expr(&args[0]);
+            file_code = std::mem::replace(&mut self.output, old_output);
+            let code = format!("({{ ion_file_close({file_code}); }})");
+            return Some(code);
+        }
+
         None
+    }
+
+    fn wrap_set_result(&self, set_expr: String) -> String {
+        let result_c = self.type_to_c(&Type::Enum("SetResult".to_string()));
+        let ok = self.c_enum_literal(&result_c, "SetResult", "Ok", None);
+        let oob = self.c_enum_literal(&result_c, "SetResult", "OutOfBounds", None);
+        format!(
+            "({{ {result_c} _ion_set_res; int _ion_set_st = {set_expr}; if (_ion_set_st == 0) {{ _ion_set_res = {ok}; }} else {{ _ion_set_res = {oob}; }} _ion_set_res; }})"
+        )
     }
 }
 

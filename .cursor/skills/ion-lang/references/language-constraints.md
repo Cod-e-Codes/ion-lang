@@ -22,16 +22,18 @@ References `&T` and `&mut T` are stack-local views. **Rejected:**
 
 **Borrow conflicts** (ION_SPEC section 5.3): at most one `&mut T` or any number of `&T` on the same **root owner binding**. Lasting borrows come from `let r = &x`, `let r = &mut s.field`, etc., and end when the binding's scope ends; field and index paths borrow the root owner, not disjoint field slots. Ephemeral `&` / `&mut` in call arguments are checked but not stored. While a lasting borrow is active, the owner cannot be read, assigned, or moved (including copy types and other field paths). Mutation through `&mut` uses struct field paths or `&mut` callee parameters; there is no unary `*` and no assign-through a bound scalar `&mut T`.
 
-APIs that would return `&T` in Rust must use owned values, indices, or the patterns in [writing-ion-code/references/verified-patterns.md](../writing-ion-code/references/verified-patterns.md) (`Vec::get_ref` / `Slice::get_ref` / `String::get`). Prefer `Handle` + `Arena<T>` (`stdlib/handle.ion`) over a raw `int` when slots can be reused.
+APIs that would return `&T` in Rust must use owned values, indices, or the patterns in [writing-ion-code/references/verified-patterns.md](../writing-ion-code/references/verified-patterns.md) (`Vec::get_ref` / `Slice::get_ref` / `Arena::get_ref` / `String::get`). Prefer `Handle` + `Arena<T>` (`stdlib/handle.ion`) over a raw `int` when slots can be reused.
 
 ## Concurrency
 
-- `spawn { ... }` creates an OS thread
+- `spawn { ... };` creates a detached OS thread. `let h: JoinHandle = spawn { ... };` is joinable; drop detaches; `join(h)` waits and consumes
+- `select { let v = recv(&mut rx) => { ... } default => { ... } }` (or `timeout(ms)`)
 - `channel<T>()` / `channel<T>(cap)` → `(Sender<T>, Receiver<T>)` - bounded MPSC
 - `clone_sender(&tx) -> Sender<T>` (Receiver stays unique)
 - `send(&tx, v) -> SendResult<T>` moves `v` into the channel; unused `Closed(T)` still drops `T`
 - `recv(&mut rx) -> Option<T>`; `None` after the last sender is dropped and the buffer is empty
-- Only `Send` types cross thread boundaries
+- `try_send` / `try_recv` are nonblocking (`TrySendResult<T>` / `TryRecvResult<T>`)
+- Only `Send` types cross thread boundaries (`JoinHandle` is `Send`; `File` is not)
 
 ## Memory
 
@@ -49,6 +51,6 @@ Inside `unsafe { ... }`:
 
 ## Types (surface)
 
-Primitives, `bool`, integers (`i8`-`i64`, `u8`-`u64`), `f32`/`f64`, structs, enums (tuple + struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String`, raw `*T`.
+Primitives, `bool`, integers (`i8`-`i64`, `u8`-`u64`), `f32`/`f64`, structs, enums (tuple + struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String`, `JoinHandle`, `File`, raw `*T`.
 
 `if`/`while` conditions must be `bool`. `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`).

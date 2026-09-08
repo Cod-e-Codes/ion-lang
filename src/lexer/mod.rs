@@ -14,6 +14,7 @@ pub enum TokenKind {
     Send,
     Recv,
     Spawn,
+    Select,
     Defer,
     Int,
     Bool,
@@ -36,6 +37,7 @@ pub enum TokenKind {
     Vec,
     String,
     Slice,
+    File,
     Pub,
     Import,
     Extern,
@@ -118,7 +120,7 @@ pub struct Lexer {
 fn can_have_field_access(kind: &TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::Ident(_) | TokenKind::RParen | TokenKind::RBracket
+        TokenKind::Ident(_) | TokenKind::RParen | TokenKind::RBracket | TokenKind::Integer(_)
     )
 }
 
@@ -322,7 +324,9 @@ impl Lexer {
                     TokenKind::Comma
                 }
                 Some('"') => TokenKind::StringLit(self.read_string()?),
-                Some(c) if c.is_ascii_digit() => self.read_number()?,
+                Some(c) if c.is_ascii_digit() => {
+                    self.read_number(tokens.last().map(|t| &t.kind))?
+                }
                 Some(c) if c.is_ascii_alphabetic() || c == '_' => self.read_identifier_or_keyword(),
                 Some(c) => {
                     return Err(format!(
@@ -398,7 +402,7 @@ impl Lexer {
         }
     }
 
-    fn read_number(&mut self) -> Result<TokenKind, String> {
+    fn read_number(&mut self, prev: Option<&TokenKind>) -> Result<TokenKind, String> {
         let start_pos = self.position;
 
         if self.peek() == Some('0') {
@@ -438,6 +442,10 @@ impl Lexer {
                     })?;
                 self.advance();
             } else if c == '.' {
+                // `expr.0.1` is nested tuple indexing, not float `0.1`.
+                if matches!(prev, Some(TokenKind::Dot)) {
+                    break;
+                }
                 // Decimal point
                 self.advance();
                 has_decimal = true;
@@ -734,6 +742,7 @@ impl Lexer {
             "send" => TokenKind::Send,
             "recv" => TokenKind::Recv,
             "spawn" => TokenKind::Spawn,
+            "select" => TokenKind::Select,
             "defer" => TokenKind::Defer,
             "int" => TokenKind::Int,
             "bool" => TokenKind::Bool,
@@ -756,6 +765,7 @@ impl Lexer {
             "Vec" => TokenKind::Vec,
             "String" => TokenKind::String,
             "Slice" => TokenKind::Slice,
+            "File" => TokenKind::File,
             "pub" => TokenKind::Pub,
             "import" => TokenKind::Import,
             "extern" => TokenKind::Extern,
@@ -801,6 +811,17 @@ mod tests {
         assert_eq!(tokens[3].kind, TokenKind::Slash);
         assert_eq!(tokens[4].kind, TokenKind::Equals);
         assert_eq!(tokens[5].kind, TokenKind::Arrow);
+    }
+
+    #[test]
+    fn test_nested_tuple_index_tokens() {
+        let mut lexer = Lexer::new("t.0.0");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Ident("t".to_string()));
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
+        assert_eq!(tokens[2].kind, TokenKind::Integer(0));
+        assert_eq!(tokens[3].kind, TokenKind::Dot);
+        assert_eq!(tokens[4].kind, TokenKind::Integer(0));
     }
 
     #[test]

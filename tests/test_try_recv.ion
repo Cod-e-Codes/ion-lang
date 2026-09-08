@@ -1,0 +1,70 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+enum TrySendResult<T> {
+    Sent;
+    Full(T);
+    Closed(T);
+}
+
+enum TryRecvResult<T> {
+    Msg(T);
+    Empty;
+    Closed;
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>(1);
+    match try_recv(&mut rx) {
+        TryRecvResult::Empty => {}
+        TryRecvResult::Msg(_) => {
+            return 1;
+        }
+        TryRecvResult::Closed => {
+            return 2;
+        }
+    };
+    match try_send(&tx, 7) {
+        TrySendResult::Sent => {}
+        TrySendResult::Full(_) => {
+            return 3;
+        }
+        TrySendResult::Closed(_) => {
+            return 4;
+        }
+    };
+    match try_send(&tx, 8) {
+        TrySendResult::Full(v) => {
+            if v != 8 {
+                return 5;
+            }
+        }
+        TrySendResult::Sent => {
+            return 6;
+        }
+        TrySendResult::Closed(_) => {
+            return 7;
+        }
+    };
+    match try_recv(&mut rx) {
+        TryRecvResult::Msg(v) => {
+            if v != 7 {
+                return 8;
+            }
+        }
+        TryRecvResult::Empty => {
+            return 9;
+        }
+        TryRecvResult::Closed => {
+            return 10;
+        }
+    };
+    return 0;
+}

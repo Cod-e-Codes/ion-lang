@@ -22,13 +22,14 @@ cargo install --path . --bin ion-compiler --bin ion-build
 
 `ion-lsp` is built with the release command above; point the editor extension at `target/release/ion-lsp` (see README IDE Support).
 
-CI (`.github/workflows/ci.yml`) builds all three binaries on Linux, runs integration tests, ASan/UBSan smoke on generated C, leak sanitizer (LSan) on named heap-drop tests, thread sanitizer (TSan) on `test_channel_*` / `test_spawn_*` run tests, and the full integration harness under `-Wall -Wextra -Werror` on Linux. The Windows job builds `ion-compiler` and `ion-build` only. Build `ion-lsp` locally for IDE work.
+CI (`.github/workflows/ci.yml`) builds all three binaries on Linux, runs integration tests, ASan/UBSan smoke on generated C, leak sanitizer (LSan) on named heap-drop tests, thread sanitizer (TSan) on `test_channel_*` / `test_spawn_*` / `test_join` / `test_select` / `test_try_recv` run tests, and the full integration harness under `-Wall -Wextra -Werror` on Linux. A `macos-14` job builds the toolchain and runs the integration harness with Clang. The Windows job builds `ion-compiler` and `ion-build` only. Release verify repeats the integration harness under `-Werror`. Build `ion-lsp` locally for IDE work.
 
 ## Test
 
-Unit tests:
+Unit tests (`src/lsp` tests spawn `target/debug/ion-lsp`, same as Linux CI):
 
 ```bash
+cargo build --bin ion-lsp
 cargo test
 ```
 

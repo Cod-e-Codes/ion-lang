@@ -130,7 +130,7 @@ jobs:
           while IFS=$'\t' read -r test kind expected _rest; do
             [ "$kind" = "run" ] || continue
             case "$test" in
-              test_channel_*|test_spawn_*) ;;
+              test_channel_*|test_spawn_*|test_join|test_select|test_try_recv) ;;
               *) continue ;;
             esac
             [ -f "${test}.ion" ] || continue
@@ -145,7 +145,7 @@ jobs:
               exit 1
             fi
             rm -f "${test}.c" "$test"
-          done < <(awk -F '\t' 'NR > 1 && $2 == "run" && ($1 ~ /^test_channel_/ || $1 ~ /^test_spawn_/) { print $1, $2, $3 }' test_expectations.tsv)
+          done < <(awk -F '\t' 'NR > 1 && $2 == "run" && ($1 ~ /^test_channel_/ || $1 ~ /^test_spawn_/ || $1 == "test_join" || $1 == "test_select" || $1 == "test_try_recv") { print $1, $2, $3 }' test_expectations.tsv)
 
       - name: Large codegen smoke (Linux)
         shell: bash
@@ -163,6 +163,32 @@ jobs:
           CC: gcc
           CFLAGS: -Wall -Wextra -Werror
           RUNTIME_OBJ: .ion_test_runtime_werror.o
+        run: cd tests && bash test_runner.sh
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.96.0"
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Lib LSP tests spawn `target/{debug,release}/ion-lsp` (not the deps test harness).
+      - run: cargo build --bin ion-lsp
+      - run: cargo test
+      - run: cargo build --release --bin ion-compiler --bin ion-build --bin ion-lsp
+      - run: ./target/release/ion-compiler --version
+      - run: ./target/release/ion-build --version
+
+      - name: Integration tests (macOS)
+        shell: bash
+        env:
+          COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          ION_BUILD: ${{ github.workspace }}/target/release/ion-build
+          CC: clang
         run: cd tests && bash test_runner.sh
 
   integration:

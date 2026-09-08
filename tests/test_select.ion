@@ -1,0 +1,49 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>(1);
+    let (ty, ry): (Sender<int>, Receiver<int>) = channel<int>(1);
+    send(&tx, 11);
+    let mut got: int = 0;
+    select {
+        let v = recv(&mut rx) => {
+            match v {
+                Option::Some(n) => {
+                    got = n;
+                }
+                Option::None => {
+                    return 1;
+                }
+            };
+        }
+        recv(&mut ry) => {
+            return 2;
+        }
+        default => {
+            return 3;
+        }
+    };
+    if got != 11 {
+        return 4;
+    }
+    select {
+        let _empty = recv(&mut rx) => {
+            return 5;
+        }
+        default => {
+            got = 9;
+        }
+    };
+    if got != 9 {
+        return 6;
+    }
+    return 0;
+}

@@ -50,6 +50,7 @@ Ion identity depends on these - do not weaken them without explicit user directi
 ## Build and verify
 
 ```powershell
+cargo build --bin ion-lsp
 cargo test
 $env:CARGO_TARGET_DIR = "$PWD\target"
 cargo build --release --bin ion-compiler --bin ion-lsp --bin ion-build

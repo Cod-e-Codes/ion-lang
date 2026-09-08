@@ -215,6 +215,10 @@ pub enum Type {
         params: Vec<Type>,
         return_type: Box<Type>,
     },
+    /// Joinable spawn handle. Not Copy. Send. Drop detaches.
+    JoinHandle,
+    /// Owned file. Not Send. Drop closes.
+    File,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +235,7 @@ pub enum Stmt {
     Expr(ExprStmt),
     Defer(DeferStmt),
     Spawn(SpawnStmt),
+    Select(SelectStmt),
     If(IfStmt),
     While(WhileStmt),
     Loop(LoopStmt),
@@ -274,6 +279,23 @@ pub struct DeferStmt {
 #[derive(Debug, Clone)]
 pub struct SpawnStmt {
     pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectRecvArm {
+    pub binding: Option<String>,
+    pub recv: RecvExpr,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectStmt {
+    pub recv_arms: Vec<SelectRecvArm>,
+    pub default_body: Option<Block>,
+    pub timeout_ms: Option<Expr>,
+    pub timeout_body: Option<Block>,
     pub span: Span,
 }
 
@@ -328,6 +350,7 @@ pub enum Expr {
     Ref(RefExpr),
     Send(SendExpr),
     Recv(RecvExpr),
+    Spawn(SpawnExpr),
     StructLit(StructLitExpr),
     FieldAccess(FieldAccessExpr),
     EnumLit(EnumLitExpr),
@@ -356,6 +379,7 @@ impl Expr {
             Expr::Ref(e) => e.id,
             Expr::Send(e) => e.id,
             Expr::Recv(e) => e.id,
+            Expr::Spawn(e) => e.id,
             Expr::StructLit(e) => e.id,
             Expr::FieldAccess(e) => e.id,
             Expr::EnumLit(e) => e.id,
@@ -384,6 +408,7 @@ impl Expr {
             Expr::Ref(e) => e.id = id,
             Expr::Send(e) => e.id = id,
             Expr::Recv(e) => e.id = id,
+            Expr::Spawn(e) => e.id = id,
             Expr::StructLit(e) => e.id = id,
             Expr::FieldAccess(e) => e.id = id,
             Expr::EnumLit(e) => e.id = id,
@@ -431,6 +456,21 @@ pub(crate) fn number_stmt(stmt: &mut Stmt, next_id: &mut u32) {
         Stmt::Expr(s) => number_expr(&mut s.expr, next_id),
         Stmt::Defer(s) => number_expr(&mut s.expr, next_id),
         Stmt::Spawn(s) => number_block(&mut s.body, next_id),
+        Stmt::Select(s) => {
+            for arm in &mut s.recv_arms {
+                number_expr(&mut arm.recv.channel, next_id);
+                number_block(&mut arm.body, next_id);
+            }
+            if let Some(body) = &mut s.default_body {
+                number_block(body, next_id);
+            }
+            if let Some(ms) = &mut s.timeout_ms {
+                number_expr(ms, next_id);
+            }
+            if let Some(body) = &mut s.timeout_body {
+                number_block(body, next_id);
+            }
+        }
         Stmt::If(s) => {
             number_expr(&mut s.cond, next_id);
             number_block(&mut s.then_block, next_id);
@@ -464,6 +504,7 @@ pub(crate) fn number_expr(expr: &mut Expr, next_id: &mut u32) {
             number_expr(&mut e.value, next_id);
         }
         Expr::Recv(e) => number_expr(&mut e.channel, next_id),
+        Expr::Spawn(e) => number_block(&mut e.body, next_id),
         Expr::StructLit(e) => {
             for field in &mut e.fields {
                 number_expr(&mut field.value, next_id);
@@ -619,6 +660,13 @@ pub struct SendExpr {
 pub struct RecvExpr {
     pub id: ExprId,
     pub channel: Box<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpawnExpr {
+    pub id: ExprId,
+    pub body: Block,
     pub span: Span,
 }
 

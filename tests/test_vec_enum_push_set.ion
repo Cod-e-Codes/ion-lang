@@ -1,3 +1,13 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 enum Tag { A { x: int }; B; }
 
 fn main() -> int {

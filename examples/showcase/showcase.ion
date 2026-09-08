@@ -12,6 +12,11 @@ enum SendResult<T> {
     Closed(T);
 }
 
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 enum DemoErr {
     Bad;
 }

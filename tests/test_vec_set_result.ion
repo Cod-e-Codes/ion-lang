@@ -1,0 +1,37 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    match Vec::set(&mut v, 0, 2) {
+        SetResult::Ok => {}
+        SetResult::OutOfBounds => {
+            return 1;
+        }
+    };
+    match Vec::set(&mut v, 5, 3) {
+        SetResult::OutOfBounds => {}
+        SetResult::Ok => {
+            return 2;
+        }
+    };
+    match Vec::get(&v, 0) {
+        Option::Some(n) => {
+            if n != 2 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 4;
+        }
+    };
+    return 0;
+}

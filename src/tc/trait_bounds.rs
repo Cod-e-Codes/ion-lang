@@ -127,6 +127,7 @@ impl TypeChecker {
             Type::Slice { .. } => false,
             Type::Tuple { elements } => elements.iter().all(|e| self.is_eq_type_rec(e, visiting)),
             Type::Fn { .. } => true,
+            Type::JoinHandle | Type::File => false,
         }
     }
 }

@@ -339,7 +339,7 @@ impl TypeChecker {
             });
         }
 
-        // Vec::set<T>(vec: &mut Vec<T>, index: int, value: T) -> int
+        // Vec::set<T>(vec: &mut Vec<T>, index: int, value: T) -> SetResult
         if callee == "Vec::set" {
             if call_expr.args.len() != 3 {
                 return Err(TypeCheckError::TypeMismatch {
@@ -389,7 +389,12 @@ impl TypeChecker {
                         span: call_expr.args[2].span(),
                     });
                 }
-                return Ok(Some(Type::Int)); // 0 on success, -1 on failure
+                self.require_named_enum(
+                    "SetResult",
+                    &[("Ok", false), ("OutOfBounds", false)],
+                    call_expr.span,
+                )?;
+                return Ok(Some(Type::Enum("SetResult".to_string())));
             }
             return Err(TypeCheckError::TypeMismatch {
                 expected: "&mut Vec<T>".to_string(),
@@ -611,6 +616,302 @@ impl TypeChecker {
             };
         }
 
+        if callee == "try_send" {
+            if call_expr.args.len() != 2 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "2 arguments".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let sender_ref = self.check_expr(&call_expr.args[0])?;
+            let elem_type = match sender_ref {
+                Type::Ref { inner, .. } => match *inner {
+                    Type::Sender { elem_type } => *elem_type,
+                    other => {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: "&Sender<T>".to_string(),
+                            got: type_to_string(&other),
+                            span: call_expr.args[0].span(),
+                        });
+                    }
+                },
+                other => {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "&Sender<T>".to_string(),
+                        got: type_to_string(&other),
+                        span: call_expr.args[0].span(),
+                    });
+                }
+            };
+            let _value_ty = self.check_expr_with_expected(&call_expr.args[1], &elem_type)?;
+            self.require_named_enum(
+                "TrySendResult",
+                &[("Sent", false), ("Full", true), ("Closed", true)],
+                call_expr.span,
+            )?;
+            return Ok(Some(Type::Generic {
+                name: "TrySendResult".to_string(),
+                params: vec![elem_type],
+            }));
+        }
+
+        if callee == "try_recv" {
+            if call_expr.args.len() != 1 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "1 argument".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let recv_ref = self.check_expr(&call_expr.args[0])?;
+            let elem_type = match recv_ref {
+                Type::Ref {
+                    inner,
+                    mutable: true,
+                } => match *inner {
+                    Type::Receiver { elem_type } => *elem_type,
+                    other => {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: "&mut Receiver<T>".to_string(),
+                            got: type_to_string(&other),
+                            span: call_expr.args[0].span(),
+                        });
+                    }
+                },
+                other => {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "&mut Receiver<T>".to_string(),
+                        got: type_to_string(&other),
+                        span: call_expr.args[0].span(),
+                    });
+                }
+            };
+            self.require_named_enum(
+                "TryRecvResult",
+                &[("Msg", true), ("Empty", false), ("Closed", false)],
+                call_expr.span,
+            )?;
+            return Ok(Some(Type::Generic {
+                name: "TryRecvResult".to_string(),
+                params: vec![elem_type],
+            }));
+        }
+
+        if callee == "join" {
+            if call_expr.args.len() != 1 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "1 argument".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let handle_ty = self.check_expr(&call_expr.args[0])?;
+            if !matches!(handle_ty, Type::JoinHandle) {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "JoinHandle".to_string(),
+                    got: type_to_string(&handle_ty),
+                    span: call_expr.args[0].span(),
+                });
+            }
+            return Ok(Some(Type::Void));
+        }
+
+        if callee == "Arena::get_ref" {
+            if call_expr.args.len() != 2 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "2 arguments".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let arena_ty = self.check_expr(&call_expr.args[0])?;
+            let handle_ty = self.check_expr(&call_expr.args[1])?;
+            let handle_ok = match &handle_ty {
+                Type::Struct(name) | Type::Generic { name, .. } => name == "Handle",
+                _ => false,
+            };
+            if !handle_ok {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "Handle".to_string(),
+                    got: type_to_string(&handle_ty),
+                    span: call_expr.args[1].span(),
+                });
+            }
+            let elem_type = match &arena_ty {
+                Type::Ref { inner, .. } => match inner.as_ref() {
+                    Type::Generic { name, params } if name == "Arena" && params.len() == 1 => {
+                        Some(params[0].clone())
+                    }
+                    _ => None,
+                },
+                Type::Generic { name, params } if name == "Arena" && params.len() == 1 => {
+                    Some(params[0].clone())
+                }
+                _ => None,
+            };
+            if let Some(elem_type) = elem_type {
+                let resolved_elem = self.resolve_type_name(&elem_type)?;
+                self.require_named_enum(
+                    "Option",
+                    &[("Some", true), ("None", false)],
+                    call_expr.span,
+                )?;
+                return Ok(Some(Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![Type::Ref {
+                        inner: Box::new(resolved_elem),
+                        mutable: false,
+                    }],
+                }));
+            }
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "&Arena<T>".to_string(),
+                got: type_to_string(&arena_ty),
+                span: call_expr.args[0].span(),
+            });
+        }
+
+        if callee == "File::open" || callee == "File::create" {
+            if call_expr.args.len() != 1 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "1 argument".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let path_ty = self.check_expr(&call_expr.args[0])?;
+            let path_ok = match &path_ty {
+                Type::Ref { inner, .. } => matches!(inner.as_ref(), Type::String | Type::Str),
+                Type::String | Type::Str => true,
+                _ => false,
+            };
+            if !path_ok {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "&String".to_string(),
+                    got: type_to_string(&path_ty),
+                    span: call_expr.args[0].span(),
+                });
+            }
+            self.require_named_enum("Option", &[("Some", true), ("None", false)], call_expr.span)?;
+            return Ok(Some(Type::Generic {
+                name: "Option".to_string(),
+                params: vec![Type::File],
+            }));
+        }
+
+        if callee == "File::read" {
+            if call_expr.args.len() != 2 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "2 arguments".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let file_ty = self.check_expr(&call_expr.args[0])?;
+            let buf_ty = self.check_expr(&call_expr.args[1])?;
+            let file_ok = matches!(
+                &file_ty,
+                Type::Ref {
+                    inner,
+                    mutable: true
+                } if matches!(inner.as_ref(), Type::File)
+            );
+            if !file_ok {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "&mut File".to_string(),
+                    got: type_to_string(&file_ty),
+                    span: call_expr.args[0].span(),
+                });
+            }
+            let buf_ok = match &buf_ty {
+                Type::Ref {
+                    inner,
+                    mutable: true,
+                } => matches!(
+                    inner.as_ref(),
+                    Type::Vec { elem_type } if matches!(elem_type.as_ref(), Type::U8)
+                ),
+                _ => false,
+            };
+            if !buf_ok {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "&mut Vec<u8>".to_string(),
+                    got: type_to_string(&buf_ty),
+                    span: call_expr.args[1].span(),
+                });
+            }
+            return Ok(Some(Type::Int));
+        }
+
+        if callee == "File::write" {
+            if call_expr.args.len() != 2 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "2 arguments".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let file_ty = self.check_expr(&call_expr.args[0])?;
+            let buf_ty = self.check_expr(&call_expr.args[1])?;
+            let file_ok = matches!(
+                &file_ty,
+                Type::Ref {
+                    inner,
+                    mutable: true
+                } if matches!(inner.as_ref(), Type::File)
+            );
+            if !file_ok {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "&mut File".to_string(),
+                    got: type_to_string(&file_ty),
+                    span: call_expr.args[0].span(),
+                });
+            }
+            let buf_ok = match &buf_ty {
+                Type::Ref { inner, .. } => matches!(
+                    inner.as_ref(),
+                    Type::Vec { elem_type } if matches!(elem_type.as_ref(), Type::U8)
+                ),
+                Type::Vec { elem_type } => matches!(elem_type.as_ref(), Type::U8),
+                _ => false,
+            };
+            if !buf_ok {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "&Vec<u8>".to_string(),
+                    got: type_to_string(&buf_ty),
+                    span: call_expr.args[1].span(),
+                });
+            }
+            return Ok(Some(Type::Int));
+        }
+
+        if callee == "File::close" {
+            if call_expr.args.len() != 1 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "1 argument".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let file_ty = self.check_expr(&call_expr.args[0])?;
+            let file_ok = matches!(
+                &file_ty,
+                Type::Ref {
+                    inner,
+                    mutable: true
+                } if matches!(inner.as_ref(), Type::File)
+            ) || matches!(file_ty, Type::File);
+            if !file_ok {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "&mut File".to_string(),
+                    got: type_to_string(&file_ty),
+                    span: call_expr.args[0].span(),
+                });
+            }
+            return Ok(Some(Type::Void));
+        }
+
         // Not a built-in function
         Ok(None)
     }
@@ -629,7 +930,9 @@ impl TypeChecker {
     pub(crate) fn is_get_ref_call(expr: &Expr) -> bool {
         matches!(
             expr,
-            Expr::Call(c) if (c.callee == "Vec::get_ref" || c.callee == "Slice::get_ref")
+            Expr::Call(c) if (c.callee == "Vec::get_ref"
+                || c.callee == "Slice::get_ref"
+                || c.callee == "Arena::get_ref")
                 && c.args.len() == 2
         )
     }

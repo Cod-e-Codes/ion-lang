@@ -1,0 +1,4 @@
+fn main() -> int {
+    let (_tx, _rx): (Sender<File>, Receiver<File>) = channel<File>();
+    return 0;
+}

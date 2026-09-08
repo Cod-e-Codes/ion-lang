@@ -3,9 +3,26 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <time.h>
 #ifdef _WIN32
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32.lib")
+#endif
+
+#if defined(_WIN32) && !defined(CLOCK_REALTIME)
+#include <sys/time.h>
+static int ion_clock_gettime_realtime(struct timespec *ts) {
+  struct timeval tv;
+  if (gettimeofday(&tv, NULL) != 0)
+    return -1;
+  ts->tv_sec = tv.tv_sec;
+  ts->tv_nsec = tv.tv_usec * 1000L;
+  return 0;
+}
+#define ion_clock_gettime(ts) ion_clock_gettime_realtime(ts)
+#else
+#define ion_clock_gettime(ts) clock_gettime(CLOCK_REALTIME, (ts))
 #endif
 
 // ============================================================================
@@ -372,6 +389,8 @@ void ion_net_init(void) {
 // Threading
 // ============================================================================
 
+typedef char ion_thread_storage_ok[(sizeof(pthread_t) <= 16) ? 1 : -1];
+
 int ion_spawn(void *(*start_routine)(void *), void *arg) {
   pthread_t thread;
   int rc = pthread_create(&thread, NULL, start_routine, arg);
@@ -381,9 +400,59 @@ int ion_spawn(void *(*start_routine)(void *), void *arg) {
   return 0;
 }
 
+static void ion_thread_store(ion_thread_t *out, pthread_t thread) {
+  memset(out->thread, 0, sizeof(out->thread));
+  memcpy(out->thread, &thread, sizeof(pthread_t));
+  out->live = 1;
+}
+
+static pthread_t ion_thread_load(const ion_thread_t *t) {
+  pthread_t thread;
+  memcpy(&thread, t->thread, sizeof(pthread_t));
+  return thread;
+}
+
+int ion_spawn_joinable(void *(*start_routine)(void *), void *arg,
+                       ion_thread_t *out) {
+  pthread_t thread;
+  int rc;
+  if (!out)
+    return -1;
+  rc = pthread_create(&thread, NULL, start_routine, arg);
+  if (rc != 0)
+    return rc;
+  ion_thread_store(out, thread);
+  return 0;
+}
+
+int ion_join(ion_thread_t *thread) {
+  int rc;
+  if (!thread || !thread->live)
+    return -1;
+  rc = pthread_join(ion_thread_load(thread), NULL);
+  thread->live = 0;
+  memset(thread->thread, 0, sizeof(thread->thread));
+  return rc;
+}
+
+void ion_thread_detach(ion_thread_t *thread) {
+  if (!thread || !thread->live)
+    return;
+  pthread_detach(ion_thread_load(thread));
+  thread->live = 0;
+  memset(thread->thread, 0, sizeof(thread->thread));
+}
+
 // ============================================================================
 // Channel Implementation
 // ============================================================================
+
+struct ion_select_waiter {
+  pthread_mutex_t *mu;
+  pthread_cond_t *cv;
+  int *ready;
+  struct ion_select_waiter *next;
+};
 
 struct ion_channel_t {
   void *buffer;
@@ -400,7 +469,18 @@ struct ion_channel_t {
   int recv_closed;
   int send_closed;
   void (*drop_fn)(void *);
+  struct ion_select_waiter *waiters;
 };
+
+static void ion_channel_wake_select(struct ion_channel_t *ch) {
+  struct ion_select_waiter *w;
+  for (w = ch->waiters; w; w = w->next) {
+    pthread_mutex_lock(w->mu);
+    *w->ready = 1;
+    pthread_cond_signal(w->cv);
+    pthread_mutex_unlock(w->mu);
+  }
+}
 
 static void ion_channel_drop_buffered(struct ion_channel_t *ch) {
   if (!ch->drop_fn || !ch->buffer)
@@ -447,6 +527,7 @@ int ion_channel_new(size_t elem_size, int capacity, void (*drop_fn)(void *),
   ch->recv_closed = 0;
   ch->send_closed = 0;
   ch->drop_fn = drop_fn;
+  ch->waiters = NULL;
 
   ch->buffer = malloc(elem_size * (size_t)ch->capacity);
   if (!ch->buffer) {
@@ -505,6 +586,7 @@ int ion_channel_send(const ion_sender_t *sender, const void *value) {
   ch->count++;
 
   pthread_cond_signal(&ch->not_empty);
+  ion_channel_wake_select(ch);
   pthread_mutex_unlock(&ch->mutex);
 
   return 0;
@@ -564,6 +646,7 @@ void ion_channel_sender_drop(ion_sender_t *sender) {
   if (ch->sender_count <= 0) {
     ch->recv_closed = 1;
     pthread_cond_broadcast(&ch->not_empty);
+    ion_channel_wake_select(ch);
   }
   if (ch->sender_count <= 0 && ch->receiver_count <= 0)
     destroy = 1;
@@ -586,6 +669,7 @@ void ion_channel_receiver_drop(ion_receiver_t *receiver) {
   if (ch->receiver_count <= 0) {
     ch->send_closed = 1;
     pthread_cond_broadcast(&ch->not_full);
+    ion_channel_wake_select(ch);
   }
   if (ch->sender_count <= 0 && ch->receiver_count <= 0)
     destroy = 1;
@@ -594,4 +678,248 @@ void ion_channel_receiver_drop(ion_receiver_t *receiver) {
 
   if (destroy)
     ion_channel_destroy(ch);
+}
+
+int ion_channel_try_send(const ion_sender_t *sender, const void *value) {
+  if (!sender || !sender->channel || !value)
+    return -1;
+
+  struct ion_channel_t *ch = (struct ion_channel_t *)sender->channel;
+
+  pthread_mutex_lock(&ch->mutex);
+
+  if (ch->send_closed) {
+    pthread_mutex_unlock(&ch->mutex);
+    return -1;
+  }
+  if (ch->count >= ch->capacity) {
+    pthread_mutex_unlock(&ch->mutex);
+    return -2;
+  }
+
+  memcpy((char *)ch->buffer + (ch->tail * ch->elem_size), value, ch->elem_size);
+  ch->tail = (ch->tail + 1) % ch->capacity;
+  ch->count++;
+
+  pthread_cond_signal(&ch->not_empty);
+  ion_channel_wake_select(ch);
+  pthread_mutex_unlock(&ch->mutex);
+
+  return 0;
+}
+
+int ion_channel_try_recv(ion_receiver_t *receiver, void *out_value) {
+  if (!receiver || !receiver->channel || !out_value)
+    return -1;
+
+  struct ion_channel_t *ch = (struct ion_channel_t *)receiver->channel;
+
+  pthread_mutex_lock(&ch->mutex);
+
+  if (ch->count == 0) {
+    int closed = ch->recv_closed;
+    pthread_mutex_unlock(&ch->mutex);
+    return closed ? -1 : -2;
+  }
+
+  memcpy(out_value, (char *)ch->buffer + (ch->head * ch->elem_size),
+         ch->elem_size);
+  ch->head = (ch->head + 1) % ch->capacity;
+  ch->count--;
+
+  pthread_cond_signal(&ch->not_full);
+  pthread_mutex_unlock(&ch->mutex);
+
+  return 0;
+}
+
+static void ion_select_deadline(struct timespec *ts, int timeout_ms) {
+  if (ion_clock_gettime(ts) != 0)
+    ion_panic("select clock failed");
+  ts->tv_sec += timeout_ms / 1000;
+  ts->tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if (ts->tv_nsec >= 1000000000L) {
+    ts->tv_sec += 1;
+    ts->tv_nsec -= 1000000000L;
+  }
+}
+
+static int ion_select_try_arms(ion_select_arm_t *arms, int n, int *status_out) {
+  int i;
+  for (i = 0; i < n; i++) {
+    int st;
+    if (!arms[i].rx || !arms[i].out)
+      continue;
+    st = ion_channel_try_recv(arms[i].rx, arms[i].out);
+    if (st == 0 || st == -1) {
+      if (status_out)
+        *status_out = st;
+      return i;
+    }
+  }
+  return -1;
+}
+
+static void ion_select_register(ion_select_arm_t *arms, int n,
+                                struct ion_select_waiter *waiter) {
+  int i;
+  for (i = 0; i < n; i++) {
+    struct ion_channel_t *ch;
+    if (!arms[i].rx || !arms[i].rx->channel)
+      continue;
+    ch = (struct ion_channel_t *)arms[i].rx->channel;
+    pthread_mutex_lock(&ch->mutex);
+    waiter[i].next = ch->waiters;
+    ch->waiters = &waiter[i];
+    pthread_mutex_unlock(&ch->mutex);
+  }
+}
+
+static void ion_select_unregister(ion_select_arm_t *arms, int n,
+                                  struct ion_select_waiter *waiter) {
+  int i;
+  for (i = 0; i < n; i++) {
+    struct ion_channel_t *ch;
+    struct ion_select_waiter **slot;
+    if (!arms[i].rx || !arms[i].rx->channel)
+      continue;
+    ch = (struct ion_channel_t *)arms[i].rx->channel;
+    pthread_mutex_lock(&ch->mutex);
+    slot = &ch->waiters;
+    while (*slot) {
+      if (*slot == &waiter[i]) {
+        *slot = waiter[i].next;
+        break;
+      }
+      slot = &(*slot)->next;
+    }
+    waiter[i].next = NULL;
+    pthread_mutex_unlock(&ch->mutex);
+  }
+}
+
+int ion_channel_select(ion_select_arm_t *arms, int n, int timeout_ms,
+                       int *status_out) {
+  pthread_mutex_t mu;
+  pthread_cond_t cv;
+  int ready;
+  struct ion_select_waiter *waiters;
+  struct timespec deadline;
+  int has_deadline;
+  int i;
+
+  if (timeout_ms < -1)
+    ion_panic("select timeout must be >= 0");
+  if (n < 0)
+    return -1;
+  if (n > 0 && !arms)
+    return -1;
+
+  has_deadline = timeout_ms > 0;
+  if (has_deadline)
+    ion_select_deadline(&deadline, timeout_ms);
+
+  if (pthread_mutex_init(&mu, NULL) != 0)
+    ion_panic("select mutex init failed");
+  if (pthread_cond_init(&cv, NULL) != 0) {
+    pthread_mutex_destroy(&mu);
+    ion_panic("select cond init failed");
+  }
+
+  waiters = NULL;
+  if (n > 0) {
+    waiters = (struct ion_select_waiter *)calloc((size_t)n,
+                                                 sizeof(struct ion_select_waiter));
+    if (!waiters)
+      ion_panic("select allocation failed");
+    for (i = 0; i < n; i++) {
+      waiters[i].mu = &mu;
+      waiters[i].cv = &cv;
+      waiters[i].ready = &ready;
+      waiters[i].next = NULL;
+    }
+  }
+
+  for (;;) {
+    int idx = ion_select_try_arms(arms, n, status_out);
+    if (idx >= 0) {
+      free(waiters);
+      pthread_cond_destroy(&cv);
+      pthread_mutex_destroy(&mu);
+      return idx;
+    }
+    if (timeout_ms == 0) {
+      free(waiters);
+      pthread_cond_destroy(&cv);
+      pthread_mutex_destroy(&mu);
+      return n;
+    }
+
+    ready = 0;
+    if (n > 0)
+      ion_select_register(arms, n, waiters);
+
+    pthread_mutex_lock(&mu);
+    while (!ready) {
+      if (has_deadline) {
+        int rc = pthread_cond_timedwait(&cv, &mu, &deadline);
+        if (rc == ETIMEDOUT) {
+          pthread_mutex_unlock(&mu);
+          if (n > 0)
+            ion_select_unregister(arms, n, waiters);
+          idx = ion_select_try_arms(arms, n, status_out);
+          free(waiters);
+          pthread_cond_destroy(&cv);
+          pthread_mutex_destroy(&mu);
+          if (idx >= 0)
+            return idx;
+          return n;
+        }
+      } else {
+        pthread_cond_wait(&cv, &mu);
+      }
+    }
+    pthread_mutex_unlock(&mu);
+
+    if (n > 0)
+      ion_select_unregister(arms, n, waiters);
+  }
+}
+
+ion_file_t ion_file_open(const char *path, const char *mode) {
+  ion_file_t file;
+  file.fp = NULL;
+  if (!path || !mode)
+    return file;
+  file.fp = fopen(path, mode);
+  return file;
+}
+
+int ion_file_read(ion_file_t *file, void *buf, size_t n, size_t *out_n) {
+  size_t got;
+  if (!file || !file->fp || !buf || !out_n)
+    return -1;
+  got = fread(buf, 1, n, (FILE *)file->fp);
+  *out_n = got;
+  if (got < n && ferror((FILE *)file->fp))
+    return -1;
+  return 0;
+}
+
+int ion_file_write(ion_file_t *file, const void *buf, size_t n, size_t *out_n) {
+  size_t put;
+  if (!file || !file->fp || (!buf && n > 0) || !out_n)
+    return -1;
+  put = fwrite(buf, 1, n, (FILE *)file->fp);
+  *out_n = put;
+  if (put < n)
+    return -1;
+  return 0;
+}
+
+void ion_file_close(ion_file_t *file) {
+  if (!file || !file->fp)
+    return;
+  fclose((FILE *)file->fp);
+  file->fp = NULL;
 }

@@ -5,6 +5,11 @@ enum Option<T> {
     None;
 }
 
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 fn vec_push(out: &mut Vec<int>, val: int) {
     out.push(val);
 }

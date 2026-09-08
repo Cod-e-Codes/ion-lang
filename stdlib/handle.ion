@@ -3,6 +3,11 @@ enum Option<T> {
     None;
 }
 
+pub enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 // Index plus generation. Not Copy in the type system (user structs of ints
 // still move); use copy(&h) when a by-value call would consume the only binding.
 pub struct Handle {
@@ -99,7 +104,7 @@ pub fn insert<T>(arena: &mut Arena<T>, value: T) -> Handle {
         }
         if can_reuse {
             arena.free_head = reuse_next;
-            let _set: int = arena.slots.set(
+            let _set: SetResult = arena.slots.set(
                 idx,
                 Slot::Occupied {
                     generation: reuse_gen,
@@ -155,7 +160,7 @@ pub fn remove<T>(arena: &mut Arena<T>, h: Handle) -> Take<T> {
                 Slot::Occupied { generation: _g, value: v } => {
                     let new_gen: int = live_gen + 1;
                     let next: int = arena.free_head;
-                    let _set: int = arena.slots.set(
+                    let _set: SetResult = arena.slots.set(
                         h.index,
                         Slot::Free {
                             generation: new_gen,

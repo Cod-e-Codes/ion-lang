@@ -1326,8 +1326,13 @@ impl Codegen {
             }
             IREexpr::Call { callee, .. } => match callee.as_str() {
                 "String::new" | "String::from" => Some(Type::String),
+                "join" => Some(Type::Void),
                 _ => None,
             },
+            IREexpr::TupleLit { elem_types, .. } => Some(Type::Tuple {
+                elements: elem_types.clone(),
+            }),
+            IREexpr::Spawn { .. } => Some(Type::JoinHandle),
             _ => None,
         }
     }
@@ -1675,6 +1680,15 @@ impl Codegen {
             self.generate_string_equality(op, left, right, extra_parens);
             return;
         }
+        if matches!(op, BinOp::Eq | BinOp::Ne)
+            && let Some(left_ty) = self.infer_irexpr_type(left)
+        {
+            let resolved = resolve_type_alias(&left_ty, &self.type_aliases);
+            if let Type::Tuple { elements } = resolved {
+                self.generate_tuple_equality(op, left, right, &elements, extra_parens);
+                return;
+            }
+        }
         let resolved = resolve_type_alias(result_type, &self.type_aliases);
         let arith = matches!(
             op,
@@ -1802,6 +1816,62 @@ impl Codegen {
         self.write(")");
         if wrap_parens {
             self.write(")");
+        }
+    }
+
+    fn generate_tuple_equality(
+        &mut self,
+        op: BinOp,
+        left: &IREexpr,
+        right: &IREexpr,
+        elements: &[Type],
+        extra_parens: bool,
+    ) {
+        let _ = extra_parens;
+        let left_code = self.capture_binop_operand(left);
+        let right_code = self.capture_binop_operand(right);
+        let n = self.temp_var_counter;
+        self.temp_var_counter += 1;
+        let lt = format!("_ion_tl{n}");
+        let rt = format!("_ion_tr{n}");
+        let c_ty = self.type_to_c(&Type::Tuple {
+            elements: elements.to_vec(),
+        });
+        self.write("({ ");
+        self.write(&format!(
+            "{c_ty} {lt} = {left_code}; {c_ty} {rt} = {right_code}; "
+        ));
+        let eq_expr = self.tuple_eq_c_expr(&lt, &rt, elements);
+        if matches!(op, BinOp::Ne) {
+            self.write(&format!("!({eq_expr}); }})"));
+        } else {
+            self.write(&format!("{eq_expr}; }})"));
+        }
+    }
+
+    fn tuple_eq_c_expr(&self, left: &str, right: &str, elements: &[Type]) -> String {
+        let parts: Vec<String> = elements
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| {
+                let l = format!("{left}.f{i}");
+                let r = format!("{right}.f{i}");
+                self.value_eq_c_expr(&l, &r, ty)
+            })
+            .collect();
+        if parts.is_empty() {
+            "1".to_string()
+        } else {
+            format!("({})", parts.join(" && "))
+        }
+    }
+
+    fn value_eq_c_expr(&self, left: &str, right: &str, ty: &Type) -> String {
+        let resolved = resolve_type_alias(ty, &self.type_aliases);
+        match resolved {
+            Type::String | Type::Str => format!("ion_string_equals({left}, {right})"),
+            Type::Tuple { elements } => self.tuple_eq_c_expr(left, right, &elements),
+            _ => format!("(({left}) == ({right}))"),
         }
     }
 
@@ -2461,6 +2531,209 @@ impl Codegen {
         self.writeln("}");
     }
 
+    fn generate_spawn_expr(&mut self, spawn: &IRSpawn) {
+        let spawn_id = self.spawn_counter;
+        self.spawn_counter += 1;
+        let ctx_name = format!("ion_spawn_ctx_{}", spawn_id);
+        let entry_name = format!("ion_spawn_entry_{}", spawn_id);
+        self.emit_spawn_entry(spawn, spawn_id, &ctx_name, &entry_name);
+        self.write("({ ion_thread_t _ion_jh; ");
+        if spawn.captures.is_empty() {
+            self.write(&format!(
+                "if (ion_spawn_joinable({entry_name}, NULL, &_ion_jh) != 0) {{ ion_panic(\"spawn failed\"); }} "
+            ));
+        } else {
+            self.write(&format!(
+                "{ctx_name}* ctx = ({ctx_name}*)malloc(sizeof({ctx_name})); "
+            ));
+            self.write("if (!ctx) { ion_panic(\"spawn allocation failed\"); } ");
+            for (name, ty) in &spawn.captures {
+                self.write(&format!("ctx->{name} = {name}; "));
+                self.write(&format!("{name} = {}; ", self.zero_value_for_type(ty)));
+                self.scope_mark_moved(name);
+            }
+            self.write(&format!(
+                "if (ion_spawn_joinable({entry_name}, ctx, &_ion_jh) != 0) {{ free(ctx); ion_panic(\"spawn failed\"); }} "
+            ));
+        }
+        self.write("_ion_jh; })");
+    }
+
+    fn emit_spawn_entry(
+        &mut self,
+        spawn: &IRSpawn,
+        spawn_id: usize,
+        ctx_name: &str,
+        entry_name: &str,
+    ) {
+        let spawn_epilogue = format!("spawn_{}_epilogue", spawn_id);
+        self.spawn_forward_decls
+            .push_str(&format!("static void* {}(void* arg);\n", entry_name));
+        if !spawn.captures.is_empty() {
+            self.spawn_forward_decls.push_str("typedef struct {\n");
+            for (name, ty) in &spawn.captures {
+                self.spawn_forward_decls.push_str(&format!(
+                    "    {} {};\n",
+                    self.type_to_c(ty),
+                    name
+                ));
+            }
+            self.spawn_forward_decls
+                .push_str(&format!("}} {};\n", ctx_name));
+        }
+        let mut def = String::new();
+        def.push_str(&format!("static void* {}(void* arg) {{\n", entry_name));
+        if !spawn.captures.is_empty() {
+            def.push_str(&format!("    {}* ctx = ({}*)arg;\n", ctx_name, ctx_name));
+            def.push_str("    if (!ctx) { ion_panic(\"spawn null context\"); }\n");
+            for (name, ty) in &spawn.captures {
+                def.push_str(&format!(
+                    "    {} {} = ctx->{};\n",
+                    self.type_to_c(ty),
+                    name,
+                    name
+                ));
+            }
+            def.push_str("    free(ctx);\n");
+        } else {
+            def.push_str("    (void)arg;\n");
+        }
+        let saved_output = std::mem::take(&mut self.output);
+        let saved_indent = self.indent_level;
+        let saved_scope = std::mem::take(&mut self.scope_stack);
+        let saved_epilogue = self.epilogue_label.clone();
+        self.indent_level = 1;
+        self.scope_stack.clear();
+        self.epilogue_label = spawn_epilogue.clone();
+        self.scope_begin(&[]);
+        for (name, ty) in &spawn.captures {
+            self.scope_register_param_binding(name, ty);
+        }
+        self.generate_block(&spawn.body);
+        self.scope_emit_exit();
+        self.write_indent();
+        self.writeln(&format!("goto {};", spawn_epilogue));
+        let body_code = std::mem::take(&mut self.output);
+        self.output = saved_output;
+        self.indent_level = saved_indent;
+        self.scope_stack = saved_scope;
+        self.epilogue_label = saved_epilogue;
+        def.push_str(&body_code);
+        def.push_str(&format!("{}:\n", spawn_epilogue));
+        def.push_str("    return NULL;\n");
+        def.push_str("}\n\n");
+        self.spawn_definitions.push_str(&def);
+    }
+
+    fn generate_select(&mut self, sel: &IRSelect) {
+        let n = sel.recv_arms.len();
+        let sid = self.temp_var_counter;
+        self.temp_var_counter += 1;
+        self.write_indent();
+        self.writeln("{");
+        self.indent_level += 1;
+        let timeout_ms = if sel.default_body.is_some() {
+            "0".to_string()
+        } else if sel.timeout_ms.is_some() {
+            let t = format!("_ion_sel_ms{sid}");
+            self.write_indent();
+            self.write("int ");
+            self.write(&t);
+            self.write(" = ");
+            if let Some(ms) = &sel.timeout_ms {
+                self.generate_expr(ms);
+            }
+            self.writeln(";");
+            self.write_indent();
+            self.writeln(&format!(
+                "if ({t} < 0) ion_panic(\"select timeout must be >= 0\");"
+            ));
+            t
+        } else {
+            "-1".to_string()
+        };
+        if n > 0 {
+            self.write_indent();
+            self.writeln(&format!("ion_select_arm_t _ion_sel_arms{sid}[{n}];"));
+            for (i, arm) in sel.recv_arms.iter().enumerate() {
+                let tmp = format!("_ion_sel_v{sid}_{i}");
+                let c_ty = self.type_to_c(&arm.elem_type);
+                self.write_indent();
+                self.writeln(&format!("{c_ty} {tmp} = {{0}};"));
+                self.write_indent();
+                self.write(&format!("_ion_sel_arms{sid}[{i}].rx = "));
+                self.write("(");
+                self.generate_expr(&arm.channel);
+                self.writeln(");");
+                self.write_indent();
+                self.writeln(&format!("_ion_sel_arms{sid}[{i}].out = &{tmp};"));
+            }
+        }
+        self.write_indent();
+        self.writeln(&format!("int _ion_sel_st{sid} = 0;"));
+        self.write_indent();
+        if n == 0 {
+            self.writeln(&format!(
+                "int _ion_sel_i{sid} = ion_channel_select(NULL, 0, {timeout_ms}, &_ion_sel_st{sid});"
+            ));
+        } else {
+            self.writeln(&format!(
+                "int _ion_sel_i{sid} = ion_channel_select(_ion_sel_arms{sid}, {n}, {timeout_ms}, &_ion_sel_st{sid});"
+            ));
+        }
+        for (i, arm) in sel.recv_arms.iter().enumerate() {
+            self.write_indent();
+            self.writeln(&format!("if (_ion_sel_i{sid} == {i}) {{"));
+            self.indent_level += 1;
+            if let Some(name) = &arm.binding {
+                let option_ty = Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![arm.elem_type.clone()],
+                };
+                let option_c = self.type_to_c(&option_ty);
+                let tmp = format!("_ion_sel_v{sid}_{i}");
+                let some = self.c_enum_literal(&option_c, "Option", "Some", Some(&tmp));
+                let none = self.c_enum_literal(&option_c, "Option", "None", None);
+                self.write_indent();
+                self.writeln(&format!("{option_c} {name};"));
+                self.write_indent();
+                self.writeln(&format!(
+                    "if (_ion_sel_st{sid} == 0) {{ {name} = {some}; }} else {{ {name} = {none}; }}"
+                ));
+                self.scope_begin(&[]);
+                self.scope_register_param_binding(name, &option_ty);
+            }
+            self.generate_block(&arm.body);
+            if arm.binding.is_some() {
+                self.scope_emit_exit();
+            }
+            self.indent_level -= 1;
+            self.write_indent();
+            self.writeln("}");
+        }
+        let after_recv = n;
+        if let Some(body) = &sel.default_body {
+            self.write_indent();
+            self.writeln(&format!("if (_ion_sel_i{sid} == {after_recv}) {{"));
+            self.indent_level += 1;
+            self.generate_block(body);
+            self.indent_level -= 1;
+            self.write_indent();
+            self.writeln("}");
+        } else if let Some(body) = &sel.timeout_body {
+            self.write_indent();
+            self.writeln(&format!("if (_ion_sel_i{sid} == {after_recv}) {{"));
+            self.indent_level += 1;
+            self.generate_block(body);
+            self.indent_level -= 1;
+            self.write_indent();
+            self.writeln("}");
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.writeln("}");
+    }
+
     fn emit_break_statement(&mut self) {
         self.scope_emit_loop_unwind();
         self.write_indent();
@@ -2827,6 +3100,62 @@ impl Codegen {
                         self.mark_moves_in_expr(value.as_ref());
                         self.flush_pending_field_nulls();
                     }
+                    IREexpr::Call {
+                        callee,
+                        args,
+                        return_type,
+                        ..
+                    } if callee == "try_send" && args.len() == 2 => {
+                        let sender_addr = self.sender_addr_code(&args[0]);
+                        let value_type = return_type
+                            .as_ref()
+                            .and_then(|t| match t {
+                                Type::Generic { name, params }
+                                    if name == "TrySendResult" && params.len() == 1 =>
+                                {
+                                    Some(params[0].clone())
+                                }
+                                _ => None,
+                            })
+                            .or_else(|| self.infer_irexpr_type(&args[1]))
+                            .unwrap_or(Type::Int);
+                        let val_tmp = format!("_try_send_val_{}", self.temp_var_counter);
+                        self.temp_var_counter += 1;
+                        let st_tmp = format!("_try_send_st_{}", self.temp_var_counter);
+                        self.temp_var_counter += 1;
+                        let c_ty = self.type_to_c(&value_type);
+                        self.write_indent();
+                        self.writeln("{");
+                        self.indent_level += 1;
+                        self.write_indent();
+                        self.write(&format!("{c_ty} {val_tmp} = "));
+                        self.generate_expr_with_type(&args[1], Some(&value_type));
+                        self.writeln(";");
+                        self.write_indent();
+                        self.writeln(&format!(
+                            "int {st_tmp} = ion_channel_try_send({sender_addr}, &{val_tmp});"
+                        ));
+                        self.write_indent();
+                        self.writeln(&format!("if ({st_tmp} != 0) {{"));
+                        self.indent_level += 1;
+                        self.emit_drop_at_path(&val_tmp, &value_type);
+                        self.indent_level -= 1;
+                        self.write_indent();
+                        self.writeln("}");
+                        self.indent_level -= 1;
+                        self.write_indent();
+                        self.writeln("}");
+                        self.mark_moves_in_expr(&args[1]);
+                        self.flush_pending_field_nulls();
+                    }
+                    IREexpr::Call { callee, .. } if callee == "Vec::set" => {
+                        self.write_indent();
+                        self.write("(void)(");
+                        self.generate_expr(expr);
+                        self.writeln(");");
+                        self.mark_moves_in_expr(expr);
+                        self.flush_pending_field_nulls();
+                    }
                     _ => {
                         self.write_indent();
                         self.generate_expr(expr);
@@ -2841,6 +3170,9 @@ impl Codegen {
             }
             IRStmt::Spawn(spawn) => {
                 self.generate_spawn(spawn);
+            }
+            IRStmt::Select(sel) => {
+                self.generate_select(sel);
             }
             IRStmt::If(ir_if) => {
                 // Generate: if (cond) { ... } else { ... }
@@ -3687,6 +4019,12 @@ impl Codegen {
                 self.generate_fn_literal(lit);
                 self.write(&lit.symbol);
             }
+            IREexpr::Spawn { captures, body } => {
+                self.generate_spawn_expr(&IRSpawn {
+                    captures: captures.clone(),
+                    body: body.clone(),
+                });
+            }
         }
     }
 
@@ -3767,7 +4105,12 @@ impl Codegen {
     fn zero_value_for_type(&self, ty: &Type) -> String {
         let resolved = resolve_type_alias(ty, &self.type_aliases);
         match resolved {
-            Type::Struct(_) | Type::Enum(_) | Type::Sender { .. } | Type::Receiver { .. } => {
+            Type::Struct(_)
+            | Type::Enum(_)
+            | Type::Sender { .. }
+            | Type::Receiver { .. }
+            | Type::JoinHandle
+            | Type::File => {
                 format!("({}){{0}}", type_to_c_impl(&resolved))
             }
             _ => "0".to_string(),
@@ -3785,7 +4128,9 @@ impl Codegen {
             | Type::Generic { .. }
             | Type::Tuple { .. }
             | Type::Sender { .. }
-            | Type::Receiver { .. } => {
+            | Type::Receiver { .. }
+            | Type::File
+            | Type::JoinHandle => {
                 format!("({}){{0}}", self.type_to_c(&resolved))
             }
             _ => "0".to_string(),
@@ -4096,13 +4441,38 @@ impl Codegen {
                 }
                 _ => false,
             };
+            let receiver_is_arena = match receiver_ty.as_ref() {
+                Some(Type::Generic { name, .. }) if name == "Arena" => true,
+                Some(Type::Struct(name)) if name == "Arena" => true,
+                Some(Type::Ref { inner, .. }) => match inner.as_ref() {
+                    Type::Generic { name, .. } if name == "Arena" => true,
+                    Type::Struct(name) if name == "Arena" => true,
+                    _ => false,
+                },
+                _ => false,
+            };
+            let receiver_is_file = match receiver_ty.as_ref() {
+                Some(Type::File) => true,
+                Some(Type::Ref { inner, .. }) => matches!(**inner, Type::File),
+                _ => false,
+            };
             if (method_name == "get_ref" || method_name == "len") && receiver_is_slice {
                 return format!("Slice::{method_name}");
+            }
+            if method_name == "get_ref" && receiver_is_arena {
+                return "Arena::get_ref".to_string();
+            }
+            if matches!(method_name, "read" | "write" | "close") && receiver_is_file {
+                return format!("File::{method_name}");
             }
             if string_methods.contains(&method_name) && receiver_is_string {
                 return format!("String::{method_name}");
             }
-            if vec_methods.contains(&method_name) && !receiver_is_string && !receiver_is_slice {
+            if vec_methods.contains(&method_name)
+                && !receiver_is_string
+                && !receiver_is_slice
+                && !receiver_is_arena
+            {
                 return format!("Vec::{method_name}");
             }
         }
@@ -4176,7 +4546,13 @@ impl Codegen {
                 || callee == "METHOD::pop"
                 || callee == "METHOD::get";
 
-            if is_vec_pop_or_get || callee == "Vec::get_ref" || callee == "Slice::get_ref" {
+            if is_vec_pop_or_get
+                || callee == "Vec::get_ref"
+                || callee == "Slice::get_ref"
+                || callee == "Arena::get_ref"
+                || callee == "File::open"
+                || callee == "File::create"
+            {
                 if let Some(Type::Generic { name, params }) = return_type
                     && name == "Option"
                     && params.len() == 1
@@ -4941,6 +5317,28 @@ fn collect_array_from_stmt(stmt: &IRStmt, arrays: &mut HashMap<String, Type>) {
                 collect_array_from_stmt(stmt, arrays);
             }
         }
+        IRStmt::Select(sel) => {
+            for arm in &sel.recv_arms {
+                collect_array_from_expr(&arm.channel, arrays);
+                collect_array_from_type(&arm.elem_type, arrays);
+                for stmt in &arm.body.statements {
+                    collect_array_from_stmt(stmt, arrays);
+                }
+            }
+            if let Some(body) = &sel.default_body {
+                for stmt in &body.statements {
+                    collect_array_from_stmt(stmt, arrays);
+                }
+            }
+            if let Some(ms) = &sel.timeout_ms {
+                collect_array_from_expr(ms, arrays);
+            }
+            if let Some(body) = &sel.timeout_body {
+                for stmt in &body.statements {
+                    collect_array_from_stmt(stmt, arrays);
+                }
+            }
+        }
         IRStmt::UnsafeBlock(unsafe_block) => {
             for stmt in &unsafe_block.body.statements {
                 collect_array_from_stmt(stmt, arrays);
@@ -5117,7 +5515,9 @@ fn collect_slice_types_from_type(ty: &Type, slice_types: &mut std::collections::
         | Type::U64
         | Type::UInt
         | Type::String
-        | Type::Str => {}
+        | Type::Str
+        | Type::JoinHandle
+        | Type::File => {}
         Type::Slice { inner } => {
             let slice_type_name = format!(
                 "ion_slice_{}",
@@ -5198,6 +5598,28 @@ fn collect_slice_types_from_stmt(
                 collect_slice_types_from_stmt(stmt, slice_types);
             }
         }
+        IRStmt::Select(sel) => {
+            for arm in &sel.recv_arms {
+                collect_slice_types_from_expr(&arm.channel, slice_types);
+                collect_slice_types_from_type(&arm.elem_type, slice_types);
+                for stmt in &arm.body.statements {
+                    collect_slice_types_from_stmt(stmt, slice_types);
+                }
+            }
+            if let Some(body) = &sel.default_body {
+                for stmt in &body.statements {
+                    collect_slice_types_from_stmt(stmt, slice_types);
+                }
+            }
+            if let Some(ms) = &sel.timeout_ms {
+                collect_slice_types_from_expr(ms, slice_types);
+            }
+            if let Some(body) = &sel.timeout_body {
+                for stmt in &body.statements {
+                    collect_slice_types_from_stmt(stmt, slice_types);
+                }
+            }
+        }
         IRStmt::If(ir_if) => {
             collect_slice_types_from_expr(&ir_if.cond, slice_types);
             for stmt in &ir_if.then_block.statements {
@@ -5269,8 +5691,13 @@ fn collect_slice_types_from_expr(
                 collect_slice_types_from_expr(arg, slice_types);
             }
         }
-        IREexpr::Match { expr, .. } => {
+        IREexpr::Match { expr, arms, .. } => {
             collect_slice_types_from_expr(expr, slice_types);
+            for arm in arms {
+                for stmt in &arm.body.statements {
+                    collect_slice_types_from_stmt(stmt, slice_types);
+                }
+            }
         }
         IREexpr::Call {
             args, return_type, ..
@@ -5330,6 +5757,11 @@ fn collect_slice_types_from_expr(
                 collect_slice_types_from_stmt(stmt, slice_types);
             }
         }
+        IREexpr::Spawn { body, .. } => {
+            for stmt in &body.statements {
+                collect_slice_types_from_stmt(stmt, slice_types);
+            }
+        }
     }
 }
 
@@ -5381,6 +5813,11 @@ fn collect_tuple_types_from_type(
         Type::Receiver { elem_type } => collect_tuple_types_from_type(elem_type, tuple_types),
         Type::Array { inner, .. } => collect_tuple_types_from_type(inner, tuple_types),
         Type::Slice { inner } => collect_tuple_types_from_type(inner, tuple_types),
+        Type::Generic { params, .. } => {
+            for param in params {
+                collect_tuple_types_from_type(param, tuple_types);
+            }
+        }
         Type::Fn {
             params,
             return_type,
@@ -5416,6 +5853,28 @@ fn collect_tuple_types_from_stmt(
         IRStmt::Spawn(spawn) => {
             for stmt in &spawn.body.statements {
                 collect_tuple_types_from_stmt(stmt, tuple_types);
+            }
+        }
+        IRStmt::Select(sel) => {
+            for arm in &sel.recv_arms {
+                collect_tuple_types_from_expr(&arm.channel, tuple_types);
+                collect_tuple_types_from_type(&arm.elem_type, tuple_types);
+                for stmt in &arm.body.statements {
+                    collect_tuple_types_from_stmt(stmt, tuple_types);
+                }
+            }
+            if let Some(body) = &sel.default_body {
+                for stmt in &body.statements {
+                    collect_tuple_types_from_stmt(stmt, tuple_types);
+                }
+            }
+            if let Some(ms) = &sel.timeout_ms {
+                collect_tuple_types_from_expr(ms, tuple_types);
+            }
+            if let Some(body) = &sel.timeout_body {
+                for stmt in &body.statements {
+                    collect_tuple_types_from_stmt(stmt, tuple_types);
+                }
             }
         }
         IRStmt::If(ir_if) => {
@@ -5562,6 +6021,11 @@ fn collect_tuple_types_from_expr(
                 collect_tuple_types_from_stmt(stmt, tuple_types);
             }
         }
+        IREexpr::Spawn { body, .. } => {
+            for stmt in &body.statements {
+                collect_tuple_types_from_stmt(stmt, tuple_types);
+            }
+        }
     }
 }
 
@@ -5675,6 +6139,28 @@ fn collect_vec_types_from_stmt(stmt: &IRStmt, vec_types: &mut std::collections::
                 collect_vec_types_from_stmt(stmt, vec_types);
             }
         }
+        IRStmt::Select(sel) => {
+            for arm in &sel.recv_arms {
+                collect_vec_types_from_expr(&arm.channel, vec_types);
+                collect_vec_types_from_type(&arm.elem_type, vec_types);
+                for stmt in &arm.body.statements {
+                    collect_vec_types_from_stmt(stmt, vec_types);
+                }
+            }
+            if let Some(body) = &sel.default_body {
+                for stmt in &body.statements {
+                    collect_vec_types_from_stmt(stmt, vec_types);
+                }
+            }
+            if let Some(ms) = &sel.timeout_ms {
+                collect_vec_types_from_expr(ms, vec_types);
+            }
+            if let Some(body) = &sel.timeout_body {
+                for stmt in &body.statements {
+                    collect_vec_types_from_stmt(stmt, vec_types);
+                }
+            }
+        }
         IRStmt::Defer(_) => {}
         IRStmt::UnsafeBlock(unsafe_block) => {
             for stmt in &unsafe_block.body.statements {
@@ -5726,8 +6212,13 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
                 collect_vec_types_from_expr(arg, vec_types);
             }
         }
-        IREexpr::Match { expr, .. } => {
+        IREexpr::Match { expr, arms, .. } => {
             collect_vec_types_from_expr(expr, vec_types);
+            for arm in arms {
+                for stmt in &arm.body.statements {
+                    collect_vec_types_from_stmt(stmt, vec_types);
+                }
+            }
         }
         IREexpr::Call {
             args, return_type, ..
@@ -5789,6 +6280,11 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
                 collect_vec_types_from_type(ret, vec_types);
             }
             for stmt in &lit.body.statements {
+                collect_vec_types_from_stmt(stmt, vec_types);
+            }
+        }
+        IREexpr::Spawn { body, .. } => {
+            for stmt in &body.statements {
                 collect_vec_types_from_stmt(stmt, vec_types);
             }
         }
@@ -5927,11 +6423,72 @@ impl Codegen {
     }
 
     fn emit_tuple_typedefs(&mut self, program: &IRProgram) {
-        let mut tuple_types: std::collections::HashMap<String, Vec<Type>> =
-            std::collections::HashMap::new();
+        let mut tuple_types: HashMap<String, Vec<Type>> = HashMap::new();
         collect_tuple_types_impl(program, &mut tuple_types);
-        for (tuple_name, elements) in &tuple_types {
-            self.generate_tuple_struct(tuple_name, elements);
+        let mut emitting = HashSet::new();
+        let names: Vec<String> = tuple_types.keys().cloned().collect();
+        for name in names {
+            self.emit_tuple_typedef_ordered(&name, &tuple_types, &mut emitting);
+        }
+    }
+
+    fn emit_tuple_typedef_ordered(
+        &mut self,
+        name: &str,
+        all: &HashMap<String, Vec<Type>>,
+        emitting: &mut HashSet<String>,
+    ) {
+        if !emitting.insert(name.to_string()) {
+            return;
+        }
+        let Some(elements) = all.get(name) else {
+            return;
+        };
+        for elem in elements {
+            self.emit_nested_tuple_typedefs(elem, all, emitting);
+        }
+        self.generate_tuple_struct(name, elements);
+    }
+
+    fn emit_nested_tuple_typedefs(
+        &mut self,
+        ty: &Type,
+        all: &HashMap<String, Vec<Type>>,
+        emitting: &mut HashSet<String>,
+    ) {
+        match ty {
+            Type::Tuple { elements } => {
+                let inner_name = tuple_type_name(elements);
+                self.emit_tuple_typedef_ordered(&inner_name, all, emitting);
+            }
+            Type::Ref { inner, .. }
+            | Type::RawPtr { inner }
+            | Type::Box { inner }
+            | Type::Array { inner, .. }
+            | Type::Slice { inner } => {
+                self.emit_nested_tuple_typedefs(inner, all, emitting);
+            }
+            Type::Vec { elem_type }
+            | Type::Channel { elem_type }
+            | Type::Sender { elem_type }
+            | Type::Receiver { elem_type } => {
+                self.emit_nested_tuple_typedefs(elem_type, all, emitting);
+            }
+            Type::Generic { params, .. } => {
+                for p in params {
+                    self.emit_nested_tuple_typedefs(p, all, emitting);
+                }
+            }
+            Type::Fn {
+                params,
+                return_type,
+            } => {
+                for p in params {
+                    self.emit_nested_tuple_typedefs(p, all, emitting);
+                }
+                self.emit_nested_tuple_typedefs(return_type, all, emitting);
+            }
+            _ => {}
         }
     }
 
@@ -6323,6 +6880,8 @@ fn type_complete_with_struct_forwards(ty: &Type) -> bool {
         | Type::UInt
         | Type::String
         | Type::Str
+        | Type::JoinHandle
+        | Type::File
         | Type::Fn { .. }
         | Type::Slice { .. } => true,
         Type::Box { .. } | Type::Vec { .. } | Type::RawPtr { .. } | Type::Ref { .. } => true,
@@ -6357,6 +6916,8 @@ fn type_ready_for_by_value(
         | Type::UInt
         | Type::String
         | Type::Str
+        | Type::JoinHandle
+        | Type::File
         | Type::Fn { .. }
         | Type::Slice { .. }
         | Type::Box { .. }
@@ -6660,6 +7221,33 @@ fn collect_generic_from_stmt(
                 collect_generic_from_stmt(stmt, instantiations);
             }
         }
+        IRStmt::Select(sel) => {
+            for arm in &sel.recv_arms {
+                collect_generic_from_expr(&arm.channel, instantiations);
+                collect_generic_from_type(&arm.elem_type, instantiations);
+                let option_ty = Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![arm.elem_type.clone()],
+                };
+                collect_generic_from_type(&option_ty, instantiations);
+                for stmt in &arm.body.statements {
+                    collect_generic_from_stmt(stmt, instantiations);
+                }
+            }
+            if let Some(body) = &sel.default_body {
+                for stmt in &body.statements {
+                    collect_generic_from_stmt(stmt, instantiations);
+                }
+            }
+            if let Some(ms) = &sel.timeout_ms {
+                collect_generic_from_expr(ms, instantiations);
+            }
+            if let Some(body) = &sel.timeout_body {
+                for stmt in &body.statements {
+                    collect_generic_from_stmt(stmt, instantiations);
+                }
+            }
+        }
         IRStmt::Defer(_) => {}
         IRStmt::UnsafeBlock(unsafe_block) => {
             for stmt in &unsafe_block.body.statements {
@@ -6741,6 +7329,9 @@ fn collect_generic_from_expr(
                     || callee == "Vec::get"
                     || callee == "Vec::get_ref"
                     || callee == "Slice::get_ref"
+                    || callee == "Arena::get_ref"
+                    || callee == "File::open"
+                    || callee == "File::create"
                     || callee == "String::get"
                     || callee == "String::from_utf8"
                     || callee == "METHOD::pop"
@@ -6885,6 +7476,11 @@ fn collect_generic_from_expr(
                 collect_generic_from_type(ret, instantiations);
             }
             for stmt in &lit.body.statements {
+                collect_generic_from_stmt(stmt, instantiations);
+            }
+        }
+        IREexpr::Spawn { body, .. } => {
+            for stmt in &body.statements {
                 collect_generic_from_stmt(stmt, instantiations);
             }
         }

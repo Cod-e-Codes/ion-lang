@@ -28,6 +28,7 @@ impl HasSpan for Expr {
             Expr::Ref(e) => e.span,
             Expr::Send(e) => e.span,
             Expr::Recv(e) => e.span,
+            Expr::Spawn(e) => e.span,
             Expr::StructLit(e) => e.span,
             Expr::FieldAccess(e) => e.span,
             Expr::EnumLit(e) => e.span,
@@ -884,9 +885,17 @@ impl TypeChecker {
             "Vec::capacity" => Some("fn Vec::capacity(vec: &Vec<T>) -> int"),
             "Vec::get" => Some("fn Vec::get(vec: &Vec<T>, index: int) -> Option<T>"),
             "Vec::get_ref" => Some("fn Vec::get_ref(vec: &Vec<T>, index: int) -> Option<&T>"),
-            "Vec::set" => Some("fn Vec::set(vec: &mut Vec<T>, index: int, value: T) -> int"),
+            "Vec::set" => Some("fn Vec::set(vec: &mut Vec<T>, index: int, value: T) -> SetResult"),
             "Slice::len" => Some("fn Slice::len(s: &[]T) -> int"),
             "Slice::get_ref" => Some("fn Slice::get_ref(s: &[]T, index: int) -> Option<&T>"),
+            "Arena::get_ref" => {
+                Some("fn Arena::get_ref(arena: &Arena<T>, h: Handle) -> Option<&T>")
+            }
+            "File::open" => Some("fn File::open(path: &String) -> Option<File>"),
+            "File::create" => Some("fn File::create(path: &String) -> Option<File>"),
+            "File::read" => Some("fn File::read(file: &mut File, buf: &mut Vec<u8>) -> int"),
+            "File::write" => Some("fn File::write(file: &mut File, buf: &Vec<u8>) -> int"),
+            "File::close" => Some("fn File::close(file: &mut File)"),
             "String::new" => Some("fn String::new() -> String"),
             "String::from" => Some("fn String::from(s: &str) -> String"),
             "String::from_utf8" => Some("fn String::from_utf8(bytes: Vec<u8>) -> Option<String>"),
@@ -900,6 +909,9 @@ impl TypeChecker {
             "clone_sender" => Some("fn clone_sender(sender: &Sender<T>) -> Sender<T>"),
             "send" => Some("fn send(sender: &Sender<T>, value: T) -> SendResult<T>"),
             "recv" => Some("fn recv(receiver: &mut Receiver<T>) -> Option<T>"),
+            "try_send" => Some("fn try_send(sender: &Sender<T>, value: T) -> TrySendResult<T>"),
+            "try_recv" => Some("fn try_recv(receiver: &mut Receiver<T>) -> TryRecvResult<T>"),
+            "join" => Some("fn join(handle: JoinHandle)"),
             _ => None,
         }
     }
@@ -1240,10 +1252,34 @@ impl TypeChecker {
                     mutable: true,
                 }))
             }
-            ("String", "String::push_byte") => {
-                // String::push_byte requires &mut String
+            ("String", "String::push_byte") => Ok(Some(Type::Ref {
+                inner: Box::new(Type::String),
+                mutable: true,
+            })),
+            ("Arena", "Arena::get_ref") => {
+                let elem_type = match receiver_type {
+                    Type::Generic { name, params } if name == "Arena" && params.len() == 1 => {
+                        params[0].clone()
+                    }
+                    Type::Ref { inner, .. } => match inner.as_ref() {
+                        Type::Generic { name, params } if name == "Arena" && params.len() == 1 => {
+                            params[0].clone()
+                        }
+                        _ => return Ok(None),
+                    },
+                    _ => return Ok(None),
+                };
                 Ok(Some(Type::Ref {
-                    inner: Box::new(Type::String),
+                    inner: Box::new(Type::Generic {
+                        name: "Arena".to_string(),
+                        params: vec![elem_type],
+                    }),
+                    mutable: false,
+                }))
+            }
+            ("File", "File::read") | ("File", "File::write") | ("File", "File::close") => {
+                Ok(Some(Type::Ref {
+                    inner: Box::new(Type::File),
                     mutable: true,
                 }))
             }
@@ -1789,7 +1825,9 @@ impl TypeChecker {
 
                     // Shared borrow on root owner while `Option<&T>` from get_ref is live.
                     if let Expr::Call(call) = init
-                        && (call.callee == "Vec::get_ref" || call.callee == "Slice::get_ref")
+                        && (call.callee == "Vec::get_ref"
+                            || call.callee == "Slice::get_ref"
+                            || call.callee == "Arena::get_ref")
                         && call.args.len() == 2
                     {
                         self.register_get_ref_borrow_from_receiver(&call.args[0], let_stmt.span)?;
@@ -1992,59 +2030,10 @@ impl TypeChecker {
                 self.variables = merged;
             }
             Stmt::Spawn(spawn_stmt) => {
-                // Discover captured variables: any variable from the current scope
-                // that is referenced inside the spawn body.
-                let captured_names = collect_captured_vars(&spawn_stmt.body);
-
-                // Validate captures: must exist, be Valid, and be Send.
-                let mut captured_infos = Vec::new();
-                for name in captured_names {
-                    if let Some(info) = self.variables.get(&name) {
-                        if info.state == OwnershipState::Moved {
-                            return Err(TypeCheckError::UseAfterMove {
-                                name: name.clone(),
-                                span: spawn_stmt.span,
-                            });
-                        }
-                        if !self.is_send(&info.ty) {
-                            return Err(TypeCheckError::TypeMismatch {
-                                expected: "Send value for spawn capture".to_string(),
-                                got: type_to_string(&info.ty),
-                                span: spawn_stmt.span,
-                            });
-                        }
-                        self.check_owner_not_borrowed(&name, spawn_stmt.span)?;
-                        captured_infos.push((name.clone(), info.ty.clone()));
-                    } else {
-                        return Err(TypeCheckError::UndefinedVariable {
-                            name: name.clone(),
-                            span: spawn_stmt.span,
-                        });
-                    }
-                }
-
-                // Mark captured variables as moved in the parent scope.
-                for (name, _) in &captured_infos {
-                    if let Some(info) = self.variables.get_mut(name) {
-                        info.state = OwnershipState::Moved;
-                    }
-                }
-
-                // Type-check the spawn body in an isolated scope seeded with the captured vars.
-                let parent_vars = self.variables.clone();
-                self.variables.clear();
-                for (name, ty) in captured_infos {
-                    self.variables
-                        .insert(name, Self::new_variable_info(ty, spawn_stmt.span));
-                }
-                // Check the body of the spawn block
-                self.push_borrow_scope();
-                for inner in &spawn_stmt.body.statements {
-                    self.check_stmt(inner)?;
-                }
-                self.pop_borrow_scope();
-                // Restore parent scope (with captured variables already marked moved).
-                self.variables = parent_vars;
+                self.check_spawn_block(&spawn_stmt.body, spawn_stmt.span)?;
+            }
+            Stmt::Select(select_stmt) => {
+                self.check_select_stmt(select_stmt)?;
             }
             Stmt::While(while_stmt) => {
                 let before = self.variables.clone();
@@ -2467,7 +2456,7 @@ impl TypeChecker {
         self.check_expr(init)
     }
 
-    fn check_expr_with_expected(
+    pub(crate) fn check_expr_with_expected(
         &mut self,
         expr: &Expr,
         expected: &Type,
@@ -2664,6 +2653,139 @@ impl TypeChecker {
         }
 
         Ok(Type::Struct(struct_name))
+    }
+
+    fn check_spawn_block(&mut self, body: &Block, span: Span) -> Result<(), TypeCheckError> {
+        let captured_names = collect_captured_vars(body);
+        let mut captured_infos = Vec::new();
+        for name in captured_names {
+            if let Some(info) = self.variables.get(&name) {
+                if info.state == OwnershipState::Moved {
+                    return Err(TypeCheckError::UseAfterMove {
+                        name: name.clone(),
+                        span,
+                    });
+                }
+                if !self.is_send(&info.ty) {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "Send value for spawn capture".to_string(),
+                        got: type_to_string(&info.ty),
+                        span,
+                    });
+                }
+                self.check_owner_not_borrowed(&name, span)?;
+                captured_infos.push((name.clone(), info.ty.clone()));
+            } else {
+                return Err(TypeCheckError::UndefinedVariable {
+                    name: name.clone(),
+                    span,
+                });
+            }
+        }
+        for (name, _) in &captured_infos {
+            if let Some(info) = self.variables.get_mut(name) {
+                info.state = OwnershipState::Moved;
+            }
+        }
+        let parent_vars = self.variables.clone();
+        self.variables.clear();
+        for (name, ty) in captured_infos {
+            self.variables
+                .insert(name, Self::new_variable_info(ty, span));
+        }
+        self.push_borrow_scope();
+        for inner in &body.statements {
+            self.check_stmt(inner)?;
+        }
+        self.pop_borrow_scope();
+        self.variables = parent_vars;
+        Ok(())
+    }
+
+    fn check_select_stmt(&mut self, select_stmt: &SelectStmt) -> Result<(), TypeCheckError> {
+        if select_stmt.default_body.is_some() && select_stmt.timeout_body.is_some() {
+            return Err(TypeCheckError::Message(
+                "select cannot have both default and timeout arms".to_string(),
+            ));
+        }
+        let before = self.variables.clone();
+        let mut fallthrough = Vec::new();
+        for arm in &select_stmt.recv_arms {
+            self.variables = before.clone();
+            let recv_ty = self.check_expr(&Expr::Recv(arm.recv.clone()))?;
+            if let Some(name) = &arm.binding {
+                self.variables
+                    .insert(name.clone(), Self::new_variable_info(recv_ty, arm.span));
+            }
+            self.push_borrow_scope();
+            for inner in &arm.body.statements {
+                self.check_stmt(inner)?;
+            }
+            self.pop_borrow_scope();
+            if block_falls_through(&arm.body) {
+                fallthrough.push(self.variables.clone());
+            }
+        }
+        if let Some(body) = &select_stmt.default_body {
+            self.variables = before.clone();
+            self.push_borrow_scope();
+            for inner in &body.statements {
+                self.check_stmt(inner)?;
+            }
+            self.pop_borrow_scope();
+            if block_falls_through(body) {
+                fallthrough.push(self.variables.clone());
+            }
+        }
+        if let Some(ms) = &select_stmt.timeout_ms {
+            self.variables = before.clone();
+            let ms_ty = self.check_expr(ms)?;
+            if !self.is_integer_type(&ms_ty) {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "int timeout milliseconds".to_string(),
+                    got: type_to_string(&ms_ty),
+                    span: ms.span(),
+                });
+            }
+            if let Some(n) = Self::int_literal_value(ms)
+                && n < 0
+            {
+                return Err(TypeCheckError::Message(
+                    "select timeout must be >= 0".to_string(),
+                ));
+            }
+            if let Some(body) = &select_stmt.timeout_body {
+                self.push_borrow_scope();
+                for inner in &body.statements {
+                    self.check_stmt(inner)?;
+                }
+                self.pop_borrow_scope();
+                if block_falls_through(body) {
+                    fallthrough.push(self.variables.clone());
+                }
+            }
+        }
+        let mut merged = before.clone();
+        if !fallthrough.is_empty() {
+            for (name, prev_info) in before.iter() {
+                let mut reach_states: Vec<OwnershipState> = Vec::new();
+                for env in &fallthrough {
+                    reach_states.push(
+                        env.get(name)
+                            .map(|info| info.state)
+                            .unwrap_or(prev_info.state),
+                    );
+                }
+                let merged_state = join_ownership_states(&reach_states, name, select_stmt.span)?;
+                if let Some(info) = merged.get_mut(name) {
+                    info.state = merged_state;
+                    info.shared_borrow_count = prev_info.shared_borrow_count;
+                    info.mut_borrow_count = prev_info.mut_borrow_count;
+                }
+            }
+        }
+        self.variables = merged;
+        Ok(())
     }
 
     fn check_expr_with_context(
@@ -3065,17 +3187,33 @@ impl TypeChecker {
                             &Self::comparison_operand_type(&right_type),
                             &bin_op_expr.span,
                         ),
-                    BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge | BinOp::Eq | BinOp::Ne => {
-                        // Comparison operations - return bool
+                    BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                        let left_cmp = Self::comparison_operand_type(&left_type);
+                        let right_cmp = Self::comparison_operand_type(&right_type);
+                        if self.is_numeric_type(&left_cmp) && self.is_numeric_type(&right_cmp) {
+                            Ok(Type::Bool)
+                        } else {
+                            Err(TypeCheckError::TypeMismatch {
+                                expected: "comparable numeric types".to_string(),
+                                got: format!(
+                                    "{} and {}",
+                                    type_to_string(&left_type),
+                                    type_to_string(&right_type)
+                                ),
+                                span: bin_op_expr.span,
+                            })
+                        }
+                    }
+                    BinOp::Eq | BinOp::Ne => {
                         let left_cmp = Self::comparison_operand_type(&left_type);
                         let right_cmp = Self::comparison_operand_type(&right_type);
                         if (self.is_numeric_type(&left_cmp) && self.is_numeric_type(&right_cmp))
-                            || types_equal(&left_cmp, &right_cmp)
+                            || (types_equal(&left_cmp, &right_cmp) && self.is_eq_type(&left_cmp))
                         {
                             Ok(Type::Bool)
                         } else {
                             Err(TypeCheckError::TypeMismatch {
-                                expected: "comparable types".to_string(),
+                                expected: "Eq types".to_string(),
                                 got: format!(
                                     "{} and {}",
                                     type_to_string(&left_type),
@@ -3260,6 +3398,10 @@ impl TypeChecker {
                         span: recv_expr.span,
                     }),
                 }
+            }
+            Expr::Spawn(spawn_expr) => {
+                self.check_spawn_block(&spawn_expr.body, spawn_expr.span)?;
+                Ok(Type::JoinHandle)
             }
             Expr::EnumLit(enum_lit) => {
                 // Check if this is actually a qualified function call that was mis-parsed
@@ -4745,7 +4887,7 @@ impl TypeChecker {
         }
     }
 
-    fn require_named_enum(
+    pub(crate) fn require_named_enum(
         &self,
         name: &str,
         variants: &[(&str, bool)],
@@ -5001,9 +5143,12 @@ impl TypeChecker {
                     self.merge_match_arm_branches(then_r, rest_r, if_stmt.span)
                 }
             }
-            Stmt::Let(_) | Stmt::Defer(_) | Stmt::Spawn(_) | Stmt::While(_) | Stmt::For(_) => {
-                self.infer_stmts_result_from(stmts, idx + 1, span)
-            }
+            Stmt::Let(_)
+            | Stmt::Defer(_)
+            | Stmt::Spawn(_)
+            | Stmt::Select(_)
+            | Stmt::While(_)
+            | Stmt::For(_) => self.infer_stmts_result_from(stmts, idx + 1, span),
             Stmt::Loop(loop_stmt) => {
                 if block_contains_break(&loop_stmt.body) {
                     self.infer_stmts_result_from(stmts, idx + 1, span)
@@ -5316,7 +5461,7 @@ impl TypeChecker {
             // Still walk inners so Box<&T> / Vec<&T> fail no-escape.
             Type::Box { inner } => self.is_reference_containing_rec(inner, visiting),
             Type::Vec { elem_type } => self.is_reference_containing_rec(elem_type, visiting),
-            Type::String | Type::Str => false,
+            Type::String | Type::Str | Type::JoinHandle | Type::File => false,
             Type::Array { inner, .. } => self.is_reference_containing_rec(inner, visiting),
             Type::Slice { .. } => true,
             Type::Sender { elem_type } => self.is_reference_containing_rec(elem_type, visiting),
@@ -5468,7 +5613,9 @@ impl TypeChecker {
             | Type::U64
             | Type::UInt
             | Type::String
-            | Type::Str => false,
+            | Type::Str
+            | Type::JoinHandle
+            | Type::File => false,
         }
     }
 
@@ -5548,6 +5695,8 @@ impl TypeChecker {
             Type::Receiver { elem_type } => self.is_send_rec(elem_type, visiting),
             Type::Tuple { elements } => elements.iter().all(|e| self.is_send_rec(e, visiting)),
             Type::Fn { .. } => true,
+            Type::JoinHandle => true,
+            Type::File => false,
         }
     }
 
@@ -5833,6 +5982,35 @@ fn substitute_generic_types_impl(
         Type::Channel { elem_type } => Type::Channel {
             elem_type: Box::new(substitute_generic_types_impl(elem_type, substitutions)),
         },
+        Type::Sender { elem_type } => Type::Sender {
+            elem_type: Box::new(substitute_generic_types_impl(elem_type, substitutions)),
+        },
+        Type::Receiver { elem_type } => Type::Receiver {
+            elem_type: Box::new(substitute_generic_types_impl(elem_type, substitutions)),
+        },
+        Type::Array { inner, size } => Type::Array {
+            inner: Box::new(substitute_generic_types_impl(inner, substitutions)),
+            size: *size,
+        },
+        Type::Slice { inner } => Type::Slice {
+            inner: Box::new(substitute_generic_types_impl(inner, substitutions)),
+        },
+        Type::Tuple { elements } => Type::Tuple {
+            elements: elements
+                .iter()
+                .map(|e| substitute_generic_types_impl(e, substitutions))
+                .collect(),
+        },
+        Type::Fn {
+            params,
+            return_type,
+        } => Type::Fn {
+            params: params
+                .iter()
+                .map(|p| substitute_generic_types_impl(p, substitutions))
+                .collect(),
+            return_type: Box::new(substitute_generic_types_impl(return_type, substitutions)),
+        },
         _ => ty.clone(),
     }
 }
@@ -5908,6 +6086,27 @@ fn collect_block_var_refs(
             Stmt::Spawn(spawn_stmt) => {
                 collect_block_var_refs(&spawn_stmt.body, refs, locals);
             }
+            Stmt::Select(select_stmt) => {
+                for arm in &select_stmt.recv_arms {
+                    collect_expr_var_refs(&arm.recv.channel, refs, locals);
+                    let mut arm_locals = locals.clone();
+                    if let Some(name) = &arm.binding {
+                        arm_locals.insert(name.clone());
+                    }
+                    collect_block_var_refs(&arm.body, refs, &mut arm_locals);
+                }
+                if let Some(body) = &select_stmt.default_body {
+                    let mut d_locals = locals.clone();
+                    collect_block_var_refs(body, refs, &mut d_locals);
+                }
+                if let Some(ms) = &select_stmt.timeout_ms {
+                    collect_expr_var_refs(ms, refs, locals);
+                }
+                if let Some(body) = &select_stmt.timeout_body {
+                    let mut t_locals = locals.clone();
+                    collect_block_var_refs(body, refs, &mut t_locals);
+                }
+            }
             Stmt::If(if_stmt) => {
                 collect_expr_var_refs(&if_stmt.cond, refs, locals);
                 let mut then_locals = locals.clone();
@@ -5973,6 +6172,10 @@ fn collect_expr_var_refs(
             collect_expr_var_refs(&send_expr.value, refs, locals);
         }
         Expr::Recv(recv_expr) => collect_expr_var_refs(&recv_expr.channel, refs, locals),
+        Expr::Spawn(spawn_expr) => {
+            let mut spawn_locals = locals.clone();
+            collect_block_var_refs(&spawn_expr.body, refs, &mut spawn_locals);
+        }
         Expr::EnumLit(enum_lit) => {
             for arg in &enum_lit.args {
                 collect_expr_var_refs(arg, refs, locals);
@@ -6463,6 +6666,10 @@ fn main() -> int {
 enum Option<T> {
     Some(T);
     None;
+}
+enum SetResult {
+    Ok;
+    OutOfBounds;
 }
 struct Item {
     n: int;

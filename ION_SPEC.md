@@ -104,9 +104,9 @@ Examples: `main`, `Packet`, `_tmp1`, `read_file`.
 
 The following keywords are reserved and cannot be used as identifiers:
 
-`fn`, `let`, `mut`, `struct`, `enum`, `type`, `if`, `else`, `while`, `for`, `loop`, `match`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `send`, `recv`, `true`, `false`, `import`, `as`, `pub`, `extern`, `unsafe`.
+`fn`, `let`, `mut`, `struct`, `enum`, `type`, `if`, `else`, `while`, `for`, `loop`, `match`, `select`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `send`, `recv`, `true`, `false`, `import`, `as`, `pub`, `extern`, `unsafe`.
 
-Built-in type names `Box`, `Vec`, `String`, and `Slice` are tokenized as keywords for generic syntax (`Box<T>`, etc.) and builtin method qualification (`Slice::len`, `Slice::get_ref`); they are not reserved as identifiers elsewhere.
+Built-in type names `Box`, `Vec`, `String`, `Slice`, and `File` are tokenized as keywords for generic syntax (`Box<T>`, etc.) and builtin method qualification (`Slice::len`, `File::open`); they are not reserved as identifiers elsewhere.
 
 Note: The `as` keyword is used both for module aliases (`import "file.ion" as name;`) and for type casting (`expr as Type`).
 
@@ -355,6 +355,7 @@ stmt             = let_stmt
                  | continue_stmt
                  | defer_stmt
                  | spawn_stmt
+                 | select_stmt
                  | unsafe_stmt
                  | ";" ;
 
@@ -383,9 +384,16 @@ continue_stmt    = "continue" , ";" ;
 defer_stmt       = "defer" , expr , ";" ;
 
 spawn_stmt       = "spawn" , block , ";" ;
+
+select_stmt      = "select" , "{" , { select_arm } , "}" ;
+select_arm       = [ "let" , identifier , "=" ] , recv_expr , "=>" , block
+                 | identifier , "=>" , block
+                 | identifier , "(" , expr , ")" , "=>" , block ;
 ```
 
 `else if` chains use the `if_stmt` alternative after `else` (for example `else if cond { ... }`). The `in` token in `for_stmt` is required but is not otherwise reserved.
+
+`select` is a reserved keyword. The `default` and `timeout` arm heads are contextual identifiers, not keywords: a recv arm is `recv(...) => { ... }` or `let v = recv(...) => { ... }`; a poll arm is `default => { ... }`; a timed wait is `timeout(ms) => { ... }`. At most one `default` or one `timeout` arm is allowed, never both. See Section 7.2.
 
 #### 3.5 Expressions
 
@@ -443,13 +451,15 @@ primary_expr     = identifier
                  | match_expr
                  | send_expr
                  | recv_expr
-                 | channel_expr ;
+                 | channel_expr
+                 | spawn_expr ;
 
 match_expr       = "match" , expr , "{" , { match_arm } , "}" ;
 
 send_expr        = "send" , "(" , expr , "," , expr , ")" ;
 recv_expr        = "recv" , "(" , expr , ")" ;
 channel_expr     = "channel" , "<" , type_expr , ">" , "(" , [ expr ] , ")" ;
+spawn_expr       = "spawn" , block ;
 
 fn_literal       = "fn" , "(" , params? , ")" , [ "->" , type_expr ] , block ;
 
@@ -501,6 +511,8 @@ Additional built-in generic types:
 
 - `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`). `Box::unwrap` moves `T` out and frees the allocation without dropping `T`.
 - `Sender<T>` and `Receiver<T>` – move-only handles for the two ends of a bounded MPSC channel
+- `JoinHandle` – move-only handle for a joinable `spawn` expression (not `Copy`; `Send`; drop detaches)
+- `File` – owned OS file handle (not `Send`; drop closes)
 - `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::get_ref()`, `Vec::set()`)
 - `String` – well-formed UTF-8 heap-allocated string (`String::new()`, `String::from()`, `String::from_utf8()`, `String::get()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
 - `[T; N]` – fixed-size array of `N` elements of type `T`
@@ -613,7 +625,9 @@ Rules:
 - Tuple literals `(expr1, expr2, ...)` require at least one element; empty `()` is not supported.
 - Field indices are 0-based; out-of-range access is a compile error.
 - Moving a tuple moves all non-copy fields together; destructuring `let (a, b) = t` moves each bound field out of `t`.
-- Nested tuples, tuple equality (`==`), tuples in struct fields, and generic tuple types are not supported in the current compiler.
+- Nested field access `t.0.0` is two tuple indices. The lexer does not treat `0.0` after `.` as a float.
+- `==` and `!=` compare tuples elementwise when every element type is `Eq` (generated C does not use struct `==`). `JoinHandle` and `File` are not `Eq`.
+- Tuple types may appear as struct fields and as generic type arguments (`fn first<T>(p: (T, int)) -> T`).
 
 
 **Standard library enums (user-defined):**
@@ -977,12 +991,17 @@ Functions may be declared `extern "C"`. Raw pointer types `*T` are available for
 
 #### 7.1 Threads and `spawn`
 
-The `spawn` statement creates a new OS thread executing the given block:
+`spawn { ... };` as a statement creates a new OS thread and detaches it. The same form used as an expression yields a builtin `JoinHandle`:
 
 ```ion
 spawn {
     // body
 };
+
+let h: JoinHandle = spawn {
+    // body
+};
+join(h);
 ```
 
 The block may capture **owned values** from the enclosing scope **by move** only. Capturing references is disallowed:
@@ -1002,6 +1021,8 @@ fn main() {
 
 Attempting to use `v` after `spawn` is a compile-time error.
 
+`JoinHandle` is not `Copy` and is `Send`. Dropping an unused handle detaches the thread (`ion_thread_detach`). `join(handle)` waits for the thread and consumes the handle. Statement `spawn { };` does not produce a handle.
+
 #### 7.2 Channels
 
 Ion provides typed, bounded MPSC channels via built-in `Sender<T>` and `Receiver<T>` types and the `channel<T>()` / `channel<T>(cap)` function. Programs declare the conventional enums (same pattern as `Vec::get` returning `Option<T>`):
@@ -1014,6 +1035,16 @@ enum Option<T> {
 enum SendResult<T> {
     Sent;
     Closed(T);
+}
+enum TrySendResult<T> {
+    Sent;
+    Full(T);
+    Closed(T);
+}
+enum TryRecvResult<T> {
+    Msg(T);
+    Empty;
+    Closed;
 }
 
 let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
@@ -1028,6 +1059,9 @@ Semantics:
 - `clone_sender(&tx) -> Sender<T>` copies the sender handle and increments the sender count. `Receiver<T>` cannot be cloned.
 - `send(&tx, value) -> SendResult<T>` moves a value into the channel. Requires `&Sender<T>`. The value is checked against `T`, so `send(&tx, Option::None)` infers from the sender. Returns `SendResult::Sent` when ownership moved into the buffer. Returns `SendResult::Closed(value)` when no receiver remains, giving `T` back. An unused result at `send(&tx, v);` still drops `Closed(T)` so the value cannot leak. `send` blocks while the buffer is full and a receiver still exists.
 - `recv(&mut rx) -> Option<T>` moves a value out of the channel. Requires `&mut Receiver<T>`. Returns `Option::Some(v)` while messages remain. Returns `Option::None` after every sender has been dropped and the buffer is empty. Blocks until one of those holds. Does not yield an uninitialized `T`.
+- `try_send(&tx, value) -> TrySendResult<T>` is nonblocking. Runtime status `0` / `-2` / `-1` maps to `Sent` / `Full(T)` / `Closed(T)`. An unused statement `try_send(...)` still drops `Full(T)` and `Closed(T)`.
+- `try_recv(&mut rx) -> TryRecvResult<T>` is nonblocking. Runtime status `0` / `-2` / `-1` maps to `Msg(T)` / `Empty` / `Closed`.
+- `select { ... }` waits on a set of `recv` arms and takes the chosen message (no TOCTOU). A bound `let v = recv(&mut rx)` has type `Option<T>`. An unbound `recv(&mut ry) =>` still takes the message and drops the unused `Option<T>`. `default =>` polls (`timeout_ms = 0`). `timeout(ms) =>` waits up to `ms` milliseconds (`ms` is `int`; a literal `ms < 0` is a compile error; a runtime `ms < 0` panics). Without `default` or `timeout`, the runtime waits forever (`timeout_ms = -1`). At most one of `default` or `timeout`.
 - Tuple destructuring: `let (tx, rx): (Sender<T>, Receiver<T>) = channel<T>();` (annotation required).
 - `Sender<T>` and `Receiver<T>` are `Send` when `T: Send`, so either end may be moved between threads.
 - Disconnect: the runtime tracks `sender_count` and `receiver_count` separately. Last `Sender` drop (including clones) disconnects receive, wakes waiters, and does not destroy the channel while a `Receiver` lives. Last `Receiver` drop disconnects send and wakes waiters. The backing channel is freed when both counts reach 0. Remaining buffered elements of `T` are dropped first.
@@ -1044,7 +1078,10 @@ The `Send` property marks types that are safe to transfer to another thread by v
 - `Result<T, E>` is `Send` if both `T: Send` and `E: Send`.
 - `Sender<T>` and `Receiver<T>` are `Send` if `T: Send`.
 - `SendResult<T>` is `Send` if `T: Send`.
+- `TrySendResult<T>` and `TryRecvResult<T>` are `Send` if `T: Send`.
 - `(T1, T2, ...)` is `Send` if every element type is `Send`.
+- `JoinHandle` is `Send`.
+- `File` is **not** `Send`.
 - Any type containing a reference (`&T`, `&mut T`) is **not** `Send`.
 
 User-defined `struct` and `enum` types are `Send` if and only if **all of their fields / payloads are `Send`**. For generic types, this rule is applied **per instantiation**: e.g., `Wrapper<int>` may be `Send` while `Wrapper<NonSend>` is not, depending on the fields.
@@ -1096,7 +1133,7 @@ Essential API (implemented; pseudocode notation: Ion has no `impl` blocks; these
 // Vec::capacity(vec: &Vec<T>) -> int
 // Vec::get(vec: &Vec<T>, index: int) -> Option<T>
 // Vec::get_ref(vec: &Vec<T>, index: int) -> Option<&T>
-// Vec::set(vec: &mut Vec<T>, index: int, value: T) -> int
+// Vec::set(vec: &mut Vec<T>, index: int, value: T) -> SetResult
 ```
 
 Method syntax (`vec.push(x)`, `vec.get_ref(i)`) desugars to the qualified forms above.
@@ -1107,7 +1144,7 @@ Note that:
 - `Vec::new()` and `Vec::with_capacity()` infer `T` from a `let` type annotation when present (e.g. `let v: Vec<i32> = Vec::new()`).
 - `Vec::get()` and `Vec::pop()` return `Option<T>` to handle out-of-bounds or empty cases. Both **move** the element out of the vector. For a `T` that needs destruction, `Vec::get` hollows the slot (zero-fills it) so later vector drop does not free the moved value again. Copy `T` is left in place (move and copy are indistinguishable). To preserve vector length after a read-only scan, either use `Vec::get_ref()` (below) or copy fields and `Vec::set()` a rebuilt struct literal to put the value back (nested `Vec` fields still move on put-back).
 - `Vec::get_ref()` returns `Option<&T>`: a **local, stack-only borrow** of an in-place element. It does not move or hollow the slot. The result is only valid as a short-lived binding within the current function (for example in a `match` arm). Match arms bind the element as `&T`; for enum elements, an inner `match` on that binding dispatches variants directly (no unary `*` deref). Copy fields in struct or enum variant patterns bind as `T`; non-copy fields bind as `&T`. Codegen uses `T*` for types with owned fields and copies by value for copy types, so repeated scans over `Vec<struct-with-nested-Vec>` do not double-free nested fields. It cannot be returned, stored in structs or enums, sent on channels, or cross `spawn`. While an `&T` from `get_ref` is active, the root owner of the vector (the binding behind `&Vec<T>`) is shared-borrowed: `&mut Vec<T>` on that owner, `Vec::set`, `Vec::push`, and `Vec::pop` on the same vector are rejected until the borrow ends. Out-of-range or negative indices yield `Option::None`. Nested inspection (`order.lines` then `get_ref`) follows the same root-owner borrow rules as field paths (Section 5.3). Field paths through `&Struct` that are already references (for example `order.lines` when `order: &Order`) are passed to `Vec` methods without an extra `&`.
-- `Vec::set()` requires a mutable reference and returns an error code (0 for success, non-zero for failure). When `T` needs destruction, the previous element at that index is dropped before the new value is written. After shared borrows from `get_ref` end, `Vec::set` on the same index is allowed.
+- `Vec::set()` requires a mutable reference and returns conventional `SetResult` (`Ok` or `OutOfBounds`), not `int`. Programs declare `enum SetResult { Ok; OutOfBounds; }` (same pattern as `Option`). When `T` needs destruction, the previous element at that index is dropped before the new value is written. After shared borrows from `get_ref` end, `Vec::set` on the same index is allowed. An unused statement `Vec::set(...)` still produces `SetResult` in generated C.
 
 For cross-function or long-lived access, Ion still favors an **index/handle style**: helpers return indices or keys and callers re-index within their own function bodies. When slots in a growable table can be reused, prefer `Handle` / `Arena<T>` in Section 8.6 over a raw `int` index.
 
@@ -1146,11 +1183,11 @@ Note that:
 
 #### 8.4 Channels
 
-Programs declare conventional `Option<T>` and `SendResult<T>` enums (same pattern as `Vec::get`). `channel<T>()` has capacity 1; `channel<T>(cap)` sets the bound. `clone_sender(&tx)` is MPSC. `send` returns `SendResult<T>`; `recv` returns `Option<T>`. Last sender drop unblocks `recv` with `None`. See Section 7.2.
+Programs declare conventional `Option<T>`, `SendResult<T>`, `TrySendResult<T>`, and `TryRecvResult<T>` enums (same pattern as `Vec::get`). `channel<T>()` has capacity 1; `channel<T>(cap)` sets the bound. `clone_sender(&tx)` is MPSC. `send` returns `SendResult<T>`; `recv` returns `Option<T>`; `try_send` / `try_recv` are nonblocking. `select` waits on recv arms. Last sender drop unblocks `recv` with `None`. See Section 7.2.
 
 #### 8.5 File I/O
 
-**Implemented (MVP):** `stdlib/fs.ion` provides whole-file read via POSIX `open`/`read`/`close` wrapped in `unsafe` blocks.
+**Whole-file UTF-8 read:** `stdlib/fs.ion` provides POSIX `open`/`read`/`close` wrapped in `unsafe` blocks.
 
 ```ion
 // stdlib/fs.ion
@@ -1168,26 +1205,21 @@ Generic `Result<T, E>` lives in `stdlib/result.ion` for library authors; `fs` us
 
 Import with `import "stdlib/fs.ion" as fs;` then `fs::read_to_string_result(path)`.
 
-**Deferred (not implemented):**
+**Owned `File` (compiler builtin):** streaming I/O with an owned handle. Not `Send`. Drop closes.
 
 ```ion
-struct File { /* opaque, not Send unless specified */ }
-
-// Sketch only; `impl` blocks are not valid Ion syntax today.
-fn open(path: &String) -> Result<File, IOError>;
-fn read(file: &mut File, buf: &mut Vec<u8>) -> Result<int, IOError>;
-fn write(file: &mut File, buf: &Vec<u8>) -> Result<int, IOError>;
-fn close(file: &mut File) -> Result<void, IOError>;
-
-enum IOError {
-    NotFound;
-    PermissionDenied;
-    UnexpectedEof;
-    Other(int);
-}
+// File::open(path: &String) -> Option<File>
+// File::create(path: &String) -> Option<File>
+// File::read(file: &mut File, buf: &mut Vec<u8>) -> int
+// File::write(file: &mut File, buf: &Vec<u8>) -> int
+// File::close(file: &mut File)
 ```
 
-File handles would typically be **not `Send`**, to avoid subtle platform-dependent behavior across threads.
+- `File::open` uses `"rb"`; `File::create` uses `"w+b"`. Failure is `Option::None`.
+- `File::read` fills up to `buf.capacity` and sets `buf` length to bytes read. Returns the byte count, or `-1` on error. Use `Vec::with_capacity` so there is room to read.
+- `File::write` writes `buf.len` bytes. Returns the byte count, or `-1` on error.
+- `File::close` closes if still open. Drop also closes (safe to close twice).
+- **Platform:** POSIX and MinGW (`fopen`/`fread`/`fwrite`/`fclose`). Not MSVC-only.
 
 #### 8.6 `Handle` / `Arena<T>`
 
@@ -1215,12 +1247,18 @@ pub fn insert<T>(arena: &mut Arena<T>, value: T) -> Handle;
 pub fn remove<T>(arena: &mut Arena<T>, h: Handle) -> Take<T>;
 ```
 
+Compiler builtin (not a library function):
+
+```ion
+// Arena::get_ref(arena: &Arena<T>, h: Handle) -> Option<&T>
+```
+
 - `Handle` is two `int` fields (`Send`). Invalid is `index: -1, generation: 0`. Ion does not treat user structs as `Copy`; `copy(&h)` reconstructs from the fields when a by-value call would consume the only binding.
 - `insert` reuses `free_head` or `Vec::push`. `remove` bumps generation, links the slot into the free list, and returns `Take::Hit` with the owned value or `Take::Miss` for stale/OOB handles.
-- Peek cannot be a returning library function (no-escape). In the caller, `arena.slots.get_ref(h.index)` then match `Slot::Occupied` and compare `generation`. Through `&Arena` / `&World`, `slots` is already a ref; do not wrap it in another `&`. Bind `Occupied.value` only when `T` is Copy; otherwise `value: _` and use `remove` for the owned value.
+- Peek cannot be a returning library function (no-escape). Prefer the compiler builtin `Arena::get_ref(&arena, h) -> Option<&T>` (stack-local, same no-escape as `Vec::get_ref`). `Handle` is moved; use `handle::copy` when the binding must stay. Occupied generation must match. Through `&Arena` / `&World`, method form `arena.get_ref(h)` is valid. The older `arena.slots.get_ref(h.index)` peek remains legal.
 - Annotate `let mut arena: Arena<int> = handle::new();`. Through `&mut World`, `world.entities` is already `&mut Arena` (call `insert(world.entities, v)`). On an owned `World`, pass `&mut world.entities`.
-- `slots` is public because peek cannot be a returning library function. Direct mutation of `slots` can break the free list.
-- There is no `Arena::get_ref` compiler builtin.
+- `slots` is public because the library peek used `Vec::get_ref`. Direct mutation of `slots` can break the free list.
+- `Arena::get_ref` is a compiler builtin (not a library function). IR method lowering must not treat it as `Vec::get_ref`.
 - `Vec::new()` inside `new<T>` must be annotated (`let slots: Vec<Slot<T>> = Vec::new();`).
 - `Handle` is not phantom `Handle<T>`. Mixing two arenas with the same handle is a user error; `contains` still rejects stale generations.
 
@@ -1243,6 +1281,8 @@ The stdlib provides safe wrappers in `stdlib/io.ion`, `stdlib/fmt.ion`, and `std
 
 **`stdlib/fs.ion`:**
 - `fs::read_to_string_result(path: String) -> ReadResult` – read entire file (POSIX/MinGW; `Err(-1)` on open failure, `Err(-2)` on read failure)
+
+Owned streaming I/O uses the compiler builtin `File` (Section 8.5), not this module.
 
 All I/O functions wrap POSIX calls in safe Ion code. Import with `import "stdlib/io.ion" as io;` (or `fmt.ion`, `fs.ion`).
 
@@ -1365,7 +1405,6 @@ stronger contract.
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (signature hover only)
 - LSP go-to-definition for type names in type annotations (no source spans on `Type` AST nodes)
 - Function types: capture-free fn literals implemented; no capturing closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
-- Tuple values: no nested tuples, `==` on tuples, struct fields holding tuples, or generic `(T1, T2)` parameters. Flat tuples may hold owned heap types (for example `(Vec<T>, int)`).
 - Tooling: IR lowering uses types computed by the type checker (`TypeInfo`). Missing a type after a successful check is a compiler bug, not a language fallback to `int`.
 
 ### 11. Future Work (Non-Normative)

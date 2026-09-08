@@ -3,6 +3,11 @@ enum Option<T> {
     None;
 }
 
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 fn main() -> int {
     let mut v: Vec<int> = Vec::new();
     Vec::push(&mut v, 10);
