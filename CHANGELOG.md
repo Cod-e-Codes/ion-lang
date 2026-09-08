@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.1 - 2026-09-08
+
 - **Fix**: blocking `select` (no `default`/`timeout`) rechecks `try_recv` after registering waiters so a concurrent send cannot park forever on a message already in the buffer. This impacts `select { recv(...) => ... }` racing a `send` on another thread.
 - **Tests**: `test_select_blocking_send.ion`.
 - **Docs**: ION_SPEC §7.2, ABI, skills.
