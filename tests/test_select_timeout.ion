@@ -1,0 +1,17 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let (_tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    select {
+        let _v = recv(&mut rx) => {
+            return 1;
+        }
+        timeout(1) => {
+            return 0;
+        }
+    };
+    return 2;
+}

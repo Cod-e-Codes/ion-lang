@@ -133,6 +133,8 @@ impl TypeChecker {
             Type::Array { .. } => Ok(("Slice".to_string(), false, false)),
             Type::String => Ok(("String".to_string(), false, false)),
             Type::Box { .. } => Ok(("Box".to_string(), false, false)),
+            Type::File => Ok(("File".to_string(), false, false)),
+            Type::JoinHandle => Ok(("JoinHandle".to_string(), false, false)),
             Type::Struct(name) => Ok((name.clone(), false, false)),
             Type::Enum(name) => Ok((name.clone(), false, false)),
             Type::Generic { name, .. } => Ok((name.clone(), false, false)),
@@ -196,6 +198,8 @@ pub(crate) fn types_equal(a: &Type, b: &Type) -> bool {
         (Type::Generic { name: a_name, .. }, Type::Enum(b_name)) => a_name == b_name,
         (Type::String, Type::String) => true,
         (Type::Str, Type::Str) => true,
+        (Type::JoinHandle, Type::JoinHandle) => true,
+        (Type::File, Type::File) => true,
         (Type::Box { inner: a_inner }, Type::Box { inner: b_inner }) => {
             types_equal(a_inner, b_inner)
         }
@@ -324,5 +328,7 @@ pub fn type_to_string(ty: &Type) -> String {
                 type_to_string(return_type)
             )
         }
+        Type::JoinHandle => "JoinHandle".to_string(),
+        Type::File => "File".to_string(),
     }
 }

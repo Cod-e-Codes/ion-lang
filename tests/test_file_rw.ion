@@ -1,0 +1,48 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let path: String = String::from("test_file_rw.tmp");
+    match File::create(&path) {
+        Option::Some(owned) => {
+            let mut file: File = owned;
+            let mut buf: Vec<u8> = Vec::new();
+            Vec::push(&mut buf, 65);
+            let n: int = File::write(&mut file, &buf);
+            File::close(&mut file);
+            if n != 1 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    match File::open(&path) {
+        Option::Some(owned) => {
+            let mut file: File = owned;
+            let mut buf: Vec<u8> = Vec::with_capacity(8);
+            let n: int = File::read(&mut file, &mut buf);
+            File::close(&mut file);
+            if n != 1 {
+                return 3;
+            }
+            match Vec::get(&buf, 0) {
+                Option::Some(b) => {
+                    if b != 65 {
+                        return 4;
+                    }
+                }
+                Option::None => {
+                    return 5;
+                }
+            };
+        }
+        Option::None => {
+            return 6;
+        }
+    };
+    return 0;
+}

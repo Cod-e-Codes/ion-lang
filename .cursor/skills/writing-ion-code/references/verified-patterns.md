@@ -168,7 +168,7 @@ fn main() -> int {
 }
 ```
 
-When the table reuses slots, store a `Handle` and peek locally. Annotate `let mut arena: Arena<int> = handle::new();`. Use `handle::copy(&h)` before a by-value `contains` / `remove` / peek. Through `&mut World`, `world.entities` is already `&mut Arena`; on an owned `World`, pass `&mut world.entities`.
+When the table reuses slots, store a `Handle` and peek locally. Annotate `let mut arena: Arena<int> = handle::new();`. Use `handle::copy(&h)` before a by-value `contains` / `remove` / peek. Prefer `arena.get_ref(h)` ([tests/test_arena_get_ref.ion](../../../../tests/test_arena_get_ref.ion)). Through `&mut World`, `world.entities` is already `&mut Arena`; on an owned `World`, pass `&mut world.entities`. The `slots.get_ref` form remains valid ([tests/test_handle_arena_get_ref.ion](../../../../tests/test_handle_arena_get_ref.ion)).
 
 ```ion
 import "stdlib/handle.ion" as handle;
@@ -180,16 +180,9 @@ enum Option<T> {
 
 fn peek_hp(arena: &Arena<int>, h: Handle) -> int {
     let mut found: int = -1;
-    match arena.slots.get_ref(h.index) {
-        Option::Some(slot) => {
-            match slot {
-                Slot::Occupied { generation: g, value: v } => {
-                    if g == h.generation {
-                        found = v;
-                    }
-                }
-                Slot::Free { generation: _g, next: _n } => {}
-            }
+    match arena.get_ref(h) {
+        Option::Some(v) => {
+            found = v;
         }
         Option::None => {}
     }
@@ -201,7 +194,7 @@ That peek binds `v` because `int` is Copy. For `T` with owned fields, match `val
 
 ## Mutating Vec elements
 
-`Vec::get` moves the element out. Copy fields, rebuild the struct, and `Vec::set` it back ([tests/test_vec_get_putback.ion](../../../../tests/test_vec_get_putback.ion)). A named local (`let row = Todo { ... }; Vec::set(..., row)`) is valid as the last match-arm statement ([tests/test_vec_get_putback_named.ion](../../../../tests/test_vec_get_putback_named.ion)). Helpers can take `&mut T` on an owned local:
+`Vec::get` moves the element out. Copy fields, rebuild the struct, and `Vec::set` it back ([tests/test_vec_get_putback.ion](../../../../tests/test_vec_get_putback.ion)). `Vec::set` returns `SetResult` (`Ok` / `OutOfBounds`); declare the enum. A named local (`let row = Todo { ... }; Vec::set(..., row)`) is valid as the last match-arm statement ([tests/test_vec_get_putback_named.ion](../../../../tests/test_vec_get_putback_named.ion)). Helpers can take `&mut T` on an owned local:
 
 ```ion
 fn mark_active(c: &mut Customer) {

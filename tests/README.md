@@ -112,6 +112,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_channel_send_closed.ion` - Send after last receiver drop returns `Closed(T)` (exit 9)
 - `test_channel_queued_string_drop.ion` - Queued `String` values dropped on channel destroy (exit 0)
 - `test_channel_capacity.ion` - `channel<int>(4)` same-thread send/recv (exit 10)
+- `test_try_recv.ion` - `try_recv` Empty then `try_send` Sent/Full then `try_recv` Msg (exit 0)
+- `test_select.ion` - `select` takes a ready recv arm; `default` polls when empty (exit 0)
+- `test_select_timeout.ion` - `timeout(1)` fires on an empty channel (exit 0)
+- `test_select_timeout_neg_error.ion` - literal `timeout(-1)` is `select timeout must be >= 0`
+- `test_join.ion` - `let h = spawn { }; join(h)` (exit 0)
 - `test_spawn_basic.ion` - Spawn statements
 - `test_spawn_channel.ion` - Cross-thread channel send/recv via spawn (channel handle drop at scope exit)
 - `test_if_basic.ion` - If statements with else
@@ -178,6 +183,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_handle_arena_basic.ion` - `stdlib/handle.ion` insert, `len`, `contains`, remove Hit then Miss (exit 42)
 - `test_handle_arena_stale.ion` - reused slot: stale handle is Miss / `contains` false (exit 42)
 - `test_handle_arena_get_ref.ion` - local peek via `Vec::get_ref` on `arena.slots` through `&World` / `&mut World` (exit 42)
+- `test_arena_get_ref.ion` - compiler builtin `arena.get_ref(handle)` Occupied peek (exit 0)
 - `test_handle_arena_copy_struct.ion` - `Arena<Item>` with `String` field; remove returns owned value (exit 42)
 - `test_handle_arena_escape_error.ion` - returning `&T` from a slot peek (`ReferenceEscape`)
 - `test_box_basic.ion` - Box<T> heap allocation
@@ -342,6 +348,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_fn_literal_ref_capture_error.ion` - Fn literal referencing outer reference (negative, `ClosureCapture`)
 - `test_doc_comments.ion` - Adjacent `//` doc comments attach to AST without affecting compile or runtime (exit 42)
 - `test_tuple_basic.ion` - Tuple literals, `.0`/`.1` access, and destructuring (exit 81)
+- `test_nested_tuple_eq.ion` - nested tuples, `==`/`!=`, struct field tuple, generic `(T, int)` param (exit 0)
+- `test_vec_set_result.ion` - `Vec::set` returns `SetResult::Ok` / `OutOfBounds` (exit 0)
+- `test_file_rw.ion` - `File::create` / `write` / `open` / `read` round-trip (exit 0)
+- `test_file_send_error.ion` - `channel<File>()` is not `Send`
 
 - `test_io_print_str.ion` - Safe I/O library: `print_str()` function
 - `test_io_print.ion` - Safe I/O library: `print()` function for String
@@ -462,7 +472,7 @@ Special cases (not in the manifest):
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
 - `ION_BUILD`: Path to the ion-build binary (default: `../target/release/ion-build`)
 - `CC`: C compiler to use (default: `gcc`)
-- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`), a leak-sanitizer (LSan) step (`detect_leaks=1`) on `Box::unwrap` tests plus named heap-drop `run` tests (Vec/Box/tuple/array/`break`/`continue`/`Vec::set` of `String`), thread sanitizer (TSan) on `test_channel_*` / `test_spawn_*` run tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux.
+- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`), a leak-sanitizer (LSan) step (`detect_leaks=1`) on `Box::unwrap` tests plus named heap-drop `run` tests (Vec/Box/tuple/array/`break`/`continue`/`Vec::set` of `String`), thread sanitizer (TSan) on `test_channel_*` / `test_spawn_*` / `test_join` / `test_select` / `test_try_recv` run tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux. macOS CI runs the harness with Clang.
 - `LDFLAGS`: Extra C linker flags for generated test executables (default: empty). Pair with `CFLAGS` for sanitizer runtime flags when needed.
 - `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 

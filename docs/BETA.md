@@ -23,10 +23,11 @@ library may rely on without an unstable marker:
 - functions, structs, enums, type aliases, modules, imports, and visibility;
 - primitive numeric and boolean types, arrays, slices, `String`, `Vec<T>`,
   `Box<T>`, and `Result<T, E>`;
-- `if`, `while`, `for`, `loop`, `break`, `continue`, `match`, guards, and
+- `if`, `while`, `for`, `loop`, `break`, `continue`, `match`, `select`, guards, and
   `defer`;
 - FFI through `extern "C"` and `unsafe`;
-- channels and `spawn` with structural `Send`;
+- channels, `try_send` / `try_recv`, `select`, `spawn` / `JoinHandle` / `join`, and structural `Send`;
+- owned `File` streaming I/O and `stdlib/fs.ion` whole-file read;
 - `ion-build` projects with `ion.toml` fields documented in `ION_SPEC.md`.
 
 0.1.24 is a breaking 0.x channel change: `recv` returns `Option<T>`, `send` returns `SendResult<T>`, `clone_sender` makes MPSC real, and `channel<T>(cap)` sets capacity. Last sender drop unblocks `recv` with `None`. See CHANGELOG 0.1.24.
@@ -35,7 +36,6 @@ library may rely on without an unstable marker:
 
 The following features may change shape before 1.0:
 
-- tuples beyond flat two-field values;
 - capture-free function literals and function-pointer coercions;
 - generic ergonomics with optional built-in trait bounds (`Copy`, `Eq`, `Send`);
 - byte-oriented string iteration;
@@ -60,5 +60,6 @@ Beta support is limited to platforms exercised in CI:
 
 - Linux with GCC or Clang-compatible C tooling.
 - Windows with MinGW GCC through Git Bash.
+- macOS (GitHub `macos-14`) with Clang-compatible C tooling.
 
-macOS and MSVC are best-effort until CI covers them.
+MSVC is best-effort until CI covers it.

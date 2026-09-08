@@ -22,6 +22,7 @@ pub const KEYWORDS: &[&str] = &[
     "loop",
     "match",
     "spawn",
+    "select",
     "defer",
     "unsafe",
     "pub",
@@ -52,10 +53,15 @@ pub const KEYWORDS: &[&str] = &[
     "Sender",
     "Receiver",
     "SendResult",
+    "TrySendResult",
+    "TryRecvResult",
+    "SetResult",
     "channel",
     "send",
     "recv",
     "clone_sender",
+    "JoinHandle",
+    "File",
 ];
 
 pub const BUILTINS: &[&str] = &[
@@ -72,6 +78,7 @@ pub const BUILTINS: &[&str] = &[
     "Slice::get_ref",
     "String::new",
     "String::from",
+    "String::from_utf8",
     "String::get",
     "String::len",
     "String::push_str",
@@ -82,6 +89,15 @@ pub const BUILTINS: &[&str] = &[
     "clone_sender",
     "send",
     "recv",
+    "try_send",
+    "try_recv",
+    "join",
+    "Arena::get_ref",
+    "File::open",
+    "File::create",
+    "File::read",
+    "File::write",
+    "File::close",
 ];
 
 pub const BUILTIN_TYPE_MEMBERS: &[(&str, &[&str])] = &[
@@ -101,9 +117,19 @@ pub const BUILTIN_TYPE_MEMBERS: &[(&str, &[&str])] = &[
     ),
     (
         "String",
-        &["new", "from", "get", "len", "push_str", "push_byte"],
+        &[
+            "new",
+            "from",
+            "from_utf8",
+            "get",
+            "len",
+            "push_str",
+            "push_byte",
+        ],
     ),
     ("Slice", &["len", "get_ref"]),
+    ("Arena", &["get_ref"]),
+    ("File", &["open", "create", "read", "write", "close"]),
     ("Box", &["new", "unwrap"]),
     ("int", &["MIN", "MAX"]),
     ("i8", &["MIN", "MAX"]),

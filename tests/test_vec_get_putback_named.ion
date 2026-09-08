@@ -5,6 +5,11 @@ enum Option<T> {
     None;
 }
 
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 struct Todo {
     id: int;
     label: String;

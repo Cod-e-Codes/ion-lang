@@ -378,3 +378,13 @@ test_shift_width_panic.ion	cgen			ion_panic("shift amount out of range")
 test_assign_index_oob.ion	cgen			ion_panic("Array index out of bounds")
 test_string_from_utf8.ion	run	0
 test_match_move_join_error.ion	error		UseAfterMove
+test_try_recv.ion	run	0
+test_select.ion	run	0
+test_select_timeout.ion	run	0
+test_join.ion	run	0
+test_arena_get_ref.ion	run	0
+test_nested_tuple_eq.ion	run	0
+test_vec_set_result.ion	run	0
+test_file_rw.ion	run	0
+test_select_timeout_neg_error.ion	error		select timeout must be >= 0
+test_file_send_error.ion	error		Send element type for channel

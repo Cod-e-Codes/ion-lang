@@ -24,6 +24,24 @@ pub enum ParseError {
     Message(String),
 }
 
+fn stmt_end_span(stmt: &Stmt) -> Span {
+    match stmt {
+        Stmt::Let(s) => s.span,
+        Stmt::Return(s) => s.span,
+        Stmt::Break(s) => s.span,
+        Stmt::Continue(s) => s.span,
+        Stmt::Expr(s) => s.expr.span(),
+        Stmt::Defer(s) => s.span,
+        Stmt::Spawn(s) => s.span,
+        Stmt::Select(s) => s.span,
+        Stmt::If(s) => s.span,
+        Stmt::While(s) => s.span,
+        Stmt::Loop(s) => s.span,
+        Stmt::For(s) => s.span,
+        Stmt::UnsafeBlock(s) => s.span,
+    }
+}
+
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -430,6 +448,7 @@ impl Parser {
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
+                Stmt::Select(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
                 Stmt::Loop(s) => s.span,
@@ -478,6 +497,7 @@ impl Parser {
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
+                Stmt::Select(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
                 Stmt::Loop(s) => s.span,
@@ -728,6 +748,10 @@ impl Parser {
                         self.advance();
                         Ok(Type::String)
                     }
+                    TokenKind::File => {
+                        self.advance();
+                        Ok(Type::File)
+                    }
                     TokenKind::Box => {
                         self.advance(); // consume 'Box'
                         self.expect(TokenKind::Less)?;
@@ -759,6 +783,12 @@ impl Parser {
                     TokenKind::Ident(name) => {
                         let type_name = name.clone();
                         self.advance();
+                        if type_name == "JoinHandle" {
+                            return Ok(Type::JoinHandle);
+                        }
+                        if type_name == "File" {
+                            return Ok(Type::File);
+                        }
                         // Check for built-in generic types first
                         if type_name == "Sender" || type_name == "Receiver" {
                             self.expect(TokenKind::Less)?;
@@ -1146,6 +1176,10 @@ impl Parser {
                 let stmt = self.parse_spawn_stmt()?;
                 Ok(Stmt::Spawn(stmt))
             }
+            TokenKind::Select => {
+                let stmt = self.parse_select_stmt()?;
+                Ok(Stmt::Select(stmt))
+            }
             TokenKind::While => {
                 let stmt = self.parse_while_stmt()?;
                 Ok(Stmt::While(stmt))
@@ -1201,6 +1235,7 @@ impl Parser {
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
+                Stmt::Select(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
                 Stmt::Loop(s) => s.span,
@@ -1228,6 +1263,7 @@ impl Parser {
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
+                Stmt::Select(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
                 Stmt::Loop(s) => s.span,
@@ -1292,6 +1328,7 @@ impl Parser {
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
+                Stmt::Select(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
                 Stmt::Loop(s) => s.span,
@@ -1340,6 +1377,7 @@ impl Parser {
                         Stmt::Expr(s) => s.expr.span(),
                         Stmt::Defer(s) => s.span,
                         Stmt::Spawn(s) => s.span,
+                        Stmt::Select(s) => s.span,
                         Stmt::If(s) => s.span,
                         Stmt::While(s) => s.span,
                         Stmt::Loop(s) => s.span,
@@ -1556,6 +1594,7 @@ impl Parser {
                     Stmt::Expr(s) => s.expr.span(),
                     Stmt::Defer(s) => s.span,
                     Stmt::Spawn(s) => s.span,
+                    Stmt::Select(s) => s.span,
                     Stmt::If(s) => s.span,
                     Stmt::While(s) => s.span,
                     Stmt::Loop(s) => s.span,
@@ -1575,6 +1614,7 @@ impl Parser {
                     Stmt::Expr(s) => s.expr.span(),
                     Stmt::Defer(s) => s.span,
                     Stmt::Spawn(s) => s.span,
+                    Stmt::Select(s) => s.span,
                     Stmt::If(s) => s.span,
                     Stmt::While(s) => s.span,
                     Stmt::Loop(s) => s.span,
@@ -1740,6 +1780,7 @@ impl Parser {
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
+                Stmt::Select(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
                 Stmt::Loop(s) => s.span,
@@ -1750,6 +1791,154 @@ impl Parser {
         let span = spawn_token_span.merge(&end_span);
 
         Ok(SpawnStmt { body, span })
+    }
+
+    fn parse_select_stmt(&mut self) -> Result<SelectStmt, ParseError> {
+        let select_span = Span::from_token(self.expect(TokenKind::Select)?);
+        self.expect(TokenKind::LBrace)?;
+
+        let mut recv_arms = Vec::new();
+        let mut default_body = None;
+        let mut timeout_ms = None;
+        let mut timeout_body = None;
+
+        while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
+            if matches!(self.peek().kind, TokenKind::Let) {
+                self.advance();
+                let name_tok = self.peek();
+                let binding = if let TokenKind::Ident(name) = &name_tok.kind {
+                    let n = name.clone();
+                    self.advance();
+                    n
+                } else {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "binding name".to_string(),
+                        got: name_tok.kind.clone(),
+                        span: Span::from_token(name_tok),
+                    });
+                };
+                self.expect(TokenKind::Equals)?;
+                let recv = self.parse_recv_expr()?;
+                self.expect(TokenKind::Arrow)?;
+                let body = self.parse_block()?;
+                let span = recv.span.merge(
+                    &body
+                        .statements
+                        .last()
+                        .map(stmt_end_span)
+                        .unwrap_or(recv.span),
+                );
+                recv_arms.push(SelectRecvArm {
+                    binding: Some(binding),
+                    recv,
+                    body,
+                    span,
+                });
+            } else if matches!(self.peek().kind, TokenKind::Recv) {
+                let recv = self.parse_recv_expr()?;
+                self.expect(TokenKind::Arrow)?;
+                let body = self.parse_block()?;
+                let span = recv.span.merge(
+                    &body
+                        .statements
+                        .last()
+                        .map(stmt_end_span)
+                        .unwrap_or(recv.span),
+                );
+                recv_arms.push(SelectRecvArm {
+                    binding: None,
+                    recv,
+                    body,
+                    span,
+                });
+            } else if let TokenKind::Ident(name) = &self.peek().kind {
+                if name == "default" {
+                    if default_body.is_some() {
+                        return Err(ParseError::Message(
+                            "select has more than one default arm".to_string(),
+                        ));
+                    }
+                    self.advance();
+                    self.expect(TokenKind::Arrow)?;
+                    default_body = Some(self.parse_block()?);
+                } else if name == "timeout" {
+                    if timeout_body.is_some() {
+                        return Err(ParseError::Message(
+                            "select has more than one timeout arm".to_string(),
+                        ));
+                    }
+                    self.advance();
+                    self.expect(TokenKind::LParen)?;
+                    let ms = self.parse_expr()?;
+                    self.expect(TokenKind::RParen)?;
+                    self.expect(TokenKind::Arrow)?;
+                    timeout_ms = Some(ms);
+                    timeout_body = Some(self.parse_block()?);
+                } else {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "recv, default, or timeout arm".to_string(),
+                        got: TokenKind::Ident(name.clone()),
+                        span: Span::from_token(self.peek()),
+                    });
+                }
+            } else {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "recv, default, or timeout arm".to_string(),
+                    got: self.peek().kind.clone(),
+                    span: Span::from_token(self.peek()),
+                });
+            }
+            if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Comma) {
+                self.advance();
+            }
+        }
+
+        self.expect(TokenKind::RBrace)?;
+        if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Semicolon) {
+            let _ = self.advance();
+        }
+
+        if recv_arms.is_empty() && default_body.is_none() && timeout_body.is_none() {
+            return Err(ParseError::Message(
+                "select requires at least one arm".to_string(),
+            ));
+        }
+        if default_body.is_some() && timeout_body.is_some() {
+            return Err(ParseError::Message(
+                "select cannot have both default and timeout arms".to_string(),
+            ));
+        }
+
+        let end_span = recv_arms
+            .last()
+            .map(|a| a.span)
+            .or_else(|| {
+                default_body
+                    .as_ref()
+                    .and_then(|b| b.statements.last().map(stmt_end_span))
+            })
+            .unwrap_or(select_span);
+        Ok(SelectStmt {
+            recv_arms,
+            default_body,
+            timeout_ms,
+            timeout_body,
+            span: select_span.merge(&end_span),
+        })
+    }
+
+    fn parse_recv_expr(&mut self) -> Result<RecvExpr, ParseError> {
+        let recv_token = self.expect(TokenKind::Recv)?;
+        let start_span = Span::from_token(recv_token);
+        self.expect(TokenKind::LParen)?;
+        let channel = self.parse_expr()?;
+        self.expect(TokenKind::RParen)?;
+        let end_span = channel.span();
+        Ok(RecvExpr {
+            id: ExprId::UNASSIGNED,
+            channel: Box::new(channel),
+            span: start_span.merge(&end_span),
+        })
     }
 
     fn parse_unsafe_block(&mut self) -> Result<UnsafeBlockStmt, ParseError> {
@@ -1768,6 +1957,7 @@ impl Parser {
                 Stmt::Expr(s) => s.expr.span(),
                 Stmt::Defer(s) => s.span,
                 Stmt::Spawn(s) => s.span,
+                Stmt::Select(s) => s.span,
                 Stmt::If(s) => s.span,
                 Stmt::While(s) => s.span,
                 Stmt::Loop(s) => s.span,
@@ -2251,6 +2441,7 @@ impl Parser {
                 | TokenKind::Else
                 | TokenKind::Defer
                 | TokenKind::Spawn
+                | TokenKind::Select
                 | TokenKind::Unsafe => {
                     break;
                 }
@@ -2305,6 +2496,7 @@ impl Parser {
                             | TokenKind::Else
                             | TokenKind::Defer
                             | TokenKind::Spawn
+                            | TokenKind::Select
                             | TokenKind::Unsafe
                     ) {
                         return Err(ParseError::UnexpectedToken {
@@ -2482,6 +2674,7 @@ impl Parser {
                 TokenKind::Vec => "Vec",
                 TokenKind::String => "String",
                 TokenKind::Slice => "Slice",
+                TokenKind::File => "File",
                 _ => "",
             };
 
@@ -2886,6 +3079,7 @@ impl Parser {
                             | TokenKind::Else
                             | TokenKind::Defer
                             | TokenKind::Spawn
+                            | TokenKind::Select
                             | TokenKind::Unsafe => true,
                             TokenKind::Ident(_) => {
                                 // Struct fields are `name: expr`. Calls (`f(`), assigns
@@ -3020,20 +3214,24 @@ impl Parser {
                     span,
                 }))
             }
-            TokenKind::Recv => {
-                // recv(ch)
-                let recv_token = self.advance();
-                let start_span = Span::from_token(recv_token);
-                self.expect(TokenKind::LParen)?;
-                let channel = self.parse_expr()?;
-                self.expect(TokenKind::RParen)?;
-                let end_span = channel.span();
-                let span = start_span.merge(&end_span);
-                Ok(Expr::Recv(RecvExpr {
+            TokenKind::Spawn => {
+                let spawn_token = self.advance();
+                let start_span = Span::from_token(spawn_token);
+                let body = self.parse_block()?;
+                let end_span = body
+                    .statements
+                    .last()
+                    .map(stmt_end_span)
+                    .unwrap_or(start_span);
+                Ok(Expr::Spawn(SpawnExpr {
                     id: ExprId::UNASSIGNED,
-                    channel: Box::new(channel),
-                    span,
+                    body,
+                    span: start_span.merge(&end_span),
                 }))
+            }
+            TokenKind::Recv => {
+                let recv = self.parse_recv_expr()?;
+                Ok(Expr::Recv(recv))
             }
             TokenKind::LParen => {
                 let start_span = span;
@@ -3288,6 +3486,7 @@ impl HasSpan for Expr {
             Expr::Ref(e) => e.span,
             Expr::Send(e) => e.span,
             Expr::Recv(e) => e.span,
+            Expr::Spawn(e) => e.span,
             Expr::StructLit(e) => e.span,
             Expr::FieldAccess(e) => e.span,
             Expr::EnumLit(e) => e.span,

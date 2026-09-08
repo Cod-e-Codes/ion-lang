@@ -47,6 +47,16 @@ jobs:
           ION_BUILD: ${{ github.workspace }}/target/release/ion-build
         run: cd tests && bash test_runner.sh
 
+      - name: Generated C warning-clean
+        shell: bash
+        env:
+          COMPILER: ${{ github.workspace }}/target/release/ion-compiler
+          ION_BUILD: ${{ github.workspace }}/target/release/ion-build
+          CC: gcc
+          CFLAGS: -Wall -Wextra -Werror
+          RUNTIME_OBJ: .ion_test_runtime_werror.o
+        run: cd tests && bash test_runner.sh
+
       - name: Confirm tag matches Cargo.toml version
         shell: bash
         run: |

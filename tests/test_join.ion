@@ -1,0 +1,7 @@
+fn main() -> int {
+    let h: JoinHandle = spawn {
+        let x: int = 1;
+    };
+    join(h);
+    return 0;
+}

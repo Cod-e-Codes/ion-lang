@@ -1,5 +1,15 @@
 // Test method calls with mutable receivers
 
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 fn main() -> int {
     // Test mutable Vec methods
     let mut vec: Vec<int> = Vec::new();

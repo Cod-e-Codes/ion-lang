@@ -71,6 +71,8 @@ impl Codegen {
                 | Type::String
                 | Type::Sender { .. }
                 | Type::Receiver { .. }
+                | Type::JoinHandle
+                | Type::File
         )
     }
 
@@ -376,6 +378,14 @@ impl Codegen {
             Type::String => {
                 self.write_indent();
                 self.writeln(&format!("if ({path}) {{ ion_string_free({path}); }}"));
+            }
+            Type::JoinHandle => {
+                self.write_indent();
+                self.writeln(&format!("ion_thread_detach(&({path}));"));
+            }
+            Type::File => {
+                self.write_indent();
+                self.writeln(&format!("ion_file_close(&({path}));"));
             }
             Type::Sender { .. } => {
                 self.write_indent();

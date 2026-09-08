@@ -53,7 +53,7 @@ Stable beta expectations:
 - `Vec::new`, `Vec::push`, `Vec::pop`, `Vec::get`, `Vec::get_ref`, `Vec::set`, `Vec::len`, and
   `Vec::capacity` remain available through the stdlib/builtin surface.
 - Dropping `Vec<T>` drops owned elements when `T` needs destruction (compiler drop glue over `0..len`, then `ion_vec_free`). The runtime helper does not take a destructor callback.
-- `Vec::get` of a dropping `T` copies the element into `Option<T>` and hollows the slot. `Vec::set` of a dropping `T` drops the previous element before overwrite.
+- `Vec::get` of a dropping `T` copies the element into `Option<T>` and hollows the slot. `Vec::set` of a dropping `T` drops the previous element before overwrite. Generated C wraps the runtime status in conventional `SetResult` (`Ok` / `OutOfBounds`).
 - Bounds-sensitive operations either return `Option<T>` where documented or
   trigger the runtime panic path for checked indexing.
 - `Vec::get` / `Vec::pop` return heap `Option` blobs from the runtime; generated
@@ -152,11 +152,21 @@ Stable beta expectations:
 - `ion_channel_new(elem_size, capacity, drop_fn, sender_out, receiver_out)` panics if `capacity < 1`. `drop_fn` may be NULL when `T` needs no destructor.
 - Runtime tracks `sender_count` and `receiver_count` separately. Last sender drop disconnects receive; last receiver drop disconnects send. Destroy runs when both counts are 0 and drops remaining buffered `T` through `drop_fn`.
 - `ion_channel_send` returns 0 on success and non-zero when no receiver remains (value is not copied). `ion_channel_recv` returns 0 on success and non-zero when disconnected and empty (`out_value` unchanged).
+- `ion_channel_try_send` returns 0 sent, `-1` closed, `-2` full. `ion_channel_try_recv` returns 0 message, `-1` closed, `-2` empty. Generated Ion maps those to `TrySendResult<T>` / `TryRecvResult<T>`.
+- `ion_channel_select` waits on `ion_select_arm_t` receivers and copies the chosen message (no TOCTOU). `timeout_ms` is `0` (poll), `>0` (wait ms), or `-1` (wait forever). Values `< -1` panic.
 - `ion_channel_clone_sender` copies a sender handle and increments `sender_count`.
 - Generated Ion `send` / `recv` consume those status codes (`SendResult<T>` / `Option<T>`). Statement `send` still drops `Closed(T)`.
 - Channel handles are runtime resources released by `ion_channel_sender_drop` / `ion_channel_receiver_drop`.
+- Statement `spawn { };` uses `ion_spawn` (detach). Expression `let h = spawn { };` uses `ion_spawn_joinable` into `ion_thread_t` (`JoinHandle`). Drop of a live handle calls `ion_thread_detach`. `join` calls `ion_join`.
 - Runtime failures such as allocation or thread creation failures call the Ion
   panic path.
+
+## `File`
+
+`File` is an owned `ion_file_t` (`void *fp`). Not `Send`. Drop and `File::close`
+call `ion_file_close`. `File::open` / `File::create` wrap `fopen` (`"rb"` /
+`"w+b"`) and return `Option<File>`. `File::read` fills up to `Vec<u8>` capacity
+and sets length; `File::write` writes `len` bytes. POSIX and MinGW only.
 
 ## Drops and panics
 

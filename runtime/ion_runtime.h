@@ -33,12 +33,42 @@ void ion_net_init(void);
 
 /**
  * Spawns a new OS thread that begins execution at start_routine(arg).
+ * The thread is detached (same as dropping an unused JoinHandle).
  *
  * @param start_routine Function pointer to the thread entry point
  * @param arg Argument passed to start_routine
  * @return 0 on success, non-zero on failure
  */
 int ion_spawn(void *(*start_routine)(void *), void *arg);
+
+/**
+ * Joinable thread handle. Not Copy. Send. Drop detaches if still live.
+ * `thread` is an opaque pthread_t-sized slot filled by the runtime.
+ */
+typedef struct {
+  unsigned char thread[16];
+  int live;
+} ion_thread_t;
+
+/**
+ * Spawns a joinable OS thread. On success, *out is live and must be joined or
+ * detached exactly once.
+ *
+ * @return 0 on success, non-zero on failure (*out unchanged)
+ */
+int ion_spawn_joinable(void *(*start_routine)(void *), void *arg,
+                       ion_thread_t *out);
+
+/**
+ * Waits for the thread to finish and marks the handle not live.
+ * @return 0 on success, non-zero if the handle is not live or join fails
+ */
+int ion_join(ion_thread_t *thread);
+
+/**
+ * Detaches a live handle so the thread is not joined. No-op if not live.
+ */
+void ion_thread_detach(ion_thread_t *thread);
 
 // ============================================================================
 // Channels
@@ -101,6 +131,41 @@ int ion_channel_send(const ion_sender_t *sender, const void *value);
  * @return 0 on success, non-zero if disconnected and empty (out_value unchanged)
  */
 int ion_channel_recv(ion_receiver_t *receiver, void *out_value);
+
+/**
+ * Nonblocking send. Does not wait if the buffer is full.
+ *
+ * @return 0 sent, -1 closed (value not copied), -2 full (value not copied)
+ */
+int ion_channel_try_send(const ion_sender_t *sender, const void *value);
+
+/**
+ * Nonblocking receive. Does not wait if the buffer is empty.
+ *
+ * @return 0 got a message, -1 closed and empty, -2 empty (still open)
+ */
+int ion_channel_try_recv(ion_receiver_t *receiver, void *out_value);
+
+/**
+ * One select arm: wait to receive into out (elem_size bytes).
+ */
+typedef struct {
+  ion_receiver_t *rx;
+  void *out;
+} ion_select_arm_t;
+
+/**
+ * Wait until one arm can take a message (or is closed-empty), a default poll,
+ * or a timeout. The chosen arm actually copies the message (no TOCTOU).
+ *
+ * timeout_ms: 0 = poll (default arm), >0 = wait up to that many milliseconds,
+ *             -1 = wait forever (no default or timeout arm). Values < -1 panic.
+ * @return arm index if a recv arm ran (message copied or closed-empty with
+ *         out unchanged and a closed indication via ion_channel_try_recv
+ *         status stored in *status_out when non-NULL), n for default/timeout
+ */
+int ion_channel_select(ion_select_arm_t *arms, int n, int timeout_ms,
+                       int *status_out);
 
 /**
  * Copies a sender handle and increments the sender count.
@@ -312,6 +377,40 @@ int ion_string_equals(const ion_string_t *a, const ion_string_t *b);
  * @param s Pointer to string to free
  */
 void ion_string_free(ion_string_t *s);
+
+// ============================================================================
+// File
+// ============================================================================
+
+/**
+ * Owned file handle. Not Send. Drop closes. fp is NULL after close.
+ */
+typedef struct {
+  void *fp;
+} ion_file_t;
+
+/**
+ * Opens path with fopen mode (e.g. "rb", "w+b"). Returns a handle with fp
+ * NULL on failure.
+ */
+ion_file_t ion_file_open(const char *path, const char *mode);
+
+/**
+ * Reads up to n bytes into buf. *out_n is bytes read. Returns 0 on success
+ * (including EOF with *out_n == 0), non-zero on error.
+ */
+int ion_file_read(ion_file_t *file, void *buf, size_t n, size_t *out_n);
+
+/**
+ * Writes n bytes from buf. *out_n is bytes written. Returns 0 on success,
+ * non-zero on error.
+ */
+int ion_file_write(ion_file_t *file, const void *buf, size_t n, size_t *out_n);
+
+/**
+ * Closes the file if still open and clears fp. Safe to call twice.
+ */
+void ion_file_close(ion_file_t *file);
 
 #ifdef __cplusplus
 }

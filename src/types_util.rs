@@ -66,6 +66,28 @@ pub fn infer_generic_substitutions(
         (Type::Box { inner: e }, Type::Box { inner: a }) => {
             subs.extend(infer_generic_substitutions(e, a, fn_generics));
         }
+        (
+            Type::Array { inner: e, size: es },
+            Type::Array {
+                inner: a,
+                size: asz,
+            },
+        ) if es == asz => {
+            subs.extend(infer_generic_substitutions(e, a, fn_generics));
+        }
+        (Type::Slice { inner: e }, Type::Slice { inner: a }) => {
+            subs.extend(infer_generic_substitutions(e, a, fn_generics));
+        }
+        (Type::Tuple { elements: e }, Type::Tuple { elements: a }) if e.len() == a.len() => {
+            for (ee, aa) in e.iter().zip(a.iter()) {
+                subs.extend(infer_generic_substitutions(ee, aa, fn_generics));
+            }
+        }
+        (Type::Sender { elem_type: e }, Type::Sender { elem_type: a })
+        | (Type::Receiver { elem_type: e }, Type::Receiver { elem_type: a })
+        | (Type::Channel { elem_type: e }, Type::Channel { elem_type: a }) => {
+            subs.extend(infer_generic_substitutions(e, a, fn_generics));
+        }
         _ => {}
     }
     subs

@@ -4,6 +4,11 @@ enum Option<T> {
     None;
 }
 
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
 fn main() -> int {
     let mut v: Vec<i32> = Vec::new();
     let cap: i32 = 4;

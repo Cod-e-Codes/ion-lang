@@ -46,6 +46,7 @@ pub enum IRStmt {
     Expr(IREexpr),
     Defer(IREexpr),
     Spawn(IRSpawn),
+    Select(IRSelect),
     If(IRIf),
     While(IRWhile),
     UnsafeBlock(IRUnsafeBlock),
@@ -77,6 +78,22 @@ pub struct IRReturn {
 pub struct IRSpawn {
     pub captures: Vec<(String, Type)>,
     pub body: IRBlock,
+}
+
+#[derive(Debug, Clone)]
+pub struct IRSelectRecvArm {
+    pub binding: Option<String>,
+    pub channel: IREexpr,
+    pub elem_type: Type,
+    pub body: IRBlock,
+}
+
+#[derive(Debug, Clone)]
+pub struct IRSelect {
+    pub recv_arms: Vec<IRSelectRecvArm>,
+    pub default_body: Option<IRBlock>,
+    pub timeout_ms: Option<IREexpr>,
+    pub timeout_body: Option<IRBlock>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +141,10 @@ pub enum IREexpr {
     Recv {
         channel: Box<IREexpr>,
         elem_type: Type,
+    },
+    Spawn {
+        captures: Vec<(String, Type)>,
+        body: IRBlock,
     },
     StructLit {
         type_name: String,
@@ -202,6 +223,7 @@ pub struct IRMatchArm {
     pub body: IRBlock,
 }
 
+#[derive(Clone)]
 struct LoweringContext {
     var_types: HashMap<String, Type>,
     struct_decls: HashMap<String, StructDecl>,
@@ -620,6 +642,35 @@ impl IRBuilder {
 
                 out.push(IRStmt::Spawn(IRSpawn { captures, body }));
             }
+            Stmt::Select(select_stmt) => {
+                let mut recv_arms = Vec::new();
+                for arm in &select_stmt.recv_arms {
+                    recv_arms.push(IRSelectRecvArm {
+                        binding: arm.binding.clone(),
+                        channel: build_expr_with_ctx(&arm.recv.channel, ctx),
+                        elem_type: resolve_recv_elem_type(&arm.recv.channel, ctx),
+                        body: Self::lower_ast_block("select_arm", &arm.body, ctx),
+                    });
+                }
+                let default_body = select_stmt
+                    .default_body
+                    .as_ref()
+                    .map(|b| Self::lower_ast_block("select_default", b, ctx));
+                let timeout_ms = select_stmt
+                    .timeout_ms
+                    .as_ref()
+                    .map(|e| build_expr_with_ctx(e, ctx));
+                let timeout_body = select_stmt
+                    .timeout_body
+                    .as_ref()
+                    .map(|b| Self::lower_ast_block("select_timeout", b, ctx));
+                out.push(IRStmt::Select(IRSelect {
+                    recv_arms,
+                    default_body,
+                    timeout_ms,
+                    timeout_body,
+                }));
+            }
             Stmt::If(if_stmt) => {
                 let cond = build_expr_with_ctx(&if_stmt.cond, ctx);
                 let then_block = Self::lower_ast_block("then_block", &if_stmt.then_block, ctx);
@@ -915,6 +966,22 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             channel: Box::new(build_expr_with_ctx(&recv_expr.channel, ctx)),
             elem_type: resolve_recv_elem_type(&recv_expr.channel, ctx),
         },
+        Expr::Spawn(spawn_expr) => {
+            let captured_names = collect_captured_vars(&spawn_expr.body);
+            let mut captures = Vec::new();
+            for name in captured_names {
+                if let Some(ty) = ctx.var_types.get(&name) {
+                    captures.push((name, ty.clone()));
+                }
+            }
+            let mut spawn_ctx = ctx.clone();
+            spawn_ctx.var_types.clear();
+            for (name, ty) in &captures {
+                spawn_ctx.record_binding(name, ty);
+            }
+            let body = IRBuilder::lower_ast_block("spawn_body", &spawn_expr.body, &mut spawn_ctx);
+            IREexpr::Spawn { captures, body }
+        }
         Expr::StructLit(lit) => IREexpr::StructLit {
             type_name: lit.type_name.clone(),
             fields: lit
@@ -1065,15 +1132,39 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 Some(Type::Array { .. }) => true,
                 _ => false,
             };
+            let receiver_is_arena = match receiver_ty.as_ref() {
+                Some(Type::Generic { name, .. }) if name == "Arena" => true,
+                Some(Type::Struct(name)) if name == "Arena" => true,
+                Some(Type::Ref { inner, .. }) => match inner.as_ref() {
+                    Type::Generic { name, .. } if name == "Arena" => true,
+                    Type::Struct(name) if name == "Arena" => true,
+                    _ => false,
+                },
+                _ => false,
+            };
+            let receiver_is_file = match receiver_ty.as_ref() {
+                Some(Type::File) => true,
+                Some(Type::Ref { inner, .. }) => matches!(**inner, Type::File),
+                _ => false,
+            };
             let is_string =
                 string_methods.contains(&method_call.method.as_str()) && receiver_is_string;
             let is_slice = (method_call.method == "get_ref" || method_call.method == "len")
                 && receiver_is_slice;
+            let is_arena = method_call.method == "get_ref" && receiver_is_arena;
+            let is_file = matches!(method_call.method.as_str(), "read" | "write" | "close")
+                && receiver_is_file;
             let is_vec = vec_methods.contains(&method_call.method.as_str())
                 && !receiver_is_string
-                && !is_slice;
+                && !is_slice
+                && !is_arena
+                && !is_file;
             let callee = if is_slice {
                 format!("Slice::{}", method_call.method)
+            } else if is_arena {
+                format!("Arena::{}", method_call.method)
+            } else if is_file {
+                format!("File::{}", method_call.method)
             } else if is_vec {
                 format!("Vec::{}", method_call.method)
             } else if is_string {
@@ -1093,11 +1184,22 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     | "get_ref"
                     | "push_str"
                     | "push_byte"
+                    | "read"
+                    | "write"
+                    | "close"
             );
             let receiver_expr = if receiver_is_ref {
                 let mutable = matches!(
                     method_call.method.as_str(),
-                    "push" | "pop" | "set" | "with_capacity" | "push_str" | "push_byte"
+                    "push"
+                        | "pop"
+                        | "set"
+                        | "with_capacity"
+                        | "push_str"
+                        | "push_byte"
+                        | "read"
+                        | "write"
+                        | "close"
                 );
                 // Already `&[]T` / `&String` / `&Vec<T>`: pass through without double-ref.
                 let already_ref = matches!(receiver_ty.as_ref(), Some(Type::Ref { .. }));
@@ -1241,6 +1343,29 @@ fn slice_elem_type_from_arg_expr(arg: &Expr, ctx: &LoweringContext) -> Option<Ty
 fn builtin_option_vec_return(callee: &str, args: &[Expr], ctx: &LoweringContext) -> Option<Type> {
     if callee == "Vec::get_ref" {
         let elem = vec_elem_type_from_arg_expr(args.first()?, ctx)?;
+        return Some(Type::Generic {
+            name: "Option".to_string(),
+            params: vec![Type::Ref {
+                inner: Box::new(elem),
+                mutable: false,
+            }],
+        });
+    }
+    if callee == "Arena::get_ref" {
+        let ty = match args.first()? {
+            Expr::Ref(r) => ctx.resolve_expr_type(&r.inner)?,
+            _ => ctx.resolve_expr_type(args.first()?)?,
+        };
+        let inner = match ty {
+            Type::Ref { inner, .. } => *inner,
+            other => other,
+        };
+        let elem = match inner {
+            Type::Generic { name, params } if name == "Arena" && params.len() == 1 => {
+                params[0].clone()
+            }
+            _ => return None,
+        };
         return Some(Type::Generic {
             name: "Option".to_string(),
             params: vec![Type::Ref {
@@ -1471,6 +1596,21 @@ fn rewrite_generic_calls_in_block(
                 }
                 rewrite_generic_calls_in_block(&mut spawn.body, ctx, &mut spawn_vars);
             }
+            IRStmt::Select(sel) => {
+                for arm in &mut sel.recv_arms {
+                    rewrite_generic_calls_in_expr(&mut arm.channel, ctx, var_types);
+                    rewrite_generic_calls_in_block(&mut arm.body, ctx, var_types);
+                }
+                if let Some(body) = &mut sel.default_body {
+                    rewrite_generic_calls_in_block(body, ctx, var_types);
+                }
+                if let Some(ms) = &mut sel.timeout_ms {
+                    rewrite_generic_calls_in_expr(ms, ctx, var_types);
+                }
+                if let Some(body) = &mut sel.timeout_body {
+                    rewrite_generic_calls_in_block(body, ctx, var_types);
+                }
+            }
         }
     }
 }
@@ -1531,6 +1671,13 @@ fn rewrite_generic_calls_in_expr(
         }
         IREexpr::Recv { channel, .. } => {
             rewrite_generic_calls_in_expr(channel, ctx, var_types);
+        }
+        IREexpr::Spawn { captures, body } => {
+            let mut spawn_vars = var_types.clone();
+            for (name, ty) in captures.iter() {
+                spawn_vars.insert(name.clone(), ty.clone());
+            }
+            rewrite_generic_calls_in_block(body, ctx, &mut spawn_vars);
         }
         IREexpr::StructLit { fields, .. } => {
             for field in fields {
@@ -1735,6 +1882,8 @@ fn type_name_for_mangle(ty: &Type) -> String {
         Type::U64 => "u64".to_string(),
         Type::UInt => "uint".to_string(),
         Type::String | Type::Str => "str".to_string(),
+        Type::JoinHandle => "JoinHandle".to_string(),
+        Type::File => "File".to_string(),
         Type::Struct(name) | Type::Enum(name) => name.clone(),
         Type::Generic { name, params } => mangle_type_name(name, params),
         Type::Box { inner } => mangle_type_name("Box", std::slice::from_ref(inner)),
@@ -1841,6 +1990,30 @@ fn substitute_types_in_stmt(stmt: &IRStmt, substitutions: &HashMap<String, Type>
                 .collect(),
             body: substitute_types_in_block(&spawn.body, substitutions),
         }),
+        IRStmt::Select(sel) => IRStmt::Select(IRSelect {
+            recv_arms: sel
+                .recv_arms
+                .iter()
+                .map(|arm| IRSelectRecvArm {
+                    binding: arm.binding.clone(),
+                    channel: substitute_types_in_expr(&arm.channel, substitutions),
+                    elem_type: substitute_type(&arm.elem_type, substitutions),
+                    body: substitute_types_in_block(&arm.body, substitutions),
+                })
+                .collect(),
+            default_body: sel
+                .default_body
+                .as_ref()
+                .map(|b| substitute_types_in_block(b, substitutions)),
+            timeout_ms: sel
+                .timeout_ms
+                .as_ref()
+                .map(|e| substitute_types_in_expr(e, substitutions)),
+            timeout_body: sel
+                .timeout_body
+                .as_ref()
+                .map(|b| substitute_types_in_block(b, substitutions)),
+        }),
         IRStmt::If(ir_if) => IRStmt::If(IRIf {
             cond: substitute_types_in_expr(&ir_if.cond, substitutions),
             then_block: substitute_types_in_block(&ir_if.then_block, substitutions),
@@ -1894,6 +2067,13 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
         IREexpr::Recv { channel, elem_type } => IREexpr::Recv {
             channel: Box::new(substitute_types_in_expr(channel, substitutions)),
             elem_type: substitute_type(elem_type, substitutions),
+        },
+        IREexpr::Spawn { captures, body } => IREexpr::Spawn {
+            captures: captures
+                .iter()
+                .map(|(name, ty)| (name.clone(), substitute_type(ty, substitutions)))
+                .collect(),
+            body: substitute_types_in_block(body, substitutions),
         },
         IREexpr::Index {
             target,
@@ -2156,7 +2336,9 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
         | Type::U64
         | Type::UInt
         | Type::String
-        | Type::Str => ty.clone(),
+        | Type::Str
+        | Type::JoinHandle
+        | Type::File => ty.clone(),
     }
 }
 
