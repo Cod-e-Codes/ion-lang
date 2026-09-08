@@ -115,6 +115,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_try_recv.ion` - `try_recv` Empty then `try_send` Sent/Full then `try_recv` Msg (exit 0)
 - `test_select.ion` - `select` takes a ready recv arm; `default` polls when empty (exit 0)
 - `test_select_timeout.ion` - `timeout(1)` fires on an empty channel (exit 0)
+- `test_select_blocking_send.ion` - 64 rounds of blocking `select` vs spawn `send` (exit 7)
 - `test_select_timeout_neg_error.ion` - literal `timeout(-1)` is `select timeout must be >= 0`
 - `test_join.ion` - `let h = spawn { }; join(h)` (exit 0)
 - `test_spawn_basic.ion` - Spawn statements
@@ -472,7 +473,7 @@ Special cases (not in the manifest):
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
 - `ION_BUILD`: Path to the ion-build binary (default: `../target/release/ion-build`)
 - `CC`: C compiler to use (default: `gcc`)
-- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`), a leak-sanitizer (LSan) step (`detect_leaks=1`) on `Box::unwrap` tests plus named heap-drop `run` tests (Vec/Box/tuple/array/`break`/`continue`/`Vec::set` of `String`), thread sanitizer (TSan) on `test_channel_*` / `test_spawn_*` / `test_join` / `test_select` / `test_try_recv` run tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux. macOS CI runs the harness with Clang.
+- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`), a leak-sanitizer (LSan) step (`detect_leaks=1`) on `Box::unwrap` tests plus named heap-drop `run` tests (Vec/Box/tuple/array/`break`/`continue`/`Vec::set` of `String`), thread sanitizer (TSan) on `test_channel_*` / `test_spawn_*` / `test_join` / `test_select*` / `test_try_recv` run tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux. macOS CI runs the harness with Clang.
 - `LDFLAGS`: Extra C linker flags for generated test executables (default: empty). Pair with `CFLAGS` for sanitizer runtime flags when needed.
 - `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 

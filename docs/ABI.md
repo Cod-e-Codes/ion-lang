@@ -153,7 +153,7 @@ Stable beta expectations:
 - Runtime tracks `sender_count` and `receiver_count` separately. Last sender drop disconnects receive; last receiver drop disconnects send. Destroy runs when both counts are 0 and drops remaining buffered `T` through `drop_fn`.
 - `ion_channel_send` returns 0 on success and non-zero when no receiver remains (value is not copied). `ion_channel_recv` returns 0 on success and non-zero when disconnected and empty (`out_value` unchanged).
 - `ion_channel_try_send` returns 0 sent, `-1` closed, `-2` full. `ion_channel_try_recv` returns 0 message, `-1` closed, `-2` empty. Generated Ion maps those to `TrySendResult<T>` / `TryRecvResult<T>`.
-- `ion_channel_select` waits on `ion_select_arm_t` receivers and copies the chosen message (no TOCTOU). `timeout_ms` is `0` (poll), `>0` (wait ms), or `-1` (wait forever). Values `< -1` panic.
+- `ion_channel_select` waits on `ion_select_arm_t` receivers and copies in the same `try_recv`. Waiters are registered before the empty recheck. `timeout_ms` is `0` (poll), `>0` (wait ms), or `-1` (wait forever). Values `< -1` panic.
 - `ion_channel_clone_sender` copies a sender handle and increments `sender_count`.
 - Generated Ion `send` / `recv` consume those status codes (`SendResult<T>` / `Option<T>`). Statement `send` still drops `Closed(T)`.
 - Channel handles are runtime resources released by `ion_channel_sender_drop` / `ion_channel_receiver_drop`.

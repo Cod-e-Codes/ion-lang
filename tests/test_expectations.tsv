@@ -381,6 +381,7 @@ test_match_move_join_error.ion	error		UseAfterMove
 test_try_recv.ion	run	0
 test_select.ion	run	0
 test_select_timeout.ion	run	0
+test_select_blocking_send.ion	run	7
 test_join.ion	run	0
 test_arena_get_ref.ion	run	0
 test_nested_tuple_eq.ion	run	0

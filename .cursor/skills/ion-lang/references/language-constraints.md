@@ -27,7 +27,7 @@ APIs that would return `&T` in Rust must use owned values, indices, or the patte
 ## Concurrency
 
 - `spawn { ... };` creates a detached OS thread. `let h: JoinHandle = spawn { ... };` is joinable; drop detaches; `join(h)` waits and consumes
-- `select { let v = recv(&mut rx) => { ... } default => { ... } }` (or `timeout(ms)`)
+- `select { let v = recv(&mut rx) => { ... } default => { ... } }` (or `timeout(ms)`). Without `default`/`timeout`, wait until a recv arm can take a message or disconnects.
 - `channel<T>()` / `channel<T>(cap)` → `(Sender<T>, Receiver<T>)` - bounded MPSC
 - `clone_sender(&tx) -> Sender<T>` (Receiver stays unique)
 - `send(&tx, v) -> SendResult<T>` moves `v` into the channel; unused `Closed(T)` still drops `T`

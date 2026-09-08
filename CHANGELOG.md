@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Fix**: blocking `select` (no `default`/`timeout`) rechecks `try_recv` after registering waiters so a concurrent send cannot park forever on a message already in the buffer. This impacts `select { recv(...) => ... }` racing a `send` on another thread.
+- **Tests**: `test_select_blocking_send.ion`.
+- **Docs**: ION_SPEC §7.2, ABI, skills.
+
 ## 0.2.0 - 2026-09-08
 
 - **Language**: integer `+ - *` wrap in two's complement via same-width unsigned C ops (not `-fwrapv`). `/` and `%` panic on `0` and signed `MIN / -1`. Shifts panic if the right operand is `>=` bitwidth. Signed `>>` is arithmetic. This impacts every integer expression and any program that assumed C signed overflow was undefined or wrapping-by-flag.

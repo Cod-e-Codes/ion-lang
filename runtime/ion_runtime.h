@@ -156,7 +156,9 @@ typedef struct {
 
 /**
  * Wait until one arm can take a message (or is closed-empty), a default poll,
- * or a timeout. The chosen arm actually copies the message (no TOCTOU).
+ * or a timeout. The chosen arm copies in the same try_recv (no peek-then-recv).
+ * Waiters are registered before the empty recheck so a concurrent send cannot
+ * park forever on a message already in the buffer.
  *
  * timeout_ms: 0 = poll (default arm), >0 = wait up to that many milliseconds,
  *             -1 = wait forever (no default or timeout arm). Values < -1 panic.

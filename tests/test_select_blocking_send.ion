@@ -1,0 +1,36 @@
+// Blocking select (no default/timeout) vs a concurrent send.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+fn main() -> int {
+    let mut i: int = 0;
+    while i < 64 {
+        let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+        spawn {
+            send(&tx, 7);
+        };
+        select {
+            let v = recv(&mut rx) => {
+                match v {
+                    Option::Some(n) => {
+                        if n != 7 {
+                            return 2;
+                        }
+                    }
+                    Option::None => {
+                        return 1;
+                    }
+                };
+            }
+        };
+        i += 1;
+    }
+    return 7;
+}
