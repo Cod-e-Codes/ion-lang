@@ -176,6 +176,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Lib LSP tests spawn `target/{debug,release}/ion-lsp` (not the deps test harness).
+      - run: cargo build --bin ion-lsp
       - run: cargo test
       - run: cargo build --release --bin ion-compiler --bin ion-build --bin ion-lsp
       - run: ./target/release/ion-compiler --version

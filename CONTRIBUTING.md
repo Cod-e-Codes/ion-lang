@@ -26,9 +26,10 @@ CI (`.github/workflows/ci.yml`) builds all three binaries on Linux, runs integra
 
 ## Test
 
-Unit tests:
+Unit tests (`src/lsp` tests spawn `target/debug/ion-lsp`, same as Linux CI):
 
 ```bash
+cargo build --bin ion-lsp
 cargo test
 ```
 

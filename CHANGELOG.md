@@ -14,7 +14,7 @@
 - **Runtime**: `ion_panic` prints and `abort()`s; drops do not run. `Box::new`, `Vec`/`String` grow, and alloc failure panic instead of returning NULL. This impacts code that treated OOM as a null pointer.
 - **Runtime**: `ion_channel_try_send` / `try_recv`, `ion_channel_select`, `ion_spawn_joinable` / `ion_join` / `ion_thread_detach`, `ion_file_*`.
 - **ABI**: enums are `int tag` plus `union { struct variant_N { ... } } data`. No unary `*` deref. FFI: C callee owns nothing Ion still owns.
-- **CI**: macOS `macos-14` integration job. Release verify runs the integration harness under `-Wall -Wextra -Werror` like Linux CI. MSVC stays out.
+- **CI**: macOS `macos-14` integration job (builds `ion-lsp` before `cargo test`, same as Linux). Release verify runs the integration harness under `-Wall -Wextra -Werror` like Linux CI. MSVC stays out.
 - **Tests**: wrap, div0/shift/index-assign panics, UTF-8 reject, match move join, try_send/try_recv, select, join, Arena::get_ref, nested tuple eq, SetResult, File I/O, File not Send, negative select timeout.
 - **Docs**: ION_SPEC, ABI, BETA, CONTRIBUTING/tests README, skills.
 
