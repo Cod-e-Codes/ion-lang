@@ -798,15 +798,24 @@ static void ion_select_unregister(ion_select_arm_t *arms, int n,
   }
 }
 
+static void ion_select_finish(pthread_mutex_t *mu, pthread_cond_t *cv,
+                              struct ion_select_waiter *waiters) {
+  free(waiters);
+  pthread_cond_destroy(cv);
+  pthread_mutex_destroy(mu);
+}
+
 int ion_channel_select(ion_select_arm_t *arms, int n, int timeout_ms,
                        int *status_out) {
   pthread_mutex_t mu;
   pthread_cond_t cv;
-  int ready;
+  int ready = 0;
   struct ion_select_waiter *waiters;
   struct timespec deadline;
   int has_deadline;
   int i;
+  int idx;
+  int registered;
 
   if (timeout_ms < -1)
     ion_panic("select timeout must be >= 0");
@@ -840,24 +849,34 @@ int ion_channel_select(ion_select_arm_t *arms, int n, int timeout_ms,
     }
   }
 
+  idx = ion_select_try_arms(arms, n, status_out);
+  if (idx >= 0) {
+    ion_select_finish(&mu, &cv, waiters);
+    return idx;
+  }
+  if (timeout_ms == 0) {
+    ion_select_finish(&mu, &cv, waiters);
+    return n;
+  }
+
+  /* Register before the empty recheck. A send that filled the buffer while
+   * waiters was empty cannot be observed by wake_select; try_recv still
+   * takes it. The sticky ready flag covers wakes after register. */
+  ready = 0;
+  registered = 0;
+  if (n > 0) {
+    ion_select_register(arms, n, waiters);
+    registered = 1;
+  }
+
   for (;;) {
-    int idx = ion_select_try_arms(arms, n, status_out);
+    idx = ion_select_try_arms(arms, n, status_out);
     if (idx >= 0) {
-      free(waiters);
-      pthread_cond_destroy(&cv);
-      pthread_mutex_destroy(&mu);
+      if (registered)
+        ion_select_unregister(arms, n, waiters);
+      ion_select_finish(&mu, &cv, waiters);
       return idx;
     }
-    if (timeout_ms == 0) {
-      free(waiters);
-      pthread_cond_destroy(&cv);
-      pthread_mutex_destroy(&mu);
-      return n;
-    }
-
-    ready = 0;
-    if (n > 0)
-      ion_select_register(arms, n, waiters);
 
     pthread_mutex_lock(&mu);
     while (!ready) {
@@ -865,12 +884,10 @@ int ion_channel_select(ion_select_arm_t *arms, int n, int timeout_ms,
         int rc = pthread_cond_timedwait(&cv, &mu, &deadline);
         if (rc == ETIMEDOUT) {
           pthread_mutex_unlock(&mu);
-          if (n > 0)
+          if (registered)
             ion_select_unregister(arms, n, waiters);
           idx = ion_select_try_arms(arms, n, status_out);
-          free(waiters);
-          pthread_cond_destroy(&cv);
-          pthread_mutex_destroy(&mu);
+          ion_select_finish(&mu, &cv, waiters);
           if (idx >= 0)
             return idx;
           return n;
@@ -879,10 +896,8 @@ int ion_channel_select(ion_select_arm_t *arms, int n, int timeout_ms,
         pthread_cond_wait(&cv, &mu);
       }
     }
+    ready = 0;
     pthread_mutex_unlock(&mu);
-
-    if (n > 0)
-      ion_select_unregister(arms, n, waiters);
   }
 }
 
