@@ -36,39 +36,60 @@ struct SockAddrIn {
 }
 
 fn read_line() -> String {
-    let mut text: String = String::new();
+    let mut bytes: Vec<u8> = Vec::new();
     let mut byte_buf: [u8; 1] = [0; 1];
 
     loop {
         unsafe {
             let n: int = read(0, &byte_buf[0], 1);
             if n <= 0 {
-                return text;
+                match String::from_utf8(bytes) {
+                    Option::Some(text) => {
+                        return text;
+                    }
+                    Option::None => {
+                        return String::new();
+                    }
+                }
             }
         }
         let ch: u8 = byte_buf[0];
         if ch == 10 as u8 {
-            return text;
+            match String::from_utf8(bytes) {
+                Option::Some(text) => {
+                    return text;
+                }
+                Option::None => {
+                    return String::new();
+                }
+            }
         }
         if ch != 13 as u8 {
-            text.push_byte(ch);
+            Vec::push(&mut bytes, ch);
         }
     }
 
-    return text;
+    return String::new();
 }
 
 fn trim_line(s: String) -> String {
-    let mut out: String = String::new();
+    let mut bytes: Vec<u8> = Vec::new();
     let mut skipping: bool = true;
     for ch in s {
         if skipping && (ch == 32 || ch == 9) {
             continue;
         }
         skipping = false;
-        out.push_byte(ch);
+        Vec::push(&mut bytes, ch);
     }
-    return out;
+    match String::from_utf8(bytes) {
+        Option::Some(out) => {
+            return out;
+        }
+        Option::None => {
+            return String::new();
+        }
+    }
 }
 
 fn create_sockaddr_in(port: u16) -> SockAddrIn {

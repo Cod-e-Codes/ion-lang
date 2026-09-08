@@ -252,10 +252,11 @@ ion_string_t *ion_string_new(void);
 /**
  * Creates a heap-allocated string from a C string literal.
  * Allocates a new ion_string_t and copies the literal data.
+ * lit[0..len) must be well-formed UTF-8 (RFC 3629).
  *
  * @param lit C string literal (null-terminated)
  * @param len Length of the string (excluding null terminator)
- * @return Pointer to allocated ion_string_t, or NULL on failure
+ * @return Pointer to allocated ion_string_t, or NULL on failure or invalid UTF-8
  */
 ion_string_t *ion_string_from_literal(const char *lit, size_t len);
 
@@ -268,7 +269,15 @@ ion_string_t *ion_string_from_literal(const char *lit, size_t len);
 ion_string_t *ion_string_clone(const ion_string_t *s);
 
 /**
+ * Returns 1 if data[0..len) is well-formed UTF-8 (RFC 3629): no overlong
+ * encodings, no surrogates, and no code points above U+10FFFF. Empty input
+ * is valid. A NULL pointer with len 0 is valid; NULL with len > 0 is not.
+ */
+int ion_utf8_valid(const uint8_t *data, size_t len);
+
+/**
  * Appends a string or string literal to the end of a string.
+ * other[0..other_len) must be well-formed UTF-8.
  *
  * @param s String to append to
  * @param other String literal or string to append
@@ -278,7 +287,8 @@ ion_string_t *ion_string_clone(const ion_string_t *s);
 int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len);
 
 /**
- * Appends a single byte to the end of a string.
+ * Appends a single ASCII byte (0x00..=0x7F) to the end of a string.
+ * Bytes >= 0x80 are rejected because they would break the UTF-8 invariant.
  *
  * @param s String to append to
  * @param b Byte to append

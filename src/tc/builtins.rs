@@ -433,6 +433,34 @@ impl TypeChecker {
             return Ok(Some(Type::String));
         }
 
+        // String::from_utf8(bytes: Vec<u8>) -> Option<String>
+        if callee == "String::from_utf8" {
+            if call_expr.args.len() != 1 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "1 argument".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let bytes_ty = self.check_expr(&call_expr.args[0])?;
+            let resolved = self.resolve_type_name(&bytes_ty)?;
+            match resolved {
+                Type::Vec { elem_type } if matches!(*elem_type, Type::U8) => {
+                    return Ok(Some(Type::Generic {
+                        name: "Option".to_string(),
+                        params: vec![Type::String],
+                    }));
+                }
+                other => {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "Vec<u8>".to_string(),
+                        got: type_to_string(&other),
+                        span: call_expr.args[0].span(),
+                    });
+                }
+            }
+        }
+
         // String::len(s: &String) -> int
         if callee == "String::len" {
             if call_expr.args.len() != 1 {

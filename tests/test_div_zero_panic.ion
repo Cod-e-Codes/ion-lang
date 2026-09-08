@@ -1,0 +1,4 @@
+fn main() -> int {
+    let n: int = 1;
+    return n / 0;
+}

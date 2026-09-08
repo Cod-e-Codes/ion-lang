@@ -1,0 +1,11 @@
+fn main() -> int {
+    let wrapped: int = int::MAX + 1;
+    if wrapped != int::MIN {
+        return 1;
+    }
+    let under: int = int::MIN - 1;
+    if under != int::MAX {
+        return 2;
+    }
+    return 0;
+}

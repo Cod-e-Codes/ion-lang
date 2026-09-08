@@ -109,10 +109,12 @@ pub enum IREexpr {
         op: BinOp,
         left: Box<IREexpr>,
         right: Box<IREexpr>,
+        result_type: Type,
     },
     UnOp {
         op: UnOp,
         operand: Box<IREexpr>,
+        result_type: Type,
     },
     Send {
         channel: Box<IREexpr>,
@@ -172,6 +174,7 @@ pub enum IREexpr {
         target: Box<IREexpr>,
         index: Box<IREexpr>,
         value: Box<IREexpr>,
+        target_type: Option<Type>,
     },
     AssignField {
         target: Box<IREexpr>,
@@ -706,6 +709,7 @@ impl IRBuilder {
                         op: BinOp::Lt,
                         left: Box::new(index_ref.clone()),
                         right: Box::new(IREexpr::Lit(*size as i64)),
+                        result_type: Type::Bool,
                     },
                     Type::Vec { .. } => IREexpr::BinOp {
                         op: BinOp::Lt,
@@ -716,6 +720,7 @@ impl IRBuilder {
                             return_type: Some(Type::Int),
                             tuple_destructure_index: None,
                         }),
+                        result_type: Type::Bool,
                     },
                     Type::String => IREexpr::BinOp {
                         op: BinOp::Lt,
@@ -726,6 +731,7 @@ impl IRBuilder {
                             return_type: Some(Type::Int),
                             tuple_destructure_index: None,
                         }),
+                        result_type: Type::Bool,
                     },
                     _ => IREexpr::BoolLiteral(false),
                 };
@@ -740,6 +746,7 @@ impl IRBuilder {
                         op: BinOp::Add,
                         left: Box::new(IREexpr::Var(index_var.clone())),
                         right: Box::new(IREexpr::Lit(1)),
+                        result_type: Type::Int,
                     }),
                 });
                 let step_block = IRBlock {
@@ -889,10 +896,12 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             op: bin_op_expr.op,
             left: Box::new(build_expr_with_ctx(&bin_op_expr.left, ctx)),
             right: Box::new(build_expr_with_ctx(&bin_op_expr.right, ctx)),
+            result_type: ctx.expr_type(expr),
         },
         Expr::UnOp(un_op_expr) => IREexpr::UnOp {
             op: un_op_expr.op,
             operand: Box::new(build_expr_with_ctx(&un_op_expr.operand, ctx)),
+            result_type: ctx.expr_type(expr),
         },
         Expr::Send(send_expr) => {
             let value_type = ctx.expr_type(&send_expr.value);
@@ -1165,6 +1174,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 target: Box::new(build_expr_with_ctx(&index_expr.target, ctx)),
                 index: Box::new(build_expr_with_ctx(&index_expr.index, ctx)),
                 value: Box::new(build_expr_with_ctx(&assign_expr.value, ctx)),
+                target_type: ctx.resolve_expr_type(&index_expr.target),
             },
             Expr::FieldAccess(_) => IREexpr::AssignField {
                 target: Box::new(build_expr_with_ctx(&assign_expr.target, ctx)),
@@ -1588,6 +1598,7 @@ fn rewrite_generic_calls_in_expr(
             target,
             index,
             value,
+            ..
         } => {
             rewrite_generic_calls_in_expr(target, ctx, var_types);
             rewrite_generic_calls_in_expr(index, ctx, var_types);
@@ -1906,14 +1917,25 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             inner: Box::new(substitute_types_in_expr(inner, substitutions)),
             mutable: *mutable,
         },
-        IREexpr::BinOp { op, left, right } => IREexpr::BinOp {
+        IREexpr::BinOp {
+            op,
+            left,
+            right,
+            result_type,
+        } => IREexpr::BinOp {
             op: *op,
             left: Box::new(substitute_types_in_expr(left, substitutions)),
             right: Box::new(substitute_types_in_expr(right, substitutions)),
+            result_type: substitute_type(result_type, substitutions),
         },
-        IREexpr::UnOp { op, operand } => IREexpr::UnOp {
+        IREexpr::UnOp {
+            op,
+            operand,
+            result_type,
+        } => IREexpr::UnOp {
             op: *op,
             operand: Box::new(substitute_types_in_expr(operand, substitutions)),
+            result_type: substitute_type(result_type, substitutions),
         },
         IREexpr::StructLit { type_name, fields } => IREexpr::StructLit {
             type_name: type_name.clone(),
@@ -2011,10 +2033,14 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             target,
             index,
             value,
+            target_type,
         } => IREexpr::AssignIndex {
             target: Box::new(substitute_types_in_expr(target, substitutions)),
             index: Box::new(substitute_types_in_expr(index, substitutions)),
             value: Box::new(substitute_types_in_expr(value, substitutions)),
+            target_type: target_type
+                .as_ref()
+                .map(|ty| substitute_type(ty, substitutions)),
         },
         IREexpr::AssignField { target, value } => IREexpr::AssignField {
             target: Box::new(substitute_types_in_expr(target, substitutions)),

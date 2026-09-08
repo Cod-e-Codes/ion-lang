@@ -1,0 +1,5 @@
+fn main() -> int {
+    let mut arr: [int; 3] = [1, 2, 3];
+    arr[10] = 0;
+    return arr[0];
+}

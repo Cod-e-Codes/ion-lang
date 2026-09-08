@@ -28,7 +28,11 @@ In scope:
 - memory unsafety or data races reachable from safe Ion;
 - compiler crashes on valid or hostile input;
 - generated C that invokes undefined behavior for safe Ion programs;
-- runtime ownership, drop, channel, or spawn bugs.
+- runtime ownership, drop, channel, or spawn bugs;
+- failure of the UTF-8 `String` invariant or missing bounds/div/shift panics in safe Ion.
+
+Safe Ion panics (`ion_panic`) print and `abort()`. Drops do not run. That is the
+documented panic contract, not a missing unwind runtime.
 
 Out of scope:
 

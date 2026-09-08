@@ -19,24 +19,29 @@ promise that every internal helper symbol is stable before 1.0.
 
 ## `String`
 
-`String` is an owned runtime allocation for byte strings. Its C layout uses a
-`uint8_t*` data pointer plus length and capacity fields. String iteration in the
-beta subset is byte iteration (`u8`), not Unicode scalar-value or grapheme
-iteration.
+`String` is an owned runtime allocation for well-formed UTF-8 (RFC 3629). Its C
+layout uses a `uint8_t*` data pointer plus length and capacity fields. String
+iteration in the beta subset is byte iteration (`u8`) over a validated buffer,
+not Unicode scalar-value or grapheme iteration.
 
 Stable beta expectations:
 
-- `String::new`, `String::from`, `String::get`, `String::len`, `String::push_str`, and
+- `String::new`, `String::from`, `String::from_utf8`, `String::get`, `String::len`, `String::push_str`, and
   `String::push_byte` preserve ownership of the `String` receiver unless a
-  function explicitly consumes it.
+  function explicitly consumes it. `from_utf8` consumes `Vec<u8>` and returns
+  `Option<String>` (`None` if the bytes are ill-formed UTF-8).
+- `push_byte` accepts only ASCII (`0x00..=0x7F`). Non-ASCII bytes panic.
 - `String::get` returns a stack-local `Option<u8>` (by-value byte, or `None` on
   negative/OOB index). It does not register a lasting borrow.
 - String literals in `let` bindings and at call sites for `String` parameters
-  lower to `ion_string_from_literal` in generated C.
+  lower to `ion_string_from_literal` in generated C (NULL from the runtime is a
+  panic).
 - `String::push_str` appends string literals or owned `String` values (the
-  latter reads `.data`/`.len` from the source heap buffer).
+  latter reads `.data`/`.len` from the source heap buffer) after UTF-8
+  validation.
 - Dropping a `String` releases its backing allocation once.
 - `String == String` and `String != String` compare byte contents.
+- Mutating the buffer through `.data` is an FFI contract violation.
 
 ## `Vec<T>`
 
@@ -108,12 +113,31 @@ blocks may omit those checks.
 
 ## Enums and structs
 
-Struct layout is C-oriented and field-order preserving in generated C. Enum
-layout is compiler-generated and should be treated as stable only for C emitted
-by the same Ion compiler/runtime version unless a beta release explicitly
-documents a layout guarantee. Enum literals (`Enum::Variant(...)`) lower to C
+Struct layout is C-oriented and field-order preserving in generated C. Enums
+lower to a tagged union:
+
+```c
+typedef struct EnumName {
+  int tag;
+  union {
+    struct variant_0 { /* payload fields */ } variant_0;
+    /* ... */
+  } data;
+} EnumName;
+```
+
+`tag` is the variant index in declaration order. Payload-less variants set `tag`
+and leave `data` unused. Enum literals (`Enum::Variant(...)`) lower to C
 compound initializers (`(Enum_T){ .tag = N, .data = { ... } }`); the compiler
-does not emit per-variant `_new` helper functions.
+does not emit per-variant `_new` helper functions. FFI must match this layout
+from the same compiler version. The C callee owns nothing Ion still owns.
+
+## Integer arithmetic
+
+Ion `+`, `-`, and `*` wrap in two's complement. Generated C uses a same-width
+unsigned operation and casts back for signed types. `/` and `%` panic on divisor
+`0` and on signed `MIN / -1` (and `MIN % -1`). Shifts panic if the right operand
+is `>=` bit width. Signed `>>` is arithmetic, implemented explicitly.
 
 ## Channels and `spawn`
 

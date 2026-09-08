@@ -4,7 +4,7 @@ mod types;
 
 use self::types::{
     array_type_name, fn_type_to_c_decl, fn_type_to_c_function_header, format_ret_val_decl,
-    mangle_module_callee, mangle_type_name, resolve_type_alias, ret_val_decl,
+    int_c_repr, mangle_module_callee, mangle_type_name, resolve_type_alias, ret_val_decl,
     substitute_type_params, tuple_type_name, type_to_c_impl, type_to_c_return_type,
 };
 
@@ -378,9 +378,12 @@ impl Codegen {
 
     fn write_ion_string_from_literal(&mut self, value: &str) {
         let escaped = Self::escape_c_string_literal_content(value);
-        self.write("ion_string_from_literal(");
-        self.write(&format!("\"{}\", {}", escaped, value.len()));
-        self.write(")");
+        let n = self.temp_var_counter;
+        self.temp_var_counter += 1;
+        self.write(&format!(
+            "({{ ion_string_t* _ion_lit{n} = ion_string_from_literal(\"{escaped}\", {}); if (!_ion_lit{n}) ion_panic(\"String allocation failed\"); _ion_lit{n}; }})",
+            value.len()
+        ));
     }
 
     pub fn generate(&mut self, program: &IRProgram, source_ion: &str) -> String {
@@ -1650,6 +1653,135 @@ impl Codegen {
         }
     }
 
+    fn capture_binop_operand(&mut self, expr: &IREexpr) -> String {
+        let code = String::new();
+        let old = std::mem::replace(&mut self.output, code);
+        self.emit_binop_operand(expr);
+        std::mem::replace(&mut self.output, old)
+    }
+
+    fn generate_defined_binop(
+        &mut self,
+        op: BinOp,
+        left: &IREexpr,
+        right: &IREexpr,
+        result_type: &Type,
+        extra_parens: bool,
+    ) {
+        if matches!(op, BinOp::Eq | BinOp::Ne)
+            && self.is_string_compare_operand(left)
+            && self.is_string_compare_operand(right)
+        {
+            self.generate_string_equality(op, left, right, extra_parens);
+            return;
+        }
+        let resolved = resolve_type_alias(result_type, &self.type_aliases);
+        let arith = matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem
+        );
+        let shift = matches!(op, BinOp::ShiftLeft | BinOp::ShiftRight);
+        let bitwise = matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor);
+        if let Some((signed_ty, unsigned_ty, bits, is_signed)) = int_c_repr(&resolved)
+            && (arith || shift || bitwise)
+        {
+            let left_code = self.capture_binop_operand(left);
+            let right_code = self.capture_binop_operand(right);
+            let n = self.temp_var_counter;
+            self.temp_var_counter += 1;
+            let l = format!("_ion_al{n}");
+            let r = format!("_ion_ar{n}");
+            self.write("({ ");
+            self.write(&format!("{signed_ty} {l} = ({signed_ty})({left_code}); "));
+            self.write(&format!("{signed_ty} {r} = ({signed_ty})({right_code}); "));
+            match op {
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor => {
+                    let cop = self.op_to_c(op);
+                    self.write(&format!(
+                        "({signed_ty})(({unsigned_ty}){l} {cop} ({unsigned_ty}){r}); }})"
+                    ));
+                }
+                BinOp::Div | BinOp::Rem => {
+                    let cop = self.op_to_c(op);
+                    self.write(&format!("if ({r} == 0) ion_panic(\"division by zero\"); "));
+                    if is_signed {
+                        let min = crate::cgen::types::c_int_limit(&resolved, false);
+                        self.write(&format!(
+                                "if ({l} == ({signed_ty})({min}) && {r} == ({signed_ty})(-1)) ion_panic(\"signed division overflow\"); "
+                            ));
+                    }
+                    self.write(&format!("{l} {cop} {r}; }})"));
+                }
+                BinOp::ShiftLeft | BinOp::ShiftRight => {
+                    let width = match bits {
+                        Some(b) => b.to_string(),
+                        None => "(unsigned)(sizeof(int) * 8)".to_string(),
+                    };
+                    self.write(&format!(
+                            "if ((unsigned){r} >= (unsigned)({width})) ion_panic(\"shift amount out of range\"); "
+                        ));
+                    if op == BinOp::ShiftRight && is_signed {
+                        self.write(&format!(
+                                "({signed_ty})(({l} < 0) ? ~(~({unsigned_ty}){l} >> (unsigned){r}) : (({unsigned_ty}){l} >> (unsigned){r})); }})"
+                            ));
+                    } else {
+                        let cop = self.op_to_c(op);
+                        self.write(&format!(
+                            "({signed_ty})(({unsigned_ty}){l} {cop} (unsigned){r}); }})"
+                        ));
+                    }
+                }
+                _ => unreachable!(),
+            }
+            return;
+        }
+        if extra_parens {
+            self.write("(");
+        }
+        self.emit_binop_operand(left);
+        self.write(&format!(" {} ", self.op_to_c(op)));
+        self.emit_binop_operand(right);
+        if extra_parens {
+            self.write(")");
+        }
+    }
+
+    fn generate_defined_unop(&mut self, op: UnOp, operand: &IREexpr, result_type: &Type) {
+        match op {
+            UnOp::Not => {
+                self.write("(!");
+                self.generate_expr(operand);
+                self.write(")");
+            }
+            UnOp::Neg => {
+                let resolved = resolve_type_alias(result_type, &self.type_aliases);
+                if let Some((signed_ty, unsigned_ty, _, _)) = int_c_repr(&resolved) {
+                    let operand_code = self.capture_binop_operand(operand);
+                    self.write(&format!(
+                        "(({signed_ty})(0 - ({unsigned_ty})({operand_code})))"
+                    ));
+                } else if let IREexpr::Lit(v) = operand {
+                    if *v == 2147483647i64 + 1 {
+                        self.write(&crate::cgen::types::c_int_limit(&Type::Int, false));
+                    } else {
+                        self.write("(-");
+                        self.generate_expr(operand);
+                        self.write(")");
+                    }
+                } else {
+                    self.write("(-");
+                    self.generate_expr(operand);
+                    self.write(")");
+                }
+            }
+        }
+    }
+
     fn generate_string_equality(
         &mut self,
         op: BinOp,
@@ -2795,38 +2927,19 @@ impl Codegen {
     fn generate_expr_conditional(&mut self, expr: &IREexpr) {
         // Generate expression for conditional context (if/while) without extra parentheses
         match expr {
-            IREexpr::BinOp { op, left, right } => {
-                if matches!(op, BinOp::Eq | BinOp::Ne)
-                    && self.is_string_compare_operand(left)
-                    && self.is_string_compare_operand(right)
-                {
-                    self.generate_string_equality(*op, left, right, false);
-                } else {
-                    // For conditionals, don't add extra parentheses around simple comparisons
-                    self.generate_expr(left);
-                    self.write(&format!(" {} ", self.op_to_c(*op)));
-                    self.generate_expr(right);
-                }
+            IREexpr::BinOp {
+                op,
+                left,
+                right,
+                result_type,
+            } => {
+                self.generate_defined_binop(*op, left, right, result_type, false);
             }
-            IREexpr::UnOp { op, operand } => match op {
-                UnOp::Not => {
-                    self.write("!");
-                    self.generate_expr(operand);
-                }
-                UnOp::Neg => {
-                    if let IREexpr::Lit(v) = operand.as_ref() {
-                        if *v == 2147483647i64 + 1 {
-                            self.write(&crate::cgen::types::c_int_limit(&Type::Int, false));
-                        } else {
-                            self.write("-");
-                            self.generate_expr(operand);
-                        }
-                    } else {
-                        self.write("-");
-                        self.generate_expr(operand);
-                    }
-                }
-            },
+            IREexpr::UnOp {
+                op,
+                operand,
+                result_type,
+            } => self.generate_defined_unop(*op, operand, result_type),
             _ => {
                 // For other expressions, generate normally
                 self.generate_expr(expr);
@@ -2859,38 +2972,19 @@ impl Codegen {
                 self.write("&");
                 self.generate_expr(inner);
             }
-            IREexpr::BinOp { op, left, right } => {
-                if matches!(op, BinOp::Eq | BinOp::Ne)
-                    && self.is_string_compare_operand(left)
-                    && self.is_string_compare_operand(right)
-                {
-                    self.generate_string_equality(*op, left, right, true);
-                } else {
-                    self.write("(");
-                    self.emit_binop_operand(left);
-                    self.write(&format!(" {} ", self.op_to_c(*op)));
-                    self.emit_binop_operand(right);
-                    self.write(")");
-                }
+            IREexpr::BinOp {
+                op,
+                left,
+                right,
+                result_type,
+            } => {
+                self.generate_defined_binop(*op, left, right, result_type, true);
             }
-            IREexpr::UnOp { op, operand } => match op {
-                UnOp::Not => {
-                    self.write("(!");
-                    self.generate_expr(operand);
-                    self.write(")");
-                }
-                UnOp::Neg => {
-                    if let IREexpr::Lit(v) = operand.as_ref()
-                        && *v == 2147483647i64 + 1
-                    {
-                        self.write(&crate::cgen::types::c_int_limit(&Type::Int, false));
-                        return;
-                    }
-                    self.write("(-");
-                    self.generate_expr(operand);
-                    self.write(")");
-                }
-            },
+            IREexpr::UnOp {
+                op,
+                operand,
+                result_type,
+            } => self.generate_defined_unop(*op, operand, result_type),
             IREexpr::Send {
                 channel,
                 value,
@@ -3495,20 +3589,93 @@ impl Codegen {
                 target,
                 index,
                 value,
+                target_type,
             } => {
-                self.generate_expr(target);
-                self.write("[");
-                self.generate_expr(index);
-                self.write("] = ");
                 let elem_ty = match self.infer_irexpr_type(target) {
                     Some(Type::Array { inner, .. }) => Some(*inner),
                     Some(Type::Ref { inner, .. }) => match *inner {
                         Type::Array { inner, .. } => Some(*inner),
+                        Type::Slice { inner } => Some(*inner),
+                        Type::String => Some(Type::U8),
                         _ => None,
                     },
+                    Some(Type::Slice { inner }) => Some(*inner),
+                    Some(Type::String) => Some(Type::U8),
                     _ => None,
                 };
+                let resolved_target = target_type
+                    .clone()
+                    .or_else(|| self.infer_irexpr_type(target));
+                let bounds_check = self.bounds_check_for_target_type(resolved_target.as_ref());
+                let mut value_code = String::new();
+                let old = std::mem::replace(&mut self.output, value_code);
                 self.generate_expr_with_type(value, elem_ty.as_ref());
+                value_code = std::mem::replace(&mut self.output, old);
+                if self.in_unsafe_block {
+                    self.emit_index_access(target, index, bounds_check.as_ref());
+                    self.write(" = ");
+                    self.write(&value_code);
+                } else {
+                    match bounds_check {
+                        None => {
+                            self.emit_index_access(target, index, None);
+                            self.write(" = ");
+                            self.write(&value_code);
+                        }
+                        Some(BoundsCheck::Fixed(len)) => {
+                            let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
+                            self.temp_var_counter += 1;
+                            self.write("({ int ");
+                            self.write(&temp_var);
+                            self.write(" = ");
+                            self.generate_expr(index);
+                            self.write("; ");
+                            self.write(&format!(
+                                "if (!({temp_var} >= 0 && {temp_var} < {len})) ion_panic(\"Array index out of bounds\"); "
+                            ));
+                            self.generate_expr(target);
+                            self.write("[");
+                            self.write(&temp_var);
+                            self.write("] = ");
+                            self.write(&value_code);
+                            self.write("; })");
+                        }
+                        Some(BoundsCheck::StringLen) => {
+                            let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
+                            self.temp_var_counter += 1;
+                            self.write("({ int ");
+                            self.write(&temp_var);
+                            self.write(" = ");
+                            self.generate_expr(index);
+                            self.write("; ");
+                            self.write(&format!("if (!({temp_var} >= 0 && {temp_var} < (int)("));
+                            self.generate_expr(target);
+                            self.write("->len))) ion_panic(\"String index out of bounds\"); ");
+                            self.generate_expr(target);
+                            self.write("->data[");
+                            self.write(&temp_var);
+                            self.write("] = ");
+                            self.write(&value_code);
+                            self.write("; })");
+                        }
+                        Some(BoundsCheck::SliceLen { by_ref }) => {
+                            let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
+                            self.temp_var_counter += 1;
+                            self.write("({ int ");
+                            self.write(&temp_var);
+                            self.write(" = ");
+                            self.generate_expr(index);
+                            self.write("; ");
+                            self.write(&format!("if (!({temp_var} >= 0 && {temp_var} < "));
+                            self.emit_slice_len(target, by_ref);
+                            self.write(")) ion_panic(\"Slice index out of bounds\"); ");
+                            self.emit_slice_data_index(target, &temp_var, by_ref);
+                            self.write(" = ");
+                            self.write(&value_code);
+                            self.write("; })");
+                        }
+                    }
+                }
             }
             IREexpr::AssignField { target, value } => {
                 self.generate_expr(target);
@@ -3534,9 +3701,12 @@ impl Codegen {
             Some(Type::Array { size, .. }) => Some(BoundsCheck::Fixed(*size)),
             Some(Type::String) => Some(BoundsCheck::StringLen),
             Some(Type::Slice { .. }) => Some(BoundsCheck::SliceLen { by_ref: false }),
-            Some(Type::Ref { inner, .. }) if matches!(**inner, Type::Slice { .. }) => {
-                Some(BoundsCheck::SliceLen { by_ref: true })
-            }
+            Some(Type::Ref { inner, .. }) => match inner.as_ref() {
+                Type::Array { size, .. } => Some(BoundsCheck::Fixed(*size)),
+                Type::String => Some(BoundsCheck::StringLen),
+                Type::Slice { .. } => Some(BoundsCheck::SliceLen { by_ref: true }),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -4040,13 +4210,18 @@ impl Codegen {
                         return (mono_name, vec![elem_type]);
                     }
                 }
-            } else if callee == "String::get" {
+            } else if callee == "String::get" || callee == "String::from_utf8" {
                 if let Some(Type::Generic { name, params }) = return_type
                     && name == "Option"
                     && params.len() == 1
                 {
                     let mono_name = mangle_type_name("Option", params);
                     return (mono_name, params.clone());
+                }
+                if callee == "String::from_utf8" {
+                    let elem = Type::String;
+                    let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem));
+                    return (mono_name, vec![elem]);
                 }
                 let elem = Type::U8;
                 let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem));
@@ -4186,7 +4361,6 @@ impl Codegen {
                         enum_decl,
                         match_var_name,
                         type_params,
-                        false,
                         match_result,
                     );
                 }
@@ -4463,7 +4637,6 @@ impl Codegen {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn generate_match_arm(
         &mut self,
         arm: &IRMatchArm,
@@ -4471,7 +4644,6 @@ impl Codegen {
         _enum_decl: Option<&EnumDecl>,
         match_var_name: &str,
         type_params: &[Type],
-        _grouped: bool,
         match_result: Option<(&str, &Type)>,
     ) {
         match &arm.pattern {
@@ -4882,6 +5054,7 @@ fn collect_array_from_expr(expr: &IREexpr, arrays: &mut HashMap<String, Type>) {
             target,
             index,
             value,
+            ..
         } => {
             collect_array_from_expr(target, arrays);
             collect_array_from_expr(index, arrays);
@@ -5135,6 +5308,7 @@ fn collect_slice_types_from_expr(
             target,
             index,
             value,
+            ..
         } => {
             collect_slice_types_from_expr(target, slice_types);
             collect_slice_types_from_expr(index, slice_types);
@@ -5361,6 +5535,7 @@ fn collect_tuple_types_from_expr(
             target,
             index,
             value,
+            ..
         } => {
             collect_tuple_types_from_expr(target, tuple_types);
             collect_tuple_types_from_expr(index, tuple_types);
@@ -5596,6 +5771,7 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
             target,
             index,
             value,
+            ..
         } => {
             collect_vec_types_from_expr(target, vec_types);
             collect_vec_types_from_expr(index, vec_types);
@@ -6566,6 +6742,7 @@ fn collect_generic_from_expr(
                     || callee == "Vec::get_ref"
                     || callee == "Slice::get_ref"
                     || callee == "String::get"
+                    || callee == "String::from_utf8"
                     || callee == "METHOD::pop"
                     || callee == "METHOD::get"
                     || callee == "METHOD::get_ref";
@@ -6608,6 +6785,12 @@ fn collect_generic_from_expr(
                         instantiations
                             .entry(option_key)
                             .or_insert_with(|| ("Option".to_string(), vec![Type::U8]));
+                    } else if callee == "String::from_utf8" {
+                        let option_key =
+                            mangle_type_name("Option", std::slice::from_ref(&Type::String));
+                        instantiations
+                            .entry(option_key)
+                            .or_insert_with(|| ("Option".to_string(), vec![Type::String]));
                     } else {
                         // Otherwise, extract element type from Vec<T> in instantiations
                         if let Some(elem_type) =
@@ -6684,6 +6867,7 @@ fn collect_generic_from_expr(
             target,
             index,
             value,
+            ..
         } => {
             collect_generic_from_expr(target, instantiations);
             collect_generic_from_expr(index, instantiations);

@@ -43,9 +43,9 @@ APIs that would return `&T` in Rust must use owned values, indices, or the patte
 
 Inside `unsafe { ... }`:
 
-- Array indexing skips bounds checks
-- Raw pointer ops allowed
+- Array and slice indexing and index assignment skip bounds checks
 - All `extern "C"` calls must be in `unsafe` blocks
+- There is no unary `*` deref; raw `*T` is FFI pass-through only
 
 ## Types (surface)
 

@@ -28,44 +28,65 @@ struct AppState {
 }
 
 fn read_line() -> String {
-    let mut text: String = String::new();
+    let mut bytes: Vec<u8> = Vec::new();
     let mut byte_buf: [u8; 1] = [0; 1];
 
     loop {
         unsafe {
             let n: int = read(0, &byte_buf[0], 1);
             if n <= 0 {
-                return text;
+                match String::from_utf8(bytes) {
+                    Option::Some(text) => {
+                        return text;
+                    }
+                    Option::None => {
+                        return String::new();
+                    }
+                }
             }
         }
         let ch: u8 = byte_buf[0];
         if ch == 10 as u8 {
-            return text;
+            match String::from_utf8(bytes) {
+                Option::Some(text) => {
+                    return text;
+                }
+                Option::None => {
+                    return String::new();
+                }
+            }
         }
         if ch != 13 as u8 {
-            text.push_byte(ch);
+            Vec::push(&mut bytes, ch);
         }
     }
 
-    return text;
+    return String::new();
 }
 
 fn trim_left(s: String) -> String {
-    let mut out: String = String::new();
+    let mut bytes: Vec<u8> = Vec::new();
     let mut skipping: bool = true;
     for ch in s {
         if skipping && (ch == 32 || ch == 9) {
             continue;
         }
         skipping = false;
-        out.push_byte(ch);
+        Vec::push(&mut bytes, ch);
     }
-    return out;
+    match String::from_utf8(bytes) {
+        Option::Some(out) => {
+            return out;
+        }
+        Option::None => {
+            return String::new();
+        }
+    }
 }
 
 fn first_token(line: String) -> (String, String) {
-    let mut verb: String = String::new();
-    let mut rest: String = String::new();
+    let mut verb_bytes: Vec<u8> = Vec::new();
+    let mut rest_bytes: Vec<u8> = Vec::new();
     let mut past_space: bool = false;
 
     for ch in line {
@@ -73,13 +94,29 @@ fn first_token(line: String) -> (String, String) {
             if ch == 32 || ch == 9 {
                 past_space = true;
             } else {
-                verb.push_byte(ch);
+                Vec::push(&mut verb_bytes, ch);
             }
         } else {
-            rest.push_byte(ch);
+            Vec::push(&mut rest_bytes, ch);
         }
     }
 
+    let verb: String = match String::from_utf8(verb_bytes) {
+        Option::Some(s) => {
+            s;
+        }
+        Option::None => {
+            String::new();
+        }
+    };
+    let rest: String = match String::from_utf8(rest_bytes) {
+        Option::Some(s) => {
+            s;
+        }
+        Option::None => {
+            String::new();
+        }
+    };
     return (verb, rest);
 }
 
