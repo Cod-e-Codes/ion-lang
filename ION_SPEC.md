@@ -116,16 +116,17 @@ This list is intentionally small; future additions must justify their complexity
 
 The `unsafe` keyword marks code blocks where Ion's safety guarantees are suspended:
 
-- **Array and slice bounds checking** is disabled for indexing within `unsafe` blocks
-- **Raw pointer dereferencing** is only permitted within `unsafe` blocks  
+- **Array and slice bounds checking** is disabled for indexing and index assignment within `unsafe` blocks
 - **FFI calls** to `extern "C"` functions must be wrapped in `unsafe` blocks
+
+There is no unary `*` dereference operator. Raw pointers `*T` are pass-through values for FFI only.
 
 ##### Unsafe Contract
 
 Code within `unsafe` blocks must manually uphold the following invariants:
 
 1. **No out-of-bounds array or slice access**: All indices must be valid
-2. **No null pointer dereference**: All pointer dereferences must be to valid memory
+2. **FFI memory**: the C callee owns nothing Ion still owns; Ion does not free C memory unless a documented API says so. Mutating `String` bytes through `.data` is an FFI contract violation (the buffer must remain well-formed UTF-8).
 3. **No data races**: Concurrent access to shared mutable state is prohibited
 
 Violating these invariants results in **undefined behavior**.
@@ -187,6 +188,8 @@ Ion uses the following operators:
 - Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - Logical: `&&`, `||`, `!`
 - Bitwise: `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
+
+Integer `+`, `-`, and `*` wrap in two's complement on every integer type. Generated C uses a same-width unsigned operation, then casts back for signed types (the meaning does not depend on `-fwrapv`). `/` and `%` panic if the divisor is `0`, and panic on signed `MIN / -1` and `MIN % -1`. Shifts panic if the right operand is greater than or equal to the bit width of the left operand. The right operand stays unsigned. Signed `>>` is arithmetic (sign-extending), implemented explicitly in generated C.
 - Assignment: `=`, `+=` (compound assignment desugars to `x = x + e` for supported `+` types). Assignment targets may be locals, index expressions, or field paths on owned structs or `&mut Struct` receivers (for example `vm.ip += 1`).
 - Type casting: `as` keyword for explicit type conversions
 - Field access: `.`
@@ -499,7 +502,7 @@ Additional built-in generic types:
 - `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`). `Box::unwrap` moves `T` out and frees the allocation without dropping `T`.
 - `Sender<T>` and `Receiver<T>` – move-only handles for the two ends of a bounded MPSC channel
 - `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::get_ref()`, `Vec::set()`)
-- `String` – UTF-8 heap-allocated string (fully implemented: `String::new()`, `String::from()`, `String::get()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
+- `String` – well-formed UTF-8 heap-allocated string (`String::new()`, `String::from()`, `String::from_utf8()`, `String::get()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
 - `[T; N]` – fixed-size array of `N` elements of type `T`
 - `[]T` – dynamically sized slice (fat pointer) of type `T` (`Slice::len()`, `Slice::get_ref()`)
 - `(T1, T2, ...)` – fixed-size tuple value type (see §4.1.3)
@@ -621,7 +624,7 @@ User-defined types:
 
 - `struct` – product types (with generic and visibility support)
 - `enum` – tagged unions (sum types) with tuple-style or struct-style variants (with generic and visibility support)
-- `*T` – raw pointer types (for FFI; dereferencing only in `unsafe` blocks)
+- `*T` – raw pointer types (for FFI; pass-through only, no unary `*` deref)
 - `[T; N]` – fixed-size array types
 - `[]T` – slice types
 
@@ -762,6 +765,8 @@ Whether a move is implemented as a copy is an implementation detail. The `Copy` 
 
 After an `if` statement, ownership is merged from branches that can reach the following code. Branches that always `return`, `break`, or `continue` are omitted from the merge. If two fall-through paths disagree on whether a binding is still valid, the compiler reports an error.
 
+After a `match` expression, ownership is joined from arms whose bodies can fall through. Diverging arms are omitted. If fall-through arms disagree on whether a binding is still valid, the compiler reports an error at the match. Nested unstructured leftovers (for example a `let` whose initializer is a fully diverging match) stay conservative AST-structured analysis, not a CFG rewrite.
+
 After a `while`, `loop`, or `for` statement, ownership uses the same join lattice on structured edge snapshots (not a full CFG):
 
 - **Reentry** (back-edge): contributors are body fall-through and `continue`. A binding that is valid at loop entry must stay valid on every reentry contributor; otherwise the compiler reports an error at the loop.
@@ -876,7 +881,7 @@ fn main() -> int {
 
 #### 5.5 Destruction and `defer`
 
-When a binding goes out of scope, its remaining owned value is dropped exactly once. Scope exit includes block fall-through, `return`, `break`, `continue`, and panic unwinding (if implemented).
+When a binding goes out of scope, its remaining owned value is dropped exactly once. Scope exit includes block fall-through, `return`, `break`, and `continue`. `ion_panic` prints to stderr and `abort()`s; drops do not run.
 
 Drop order:
 
@@ -942,8 +947,8 @@ In particular:
 - Early `return` from a function drops all owned locals (and runs block defers) before returning.
 - `break` and `continue` drop owned values and run defers in the scopes they exit, through and including the loop body (Section 5.5). For `for`, the iteration step runs after continue cleanup.
 - `spawn` thread entry functions use the same scope-exit machinery; captures are dropped when the thread body finishes.
-- Panics (if implemented) unwind the stack, dropping owned values on each frame.
 - `spawn`ed threads manage their own stacks independently.
+- `ion_panic` prints a message and `abort()`s. Drops do not run. Allocation failure, `Vec`/`String` grow failure, `spawn` failure, and channel create failure panic this way instead of returning NULL or ignoring a status code.
 
 #### 6.3 Aliasing and Safety
 
@@ -960,12 +965,13 @@ By default, `struct` and `enum` layouts are **C-compatible**:
 
 - Field order and alignment follow the target C ABI.
 - No hidden metadata is inserted into structs.
-- Enums are compatible with “tagged unions” encoded according to a specified ABI (to be detailed later; FFI with enums may be restricted).
+- Enums lower to a tagged union: `int tag` plus `union { struct variant_N { ... payload fields ... }; ... } data`. Variant index `N` is declaration order. Payload-less variants still set `tag` and leave `data` unused. FFI must match this layout from the same compiler version.
 
-Functions may be declared `extern "C"`. Raw pointer types `*T` are available for FFI (distinct from safe references `&T`). Raw pointers are pass-through only in Ion code (no dereferencing). The compiler assumes:
+Functions may be declared `extern "C"`. Raw pointer types `*T` are available for FFI (distinct from safe references `&T`). Raw pointers are pass-through only in Ion code (the language has no unary `*` deref). The compiler assumes:
 
 - Ion compiles to C functions with straightforward signatures.
 - Parameter and return passing follows the C calling convention of the target platform.
+- The C callee owns nothing Ion still owns. Ion does not free C memory unless a documented API says so.
 
 ### 7. Concurrency and `Send`
 
@@ -1114,6 +1120,7 @@ Essential API (implemented; pseudocode notation: Ion has no `impl` blocks; these
 ```ion
 // String::new() -> String
 // String::from(s: &str) -> String
+// String::from_utf8(bytes: Vec<u8>) -> Option<String>
 // String::get(s: &String, index: int) -> Option<u8>
 // String::push_str(s: &mut String, other: &str)
 // String::push_byte(s: &mut String, b: u8)
@@ -1122,14 +1129,16 @@ Essential API (implemented; pseudocode notation: Ion has no `impl` blocks; these
 
 `str` is a primitive slice type; `&str` is a borrowed UTF-8 view `(pointer, length)`.
 
+The `String` invariant is well-formed UTF-8 (RFC 3629: no overlong encodings, no surrogates, no code points above U+10FFFF). `from_literal` / `push_str` / `from` validate. `String::from_utf8` consumes a `Vec<u8>` and returns `None` if the bytes are ill-formed. `push_byte` may only append `0x00..=0x7F` (ASCII); a non-ASCII byte panics. `for` over `String` is still **byte** iteration over a validated buffer. Raw I/O uses `Vec<u8>`. Mutating through `.data` is an `unsafe`/FFI contract violation.
+
 Note that:
 
 - String literals can be directly assigned to `String` type: `let s: String = "hello";`
 - The same literal coercion applies when a string literal is passed as a call argument to a parameter typed `String` (not only in `let` bindings).
 - `String::from()` creates a heap-allocated copy of a string literal.
 - `String::get()` returns `Option<u8>` for a byte at `index`. Negative or out-of-range indices yield `Option::None` (non-panicking complement to `s[i]`, which still aborts on OOB). The result is a by-value `u8` (copy); no lasting borrow is registered. Method form `s.get(i)` desugars to `String::get`.
-- `String::push_str()` appends a string literal or an owned `String` (reads the source buffer).
-- `String::push_byte()` appends a single byte to an existing `String`.
+- `String::push_str()` appends a string literal or an owned `String` (reads the source buffer). The appended bytes must be well-formed UTF-8.
+- `String::push_byte()` appends a single ASCII byte (`0x00..=0x7F`) to an existing `String`.
 - `==` and `!=` compare UTF-8 byte content (value equality), not pointer identity.
 
 - `String::from` and stdlib APIs accepting `&str` also accept string literals and `&String` at call sites.
@@ -1150,8 +1159,9 @@ pub fn read_to_string_result(path: String) -> ReadResult;
 ```
 
 - `path` is an owned `String` (typically from a string literal or `String::from`).
-- On success, returns `ReadResult::Ok` with file bytes as a `String` (raw UTF-8; no validation).
-- On failure: `ReadResult::Err(-1)` if `open` fails, `ReadResult::Err(-2)` if `read` fails.
+- Bytes are accumulated as `Vec<u8>`, then converted with `String::from_utf8`.
+- On success, returns `ReadResult::Ok` with a well-formed UTF-8 `String`.
+- On failure: `ReadResult::Err(-1)` if `open` fails, `ReadResult::Err(-2)` if `read` fails, `ReadResult::Err(-3)` if the file is not well-formed UTF-8.
 - **Platform:** POSIX and MinGW (`open`/`read`/`close`). Not available on MSVC-only toolchains without a POSIX compatibility layer.
 
 Generic `Result<T, E>` lives in `stdlib/result.ion` for library authors; `fs` uses the concrete `ReadResult` enum.
@@ -1349,6 +1359,7 @@ stronger contract.
 - Trait bounds are limited to built-in `Copy`, `Eq`, and `Send` (no user-defined traits)
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - `if`/`else` merge: ownership after an `if` is merged from branches that can fall through to the following code. A move in a branch that always `return`s, `break`s, or `continue`s does not block use after the `if`. If two fall-through paths disagree (one moved, one valid), it is still an error.
+- Match arms that fall through join ownership the same way. Nested unstructured leftovers (for example a `let` whose initializer is a fully diverging match) stay AST-structured analysis without a CFG rewrite.
 - Loop ownership uses structured reentry/exit joins (Section 5.2). Remaining conservatism is AST-structured analysis without a full CFG (for example nested unstructured control flow may still under-approximate). For read-only scans over an owned `Vec<T>`, prefer `Vec::get_ref` (Section 8.2) or index/handle helpers; `Vec::get` move-out still requires consume-once or put-back per iteration when the body reenters.
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (signature hover only)

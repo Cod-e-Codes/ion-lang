@@ -55,13 +55,13 @@ impl Codegen {
             ));
             // C arrays are not assignable, even behind a typedef name.
             if matches!(inner_type, Type::Array { .. }) {
-                code.push_str(" if (ptr) { ");
+                code.push_str(" if (!ptr) ion_panic(\"Box::new allocation failed\"); ");
                 code.push_str(&memcpy_from_value("ptr", &inner_c_type, &arg_code));
-                code.push_str("; } ptr; })");
+                code.push_str("; ptr; })");
             } else {
-                code.push_str(" if (ptr) { *ptr = ");
+                code.push_str(" if (!ptr) ion_panic(\"Box::new allocation failed\"); *ptr = ");
                 code.push_str(&arg_code);
-                code.push_str("; } ptr; })");
+                code.push_str("; ptr; })");
             }
             return Some(code);
         }
@@ -111,8 +111,9 @@ impl Codegen {
             let elem_c_type = self.type_to_c(elem_type);
             let vec_type_name = mangle_type_name("Vec", std::slice::from_ref(elem_type));
             let code = format!(
-                "(({}*)(ion_vec_new(sizeof({}))))",
-                vec_type_name, elem_c_type
+                "({{ {vec}* _v = ({vec}*)ion_vec_new(sizeof({elem})); if (!_v) ion_panic(\"Vec::new allocation failed\"); _v; }})",
+                vec = vec_type_name,
+                elem = elem_c_type
             );
             return Some(code);
         }
@@ -133,18 +134,18 @@ impl Codegen {
             let vec_type_name = mangle_type_name("Vec", std::slice::from_ref(elem_type));
             let mut code = String::new();
             code.push_str(&format!(
-                "(({}*)(ion_vec_with_capacity(sizeof(",
-                vec_type_name
+                "({{ {vec}* _v = ({vec}*)ion_vec_with_capacity(sizeof({elem}), ",
+                vec = vec_type_name,
+                elem = elem_c_type
             ));
-            code.push_str(&elem_c_type);
-            code.push_str("), ");
-            // Generate capacity argument
             let mut arg_code = String::new();
             let old_output = std::mem::replace(&mut self.output, arg_code);
             self.generate_expr(&args[0]);
             arg_code = std::mem::replace(&mut self.output, old_output);
             code.push_str(&arg_code);
-            code.push_str(")))");
+            code.push_str(
+                "); if (!_v) ion_panic(\"Vec::with_capacity allocation failed\"); _v; })",
+            );
             return Some(code);
         }
 
@@ -206,41 +207,45 @@ impl Codegen {
                     | IREexpr::FieldAccess { .. }
             );
             let elem_is_array = matches!(elem_ty, Some(Type::Array { .. }));
+            let mut push_call = String::new();
             if value_is_lvalue {
-                code.push_str("ion_vec_push((ion_vec_t*)(");
-                code.push_str(&deref_vec);
-                code.push_str("), &");
-                code.push_str(&value_code);
-                code.push_str(", sizeof(");
-                code.push_str(&elem_c_type);
-                code.push_str("))");
+                push_call.push_str("ion_vec_push((ion_vec_t*)(");
+                push_call.push_str(&deref_vec);
+                push_call.push_str("), &");
+                push_call.push_str(&value_code);
+                push_call.push_str(", sizeof(");
+                push_call.push_str(&elem_c_type);
+                push_call.push_str("))");
+                code = wrap_status_panic(&push_call, "Vec::push failed");
             } else if elem_is_array {
-                code.push_str("ion_vec_push((ion_vec_t*)(");
-                code.push_str(&deref_vec);
-                code.push_str("), ");
-                code.push_str(&compound_literal_addr(&elem_c_type, &value_code));
-                code.push_str(", sizeof(");
-                code.push_str(&elem_c_type);
-                code.push_str("))");
+                push_call.push_str("ion_vec_push((ion_vec_t*)(");
+                push_call.push_str(&deref_vec);
+                push_call.push_str("), ");
+                push_call.push_str(&compound_literal_addr(&elem_c_type, &value_code));
+                push_call.push_str(", sizeof(");
+                push_call.push_str(&elem_c_type);
+                push_call.push_str("))");
+                code = wrap_status_panic(&push_call, "Vec::push failed");
             } else if matches!(args[1], IREexpr::Call { .. }) {
                 code.push_str("({ ");
                 code.push_str(&elem_c_type);
                 code.push_str(" _ion_push_val = ");
                 code.push_str(&value_code);
-                code.push_str("; ion_vec_push((ion_vec_t*)(");
+                code.push_str("; if (ion_vec_push((ion_vec_t*)(");
                 code.push_str(&deref_vec);
                 code.push_str("), &_ion_push_val, sizeof(");
                 code.push_str(&elem_c_type);
-                code.push_str(")); })");
+                code.push_str(")) != 0) ion_panic(\"Vec::push failed\"); })");
             } else {
-                code.push_str("ion_vec_push((ion_vec_t*)(");
-                code.push_str(&deref_vec);
-                code.push_str("), &(");
-                code.push_str(&format!("({}){{", elem_c_type));
-                code.push_str(&value_code);
-                code.push_str("}), sizeof(");
-                code.push_str(&elem_c_type);
-                code.push_str("))");
+                push_call.push_str("ion_vec_push((ion_vec_t*)(");
+                push_call.push_str(&deref_vec);
+                push_call.push_str("), &(");
+                push_call.push_str(&format!("({}){{", elem_c_type));
+                push_call.push_str(&value_code);
+                push_call.push_str("}), sizeof(");
+                push_call.push_str(&elem_c_type);
+                push_call.push_str("))");
+                code = wrap_status_panic(&push_call, "Vec::push failed");
             }
             return Some(code);
         }
@@ -532,13 +537,15 @@ impl Codegen {
 
         // String::new() -> String
         if callee == "String::new" && args.is_empty() {
-            return Some("ion_string_new()".to_string());
+            return Some(
+                "({ ion_string_t* _s = ion_string_new(); if (!_s) ion_panic(\"String::new allocation failed\"); _s; })"
+                    .to_string(),
+            );
         }
 
         // String::from(s: &str) -> String
         if callee == "String::from" && args.len() == 1 {
-            let mut code = String::new();
-            // Generate string literal or string argument
+            let code;
             let mut arg_code = String::new();
             let old_output = std::mem::replace(&mut self.output, arg_code);
             self.generate_expr(&args[0]);
@@ -558,13 +565,11 @@ impl Codegen {
             // If it's a string literal, use ion_string_from_literal
             // &str (char*) uses strlen; &String clones the owned buffer.
             if arg_code.starts_with('"') {
-                // Extract string length
-                let len = arg_code.len() - 2; // Remove quotes
-                code.push_str("ion_string_from_literal(");
-                code.push_str(&arg_code);
-                code.push_str(", ");
-                code.push_str(&len.to_string());
-                code.push(')');
+                let len = arg_code.len() - 2;
+                code = wrap_string_ptr(
+                    &format!("ion_string_from_literal({arg_code}, {len})"),
+                    "String::from allocation failed",
+                );
             } else if matches!(
                 arg_ty.as_ref(),
                 Some(Type::Ref {
@@ -572,25 +577,35 @@ impl Codegen {
                     mutable: false,
                 }) if matches!(**inner, Type::Str)
             ) {
-                code.push_str("({ const char* _ion_s = ");
-                code.push_str(&arg_code);
-                code.push_str("; ion_string_from_literal(_ion_s, strlen(_ion_s)); })");
-            } else if matches!(
-                arg_ty.as_ref(),
-                Some(Type::Ref {
-                    inner,
-                    mutable: false,
-                }) if matches!(**inner, Type::String)
-            ) {
-                code.push_str("ion_string_clone(");
-                code.push_str(&arg_code);
-                code.push(')');
+                code = wrap_string_ptr(
+                    &format!(
+                        "({{ const char* _ion_s = {arg_code}; ion_string_from_literal(_ion_s, strlen(_ion_s)); }})"
+                    ),
+                    "String::from allocation failed",
+                );
             } else {
-                // Owned String value
-                code.push_str("ion_string_clone(");
-                code.push_str(&arg_code);
-                code.push(')');
+                code = wrap_string_ptr(
+                    &format!("ion_string_clone({arg_code})"),
+                    "String::from allocation failed",
+                );
             }
+            return Some(code);
+        }
+
+        // String::from_utf8(bytes: Vec<u8>) -> Option<String>
+        if callee == "String::from_utf8" && args.len() == 1 {
+            let option_name = mangle_type_name("Option", std::slice::from_ref(&Type::String));
+            let mut vec_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, vec_code);
+            self.generate_expr(&args[0]);
+            vec_code = std::mem::replace(&mut self.output, old_output);
+            let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
+            let mut code = String::new();
+            code.push_str("({ ");
+            code.push_str(&option_name);
+            code.push_str(" _ion_utf8; ion_vec_t* _ion_bytes = (ion_vec_t*)(");
+            code.push_str(&deref_vec);
+            code.push_str("); const uint8_t* _ion_d = (_ion_bytes && _ion_bytes->data) ? (const uint8_t*)_ion_bytes->data : (const uint8_t*)\"\"; size_t _ion_n = _ion_bytes ? _ion_bytes->len : 0; if (!ion_utf8_valid(_ion_d, _ion_n)) { _ion_utf8.tag = 1; } else { ion_string_t* _ion_s = ion_string_from_literal((const char*)_ion_d, _ion_n); if (!_ion_s) ion_panic(\"String::from_utf8 allocation failed\"); _ion_utf8.tag = 0; _ion_utf8.data.variant_0.arg0 = _ion_s; } if (_ion_bytes) ion_vec_free(_ion_bytes); _ion_utf8; })");
             return Some(code);
         }
 
@@ -612,7 +627,6 @@ impl Codegen {
 
         // String::push_str(s: &mut String, other: &str)
         if callee == "String::push_str" && args.len() == 2 {
-            let mut code = String::new();
             let mut str_code = String::new();
             let old_output = std::mem::replace(&mut self.output, str_code);
             self.generate_expr(&args[0]);
@@ -634,38 +648,30 @@ impl Codegen {
                 _ => false,
             };
 
-            if matches!(&args[1], IREexpr::StringLit(_)) {
-                code.push_str("ion_string_push_str(");
-                code.push_str(&deref_str);
-                code.push_str(", ");
+            let code = if matches!(&args[1], IREexpr::StringLit(_)) {
                 let len = other_code.len() - 2;
-                code.push_str(&other_code);
-                code.push_str(", ");
-                code.push_str(&len.to_string());
-                code.push(')');
+                wrap_status_panic(
+                    &format!("ion_string_push_str({deref_str}, {other_code}, {len})"),
+                    "String::push_str failed",
+                )
             } else if other_is_str_slice {
-                code.push_str("ion_string_push_str(");
-                code.push_str(&deref_str);
-                code.push_str(", ");
-                code.push_str(&other_code);
-                code.push_str(", strlen(");
-                code.push_str(&other_code);
-                code.push_str("))");
+                wrap_status_panic(
+                    &format!(
+                        "ion_string_push_str({deref_str}, {other_code}, strlen({other_code}))"
+                    ),
+                    "String::push_str failed",
+                )
             } else {
-                // Owned String or &String: append using heap buffer (.data/.len).
                 let deref_other = other_code.strip_prefix('&').unwrap_or(&other_code);
-                code.push_str("({ ion_string_t* _ion_push_other = ");
-                code.push_str(deref_other);
-                code.push_str("; ion_string_push_str(");
-                code.push_str(&deref_str);
-                code.push_str(", ((_ion_push_other != NULL && _ion_push_other->data != NULL) ? (const char*)_ion_push_other->data : \"\"), (_ion_push_other != NULL ? _ion_push_other->len : (size_t)0)); })");
-            }
+                format!(
+                    "({{ ion_string_t* _ion_push_other = {deref_other}; if (ion_string_push_str({deref_str}, ((_ion_push_other != NULL && _ion_push_other->data != NULL) ? (const char*)_ion_push_other->data : \"\"), (_ion_push_other != NULL ? _ion_push_other->len : (size_t)0)) != 0) ion_panic(\"String::push_str failed\"); }})"
+                )
+            };
             return Some(code);
         }
 
         // String::push_byte(s: &mut String, b: u8)
         if callee == "String::push_byte" && args.len() == 2 {
-            let mut code = String::new();
             let mut str_code = String::new();
             let old_output = std::mem::replace(&mut self.output, str_code);
             self.generate_expr(&args[0]);
@@ -677,12 +683,10 @@ impl Codegen {
             self.generate_expr(&args[1]);
             byte_code = std::mem::replace(&mut self.output, old_output);
 
-            code.push_str("ion_string_push_byte(");
-            code.push_str(&deref_str);
-            code.push_str(", (unsigned char)(");
-            code.push_str(&byte_code);
-            code.push_str("))");
-            return Some(code);
+            return Some(wrap_status_panic(
+                &format!("ion_string_push_byte({deref_str}, (unsigned char)({byte_code}))"),
+                "String::push_byte failed",
+            ));
         }
 
         // String::get(s: &String, index: int) -> Option<u8>
@@ -839,6 +843,14 @@ impl Codegen {
 
         None
     }
+}
+
+fn wrap_status_panic(call: &str, msg: &str) -> String {
+    format!("({{ if (({call}) != 0) ion_panic(\"{msg}\"); }})")
+}
+
+fn wrap_string_ptr(expr: &str, msg: &str) -> String {
+    format!("({{ ion_string_t* _p = ({expr}); if (!_p) ion_panic(\"{msg}\"); _p; }})")
 }
 
 /// Address of a value for memcpy / `ion_vec_push`. Brace lists become typed compound literals.

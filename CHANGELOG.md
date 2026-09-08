@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Language**: integer `+ - *` wrap in two's complement via same-width unsigned C ops (not `-fwrapv`). `/` and `%` panic on `0` and signed `MIN / -1`. Shifts panic if the right operand is `>=` bitwidth. Signed `>>` is arithmetic. This impacts every integer expression and any program that assumed C signed overflow was undefined or wrapping-by-flag.
+- **Language**: `arr[i] =` now bounds-checks like `arr[i]` (panic unless `unsafe`). This impacts index assignment that previously skipped checks.
+- **Language**: `String` is well-formed UTF-8 (RFC 3629). `push_byte` is ASCII-only. `String::from_utf8(Vec<u8>) -> Option<String>`. `fs::read_to_string_result` validates or `Err(-3)`. This impacts programs that stored raw bytes in `String` or copied strings with `push_byte` of non-ASCII bytes.
+- **Language**: match arms that fall through join ownership (same lattice as `if`). Moving on one arm and using after the match is `UseAfterMove`. This impacts programs that relied on the checker restoring the pre-match environment.
+- **Runtime**: `ion_panic` prints and `abort()`s; drops do not run. `Box::new`, `Vec`/`String` grow, and alloc failure panic instead of returning NULL. This impacts code that treated OOM as a null pointer.
+- **ABI**: enums are `int tag` plus `union { struct variant_N { ... } } data`. No unary `*` deref. FFI: C callee owns nothing Ion still owns.
+- **Tests**: wrap, div0/shift/index-assign panics, UTF-8 reject, match move join.
+- **Docs**: ION_SPEC, ABI, CONTRIBUTING/tests README LSan+TSan, skills.
+
 ## 0.1.24 - 2026-09-06
 
 - **Language**: `recv(&mut rx)` returns `Option<T>` (`Some` while messages remain, `None` after the last sender is dropped and the buffer is empty). This impacts every `let x = recv(...)` that expected `T`.

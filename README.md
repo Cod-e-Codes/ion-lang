@@ -16,7 +16,7 @@ Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 
 - **Ownership**: move by default; single owner per value; use-after-move is a compile error
 - **Borrowing**: `&T` and `&mut T` are stack-local; references cannot escape the function (no return, no struct fields, no channels, no `spawn`)
-- **Types**: primitives, structs, enums (tuple and struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String`
+- **Types**: primitives, structs, enums (tuple and struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String` (well-formed UTF-8; `push_byte` is ASCII-only)
 - **Control flow**: `if`/`while` (bool conditions), `loop { }`, `break`/`continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, `defer`
 - **Concurrency**: `channel<T>()` / `channel<T>(cap)` returns `(Sender<T>, Receiver<T>)`; `clone_sender(&tx)`; `send(&tx, v) -> SendResult<T>` and `recv(&mut rx) -> Option<T>`; `spawn { ... }` with structural `Send`
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`

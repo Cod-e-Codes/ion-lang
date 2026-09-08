@@ -355,7 +355,7 @@ test_for_continue_drop_step.ion	cgen			goto __for_step_
 test_loop_break_drop.ion	run	0
 test_loop_break_drop.ion	cgen			ion_string_free(s)
 test_defer_before_break.ion	run	1
-test_defer_before_break.ion	cgen			n = (n + 1)
+test_defer_before_break.ion	cgen			n = ({
 test_nested_loop_inner_break_drop.ion	run	11
 test_tuple_string_scope_drop.ion	run	3
 test_tuple_string_scope_drop.ion	cgen			ion_string_free(t.f0)
@@ -371,3 +371,10 @@ test_array_string_scope_drop.ion	cgen			ion_string_free((a)[
 test_match_break_in_while.ion	run	3
 test_match_break_in_while.ion	cgen			goto loop_break_
 test_tuple_vec_int.ion	cgen			ion_vec_free((ion_vec_t*)(t.f0))
+test_int_wrap.ion	run	0
+test_div_zero_panic.ion	cgen			ion_panic("division by zero")
+test_signed_div_overflow_panic.ion	cgen			ion_panic("signed division overflow")
+test_shift_width_panic.ion	cgen			ion_panic("shift amount out of range")
+test_assign_index_oob.ion	cgen			ion_panic("Array index out of bounds")
+test_string_from_utf8.ion	run	0
+test_match_move_join_error.ion	error		UseAfterMove

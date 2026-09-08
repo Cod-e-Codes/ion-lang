@@ -3,6 +3,11 @@ pub enum ReadResult {
     Err(int);
 }
 
+enum Option<T> {
+    Some(T);
+    None;
+}
+
 extern "C" {
     fn open(path: *u8, flags: int) -> int;
     fn read(fd: int, buf: *u8, count: int) -> int;
@@ -10,7 +15,8 @@ extern "C" {
 }
 
 // Read an entire file into an owned String.
-// Returns Err(-1) on open failure, Err(-2) on read failure, Ok(s) on success.
+// Returns Err(-1) on open failure, Err(-2) on read failure,
+// Err(-3) if the file is not well-formed UTF-8, Ok(s) on success.
 // flags 0 is O_RDONLY on POSIX and MinGW.
 pub fn read_to_string_result(path: String) -> ReadResult {
     unsafe {
@@ -19,13 +25,13 @@ pub fn read_to_string_result(path: String) -> ReadResult {
             return ReadResult::Err(-1);
         }
 
-        let mut text: String = String::new();
+        let mut bytes: Vec<u8> = Vec::new();
         let mut buf: [u8; 256] = [0; 256];
         let mut n: int = read(fd, &buf[0], 256);
         while n > 0 {
             let mut i: int = 0;
             while i < n {
-                String::push_byte(&mut text, buf[i]);
+                Vec::push(&mut bytes, buf[i]);
                 i = i + 1;
             }
             n = read(fd, &buf[0], 256);
@@ -37,6 +43,13 @@ pub fn read_to_string_result(path: String) -> ReadResult {
         }
 
         let _closed: int = close(fd);
-        return ReadResult::Ok(text);
+        match String::from_utf8(bytes) {
+            Option::Some(text) => {
+                return ReadResult::Ok(text);
+            }
+            Option::None => {
+                return ReadResult::Err(-3);
+            }
+        }
     }
 }

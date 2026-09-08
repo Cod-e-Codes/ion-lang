@@ -259,6 +259,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_array_to_slice_coercion.ion` - `&[T; N]` to `&[]T` at call sites (exit 10)
 - `test_array_to_slice_let.ion` - `&[T; N]` to `&[]T` in let bindings (exit 11)
 - `test_array_bounds_panic.ion` - Array out-of-bounds panic (harness: codegen grep only; manual run below)
+- `test_assign_index_oob.ion` - `arr[i] =` bounds-check panic (codegen grep)
+- `test_int_wrap.ion` - `int::MAX + 1` and `int::MIN - 1` wrap
+- `test_div_zero_panic.ion` / `test_signed_div_overflow_panic.ion` / `test_shift_width_panic.ion` - codegen grep for panic strings
+- `test_string_from_utf8.ion` - ill-formed `Vec<u8>` is `None`; ASCII bytes become `String`
+- `test_match_move_join_error.ion` - match arm move joined with a fall-through arm is `UseAfterMove`
 - `test_unsafe_basic.ion` - Unsafe blocks
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls (negative test)
 - `test_multifile.ion` - Multi-file compilation
@@ -413,7 +418,7 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 
 ### Manual panic tests (bounds)
 
-`test_array_bounds_panic.ion` and `test_slice_bounds_panic.ion` call `ion_panic` and abort. The harness compiles them and greps generated C for the panic message; it does not run the binaries.
+`test_array_bounds_panic.ion`, `test_slice_bounds_panic.ion`, `test_assign_index_oob.ion`, `test_div_zero_panic.ion`, `test_signed_div_overflow_panic.ion`, and `test_shift_width_panic.ion` call `ion_panic` and abort. The harness compiles them and greps generated C for the panic message; it does not run the binaries.
 
 From `tests/` (Git Bash):
 
@@ -450,14 +455,14 @@ test_myfeature.ion	run	42
 Special cases (not in the manifest):
 
 - `test_multifile.ion`: multi-file mode harness in `test_runner.sh`
-- `test_array_bounds_panic.ion` / `test_slice_bounds_panic.ion`: codegen-only in manifest; runtime panic is manual (see below)
+- `test_array_bounds_panic.ion` / `test_slice_bounds_panic.ion` / `test_assign_index_oob.ion` / `test_div_zero_panic.ion` / `test_signed_div_overflow_panic.ion` / `test_shift_width_panic.ion`: codegen-only in manifest; runtime panic is manual (see below)
 
 ## Environment Variables
 
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
 - `ION_BUILD`: Path to the ion-build binary (default: `../target/release/ion-build`)
 - `CC`: C compiler to use (default: `gcc`)
-- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`) and a leak-sanitizer step (`detect_leaks=1`) on `Box::unwrap` tests plus named heap-drop `run` tests (Vec/Box/tuple/array/`break`/`continue`/`Vec::set` of `String`), and runs the full harness with `-Wall -Wextra -Werror` on Linux.
+- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`), a leak-sanitizer (LSan) step (`detect_leaks=1`) on `Box::unwrap` tests plus named heap-drop `run` tests (Vec/Box/tuple/array/`break`/`continue`/`Vec::set` of `String`), thread sanitizer (TSan) on `test_channel_*` / `test_spawn_*` run tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux.
 - `LDFLAGS`: Extra C linker flags for generated test executables (default: empty). Pair with `CFLAGS` for sanitizer runtime flags when needed.
 - `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 

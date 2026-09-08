@@ -889,6 +889,7 @@ impl TypeChecker {
             "Slice::get_ref" => Some("fn Slice::get_ref(s: &[]T, index: int) -> Option<&T>"),
             "String::new" => Some("fn String::new() -> String"),
             "String::from" => Some("fn String::from(s: &str) -> String"),
+            "String::from_utf8" => Some("fn String::from_utf8(bytes: Vec<u8>) -> Option<String>"),
             "String::get" => Some("fn String::get(s: &String, index: int) -> Option<u8>"),
             "String::len" => Some("fn String::len(s: &String) -> int"),
             "String::push_str" => Some("fn String::push_str(s: &mut String, other: &str)"),
@@ -3701,9 +3702,11 @@ impl TypeChecker {
                     None
                 };
 
+                let before_match = self.variables.clone();
+                let mut fallthrough_envs: Vec<HashMap<String, VariableInfo>> = Vec::new();
+
                 for arm in &match_expr.arms {
-                    // Save current scope
-                    let prev_vars = self.variables.clone();
+                    self.variables = before_match.clone();
 
                     let borrows_vec_for_arm = get_ref_owner.is_some()
                         && matches!(
@@ -3781,8 +3784,32 @@ impl TypeChecker {
                     if borrows_vec_for_arm {
                         self.pop_borrow_scope();
                     }
-                    self.variables = prev_vars;
+                    if block_falls_through(&arm.body) {
+                        fallthrough_envs.push(self.variables.clone());
+                    }
                 }
+
+                let mut merged = before_match.clone();
+                if !fallthrough_envs.is_empty() {
+                    for (name, prev_info) in before_match.iter() {
+                        let mut reach_states: Vec<OwnershipState> = Vec::new();
+                        for env in &fallthrough_envs {
+                            reach_states.push(
+                                env.get(name)
+                                    .map(|info| info.state)
+                                    .unwrap_or(prev_info.state),
+                            );
+                        }
+                        let merged_state =
+                            join_ownership_states(&reach_states, name, match_expr.span)?;
+                        if let Some(info) = merged.get_mut(name) {
+                            info.state = merged_state;
+                            info.shared_borrow_count = prev_info.shared_borrow_count;
+                            info.mut_borrow_count = prev_info.mut_borrow_count;
+                        }
+                    }
+                }
+                self.variables = merged;
 
                 // Check exhaustiveness
                 for variant in &enum_decl.variants {
@@ -5688,30 +5715,37 @@ enum MatchArmValue {
     Value(Type),
 }
 
-fn block_contains_break(block: &Block) -> bool {
-    for stmt in &block.statements {
-        match stmt {
-            Stmt::Break(_) => return true,
-            Stmt::If(if_stmt) => {
-                if block_contains_break(&if_stmt.then_block) {
-                    return true;
-                }
-                if let Some(else_blk) = &if_stmt.else_block
-                    && block_contains_break(else_blk)
-                {
-                    return true;
-                }
-            }
-            Stmt::While(while_stmt) if block_contains_break(&while_stmt.body) => return true,
-            Stmt::Loop(loop_stmt) if block_contains_break(&loop_stmt.body) => return true,
-            Stmt::For(for_stmt) if block_contains_break(&for_stmt.body) => return true,
-            Stmt::UnsafeBlock(unsafe_stmt) if block_contains_break(&unsafe_stmt.body) => {
-                return true;
-            }
-            _ => {}
+fn stmt_contains_break(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Break(_) => true,
+        Stmt::If(if_stmt) => {
+            block_contains_break(&if_stmt.then_block)
+                || if_stmt
+                    .else_block
+                    .as_ref()
+                    .is_some_and(block_contains_break)
         }
+        Stmt::While(while_stmt) => block_contains_break(&while_stmt.body),
+        Stmt::Loop(loop_stmt) => block_contains_break(&loop_stmt.body),
+        Stmt::For(for_stmt) => block_contains_break(&for_stmt.body),
+        Stmt::UnsafeBlock(unsafe_stmt) => block_contains_break(&unsafe_stmt.body),
+        Stmt::Expr(expr_stmt) => expr_contains_break(&expr_stmt.expr),
+        _ => false,
     }
-    false
+}
+
+fn expr_contains_break(expr: &Expr) -> bool {
+    match expr {
+        Expr::Match(match_expr) => match_expr
+            .arms
+            .iter()
+            .any(|arm| block_contains_break(&arm.body)),
+        _ => false,
+    }
+}
+
+fn block_contains_break(block: &Block) -> bool {
+    block.statements.iter().any(stmt_contains_break)
 }
 
 /// True when control flow can leave this block and continue at the enclosing merge point.
@@ -5719,7 +5753,11 @@ fn block_falls_through(block: &Block) -> bool {
     if block.statements.is_empty() {
         return true;
     }
-    match block.statements.last().unwrap() {
+    stmt_falls_through(block.statements.last().unwrap())
+}
+
+fn stmt_falls_through(stmt: &Stmt) -> bool {
+    match stmt {
         Stmt::Return(_) | Stmt::Break(_) | Stmt::Continue(_) => false,
         Stmt::If(if_stmt) => {
             let then_ft = block_falls_through(&if_stmt.then_block);
@@ -5727,6 +5765,22 @@ fn block_falls_through(block: &Block) -> bool {
                 Some(else_blk) => then_ft || block_falls_through(else_blk),
                 None => true,
             }
+        }
+        Stmt::Expr(expr_stmt) => expr_falls_through(&expr_stmt.expr),
+        _ => true,
+    }
+}
+
+fn expr_falls_through(expr: &Expr) -> bool {
+    match expr {
+        Expr::Match(match_expr) => {
+            if match_expr.arms.is_empty() {
+                return true;
+            }
+            match_expr
+                .arms
+                .iter()
+                .any(|arm| block_falls_through(&arm.body))
         }
         _ => true,
     }

@@ -198,8 +198,64 @@ ion_string_t *ion_string_new(void) {
   return s;
 }
 
+int ion_utf8_valid(const uint8_t *data, size_t len) {
+  size_t i = 0;
+  if (len == 0)
+    return 1;
+  if (!data)
+    return 0;
+  while (i < len) {
+    uint8_t b = data[i];
+    size_t need;
+    uint32_t cp;
+    size_t j;
+    if (b <= 0x7F) {
+      i++;
+      continue;
+    }
+    if ((b & 0xE0) == 0xC0) {
+      need = 1;
+      cp = (uint32_t)(b & 0x1F);
+      if (b < 0xC2)
+        return 0;
+    } else if ((b & 0xF0) == 0xE0) {
+      need = 2;
+      cp = (uint32_t)(b & 0x0F);
+    } else if ((b & 0xF8) == 0xF0) {
+      need = 3;
+      cp = (uint32_t)(b & 0x07);
+      if (b > 0xF4)
+        return 0;
+    } else {
+      return 0;
+    }
+    if (i + 1 + need > len)
+      return 0;
+    for (j = 0; j < need; j++) {
+      uint8_t c = data[i + 1 + j];
+      if ((c & 0xC0) != 0x80)
+        return 0;
+      cp = (cp << 6) | (uint32_t)(c & 0x3F);
+    }
+    if (need == 2 && cp < 0x800)
+      return 0;
+    if (need == 3 && cp < 0x10000)
+      return 0;
+    if (cp > 0x10FFFF)
+      return 0;
+    if (cp >= 0xD800 && cp <= 0xDFFF)
+      return 0;
+    i += 1 + need;
+  }
+  return 1;
+}
+
 ion_string_t *ion_string_from_literal(const char *lit, size_t len) {
-  ion_string_t *s = (ion_string_t *)malloc(sizeof(ion_string_t));
+  ion_string_t *s;
+  if (!ion_utf8_valid((const uint8_t *)lit, len))
+    return NULL;
+
+  s = (ion_string_t *)malloc(sizeof(ion_string_t));
   if (!s)
     return NULL;
 
@@ -208,7 +264,8 @@ ion_string_t *ion_string_from_literal(const char *lit, size_t len) {
     free(s);
     return NULL;
   }
-  memcpy(s->data, lit, len);
+  if (len > 0 && lit)
+    memcpy(s->data, lit, len);
   s->data[len] = '\0';
   s->len = len;
   s->capacity = len + 1;
@@ -231,6 +288,9 @@ int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
   if (append_len == 0) {
     append_len = strlen(other);
   }
+
+  if (!ion_utf8_valid((const uint8_t *)other, append_len))
+    return -1;
 
   // Grow if needed
   if (s->len + append_len + 1 > s->capacity) {
@@ -256,6 +316,8 @@ int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
 int ion_string_push_byte(ion_string_t *s, unsigned char b) {
   if (!s)
     return -1;
+  if (b >= 0x80)
+    return -2;
 
   if (s->len + 2 > s->capacity) {
     size_t new_capacity = s->capacity;

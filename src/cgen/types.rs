@@ -433,6 +433,23 @@ pub(crate) fn type_to_c_return_type(ty: &Type) -> String {
     }
 }
 
+/// Signed/unsigned C types and bitwidth for defined integer lowering.
+pub(crate) fn int_c_repr(ty: &Type) -> Option<(&'static str, &'static str, Option<u32>, bool)> {
+    match ty {
+        Type::Int => Some(("int", "unsigned int", None, true)),
+        Type::UInt => Some(("unsigned int", "unsigned int", None, false)),
+        Type::I8 => Some(("int8_t", "uint8_t", Some(8), true)),
+        Type::U8 => Some(("uint8_t", "uint8_t", Some(8), false)),
+        Type::I16 => Some(("int16_t", "uint16_t", Some(16), true)),
+        Type::U16 => Some(("uint16_t", "uint16_t", Some(16), false)),
+        Type::I32 => Some(("int32_t", "uint32_t", Some(32), true)),
+        Type::U32 => Some(("uint32_t", "uint32_t", Some(32), false)),
+        Type::I64 => Some(("int64_t", "uint64_t", Some(64), true)),
+        Type::U64 => Some(("uint64_t", "uint64_t", Some(64), false)),
+        _ => None,
+    }
+}
+
 /// C-safe literal for `Type::MIN` / `Type::MAX` (avoids `-2147483648`-style overflow in C).
 pub(crate) fn c_int_limit(ty: &Type, max: bool) -> String {
     match (ty, max) {

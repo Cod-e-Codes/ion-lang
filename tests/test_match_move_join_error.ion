@@ -1,0 +1,19 @@
+enum Flag {
+    A;
+    B;
+}
+
+fn take(b: Box<int>) {
+}
+
+fn main() -> int {
+    let b = Box::new(10);
+    let f: Flag = Flag::A;
+    match f {
+        Flag::A => {
+            take(b);
+        }
+        Flag::B => {}
+    }
+    return Box::unwrap(b);
+}

@@ -379,17 +379,14 @@ pub fn document_symbols(info: &LspInfo) -> Vec<DocumentSymbol> {
 }
 
 fn document_symbol_from_lsp(sym: &LspDocumentSymbol) -> DocumentSymbol {
-    #[allow(deprecated)]
-    DocumentSymbol {
-        name: sym.name.clone(),
-        detail: None,
-        kind: document_symbol_kind(sym.kind),
-        tags: None,
-        deprecated: None,
-        range: span_to_range(&sym.span),
-        selection_range: span_to_range(&sym.span),
-        children: Some(sym.children.iter().map(document_symbol_from_lsp).collect()),
-    }
+    serde_json::from_value(serde_json::json!({
+        "name": sym.name,
+        "kind": document_symbol_kind(sym.kind),
+        "range": span_to_range(&sym.span),
+        "selectionRange": span_to_range(&sym.span),
+        "children": sym.children.iter().map(document_symbol_from_lsp).collect::<Vec<DocumentSymbol>>(),
+    }))
+    .expect("lsp-types DocumentSymbol JSON shape")
 }
 
 fn document_symbol_kind(kind: LspSymbolKind) -> SymbolKind {

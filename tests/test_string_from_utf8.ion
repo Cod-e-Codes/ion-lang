@@ -1,0 +1,30 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut bad: Vec<u8> = Vec::new();
+    Vec::push(&mut bad, 255 as u8);
+    match String::from_utf8(bad) {
+        Option::Some(_) => {
+            return 1;
+        }
+        Option::None => {}
+    }
+
+    let mut ok: Vec<u8> = Vec::new();
+    Vec::push(&mut ok, 65 as u8);
+    match String::from_utf8(ok) {
+        Option::Some(s) => {
+            let expected: String = "A";
+            if s != expected {
+                return 2;
+            }
+            return 0;
+        }
+        Option::None => {
+            return 3;
+        }
+    }
+}
