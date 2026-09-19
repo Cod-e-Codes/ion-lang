@@ -27,6 +27,7 @@
 - **Docs**: ION_SPEC §6.4, BETA, bug hotspots.
 
 - **Language**: nested enum constructors (`Outer::Wrap(Inner::A)`) are type-checked against the payload type and must exhaust the inner enum when every covering arm uses nested constructors. Lowering specializes them to nested `match` on extracted payloads; codegen sees only the existing match form. A catch-all binding mixed with a nested constructor binds the whole outer value. This impacts `match` on nested enums that previously had to unpack one layer at a time.
+- **Fix**: wildcard and whole-enum binding arms wrap `default:` in a compound statement so a declaration after the label is valid C. This impacts Clang (macOS CI) compiling `other =>` / `_ =>` arms that declare at the start of the arm (GCC accepted the GNU extension).
 - **Tests**: `test_nested_match_pattern.ion`, `test_nested_match_named.ion`, `test_nested_match_catchall_binding.ion`, `test_nested_match_unknown_error.ion`, `test_nested_match_nonexhaustive_error.ion`.
 - **Docs**: ION_SPEC §3.6, tests/README, bug hotspots, verified-patterns.
 

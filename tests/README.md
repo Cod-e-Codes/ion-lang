@@ -171,7 +171,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_match_complex.ion` - Complex pattern matching scenarios
 - `test_nested_match_pattern.ion` - Nested constructors `Outer::Wrap(Inner::B)` (exit 2)
 - `test_nested_match_named.ion` - Named-field nested constructor `Outer::Wrap { inner: Inner::B }` (exit 2)
-- `test_nested_match_catchall_binding.ion` - Nested constructor plus catch-all binding `other` (exit 4)
+- `test_nested_match_catchall_binding.ion` - Nested constructor plus catch-all binding `other` (exit 4); `default:` arms are braced so Clang accepts a declaration after the label
 - `test_nested_match_unknown_error.ion` - Unknown nested enum `Nope` is TypeMismatch
 - `test_nested_match_nonexhaustive_error.ion` - Inner variant `B` not covered
 - `test_while_basic.ion` - While loops

@@ -50,6 +50,7 @@ test_match_complex.ion	run	10
 test_nested_match_pattern.ion	run	2
 test_nested_match_named.ion	run	2
 test_nested_match_catchall_binding.ion	run	4
+test_nested_match_catchall_binding.ion	cgen			default: {
 test_nested_match_unknown_error.ion	error		TypeMismatch
 test_nested_match_nonexhaustive_error.ion	error		not exhaustive
 test_generic_types.ion	run	0			

@@ -4966,14 +4966,16 @@ impl Codegen {
         match &arm.pattern {
             IRPattern::Wildcard => {
                 self.write_indent();
-                self.writeln("default:");
+                self.writeln("default: {");
                 self.indent_level += 1;
                 self.generate_match_arm_body(arm, match_result, true);
                 self.indent_level -= 1;
+                self.write_indent();
+                self.writeln("}");
             }
             IRPattern::Binding { name } => {
                 self.write_indent();
-                self.writeln(&format!("default: // binding {}", name));
+                self.writeln(&format!("default: {{ // binding {}", name));
                 self.indent_level += 1;
                 self.write_indent();
                 self.writeln(&format!("{} {} = {};", enum_type, name, match_var_name));
@@ -4986,6 +4988,8 @@ impl Codegen {
                 }
                 self.generate_match_arm_body(arm, match_result, true);
                 self.indent_level -= 1;
+                self.write_indent();
+                self.writeln("}");
             }
             IRPattern::Variant { .. } => {
                 // Variant arms are handled by grouped generation in generate_match_block.
@@ -7778,7 +7782,7 @@ fn main() -> int {
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         let binding_arm = c
-            .split("default: // binding r")
+            .split("default: { // binding r")
             .nth(1)
             .and_then(|tail| tail.split("goto epilogue;").next())
             .unwrap_or("");
