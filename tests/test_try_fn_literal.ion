@@ -1,0 +1,20 @@
+import "stdlib/result.ion" as result;
+
+fn apply() -> Result<int, int> {
+    let f: fn(Result<int, int>) -> Result<int, int> = fn(r: Result<int, int>) -> Result<int, int> {
+        let x = r?;
+        return Result::Ok(x + 1);
+    };
+    return f(Result::Ok(7));
+}
+
+fn main() -> int {
+    match apply() {
+        Result::Ok(v) => {
+            return v;
+        }
+        Result::Err(_) => {
+            return 0;
+        }
+    }
+}

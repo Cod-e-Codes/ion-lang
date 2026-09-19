@@ -355,6 +355,7 @@ pub enum Expr {
     FieldAccess(FieldAccessExpr),
     EnumLit(EnumLitExpr),
     Match(MatchExpr),
+    Try(TryExpr),
     Call(CallExpr),
     MethodCall(MethodCallExpr),
     StringLit(StringLitExpr),
@@ -384,6 +385,7 @@ impl Expr {
             Expr::FieldAccess(e) => e.id,
             Expr::EnumLit(e) => e.id,
             Expr::Match(e) => e.id,
+            Expr::Try(e) => e.id,
             Expr::Call(e) => e.id,
             Expr::MethodCall(e) => e.id,
             Expr::StringLit(e) => e.id,
@@ -413,6 +415,7 @@ impl Expr {
             Expr::FieldAccess(e) => e.id = id,
             Expr::EnumLit(e) => e.id = id,
             Expr::Match(e) => e.id = id,
+            Expr::Try(e) => e.id = id,
             Expr::Call(e) => e.id = id,
             Expr::MethodCall(e) => e.id = id,
             Expr::StringLit(e) => e.id = id,
@@ -530,6 +533,7 @@ pub(crate) fn number_expr(expr: &mut Expr, next_id: &mut u32) {
                 number_block(&mut arm.body, next_id);
             }
         }
+        Expr::Try(e) => number_expr(&mut e.operand, next_id),
         Expr::Call(e) => {
             for arg in &mut e.args {
                 number_expr(arg, next_id);
@@ -719,6 +723,13 @@ pub struct MatchArm {
     pub pattern: Pattern,
     pub guard: Option<Expr>,
     pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct TryExpr {
+    pub id: ExprId,
+    pub operand: Box<Expr>,
     pub span: Span,
 }
 

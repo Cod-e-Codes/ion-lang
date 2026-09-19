@@ -1,0 +1,18 @@
+import "stdlib/result.ion" as result;
+
+fn take(r: Result<String, int>) -> Result<int, int> {
+    let s = r?;
+    return Result::Ok(String::len(&s));
+}
+
+fn main() -> int {
+    let hello: String = "hello";
+    match take(Result::Ok(hello)) {
+        Result::Ok(n) => {
+            return n;
+        }
+        Result::Err(_) => {
+            return 0;
+        }
+    }
+}

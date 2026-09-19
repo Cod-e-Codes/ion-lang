@@ -1,0 +1,6 @@
+import "stdlib/result.ion" as result;
+
+fn main() -> int {
+    let r: Result<int, int> = Result::Ok(1);
+    return r?;
+}

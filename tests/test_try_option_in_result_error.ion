@@ -1,0 +1,16 @@
+import "stdlib/result.ion" as result;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn wrap() -> Result<int, int> {
+    let o: Option<int> = Option::Some(1);
+    let x = o?;
+    return Result::Ok(x);
+}
+
+fn main() -> int {
+    return 0;
+}

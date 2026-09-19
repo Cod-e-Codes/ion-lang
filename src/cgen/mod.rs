@@ -76,6 +76,9 @@ pub struct Codegen {
     /// Index of the current loop body frame (`scope_stack.len()` before `generate_block` of the body).
     loop_unwind_depth: usize,
     match_in_switch: u32,
+    /// C temps for nested `match` (`generate_match_block` / rvalue match). Parent is
+    /// `stack[len-2]` so a nested catch-all can bind the outer scrutinee.
+    match_scrutinee_stack: Vec<String>,
     /// When true (single-file merge), module calls use `{alias}_{func}` C names.
     mangle_merged_module_calls: bool,
     /// Set during multi-file codegen: prefix this module's functions (`io_print_int`).
@@ -125,6 +128,7 @@ impl Codegen {
             loop_break_label_used: false,
             loop_unwind_depth: 0,
             match_in_switch: 0,
+            match_scrutinee_stack: Vec::new(),
             mangle_merged_module_calls: false,
             multi_file_module: None,
             pending_field_nulls: Vec::new(),
@@ -144,6 +148,28 @@ impl Codegen {
             .or_else(|| self.compilation_param_types.get(resolved_callee))
             .or_else(|| self.compilation_param_types.get(func_name))
             .or_else(|| self.extern_functions.get(func_name))
+    }
+
+    fn lookup_call_param_types(&self, resolved_callee: &str, func_name: &str) -> Option<Vec<Type>> {
+        if let Some(params) = self.lookup_param_types(resolved_callee, func_name) {
+            return Some(params.clone());
+        }
+        match self
+            .lookup_var_type(resolved_callee)
+            .or_else(|| self.lookup_var_type(func_name))
+        {
+            Some(Type::Fn { params, .. }) => Some(params),
+            _ => None,
+        }
+    }
+
+    fn parent_match_scrutinee(&self) -> Option<&str> {
+        let n = self.match_scrutinee_stack.len();
+        if n >= 2 {
+            Some(self.match_scrutinee_stack[n - 2].as_str())
+        } else {
+            self.match_scrutinee_stack.last().map(String::as_str)
+        }
     }
 
     fn lookup_return_type(&self, callee: &str) -> Option<&Option<Type>> {
@@ -423,6 +449,7 @@ impl Codegen {
         self.fn_literal_forward_decls.clear();
         self.fn_literal_definitions.clear();
         self.generated_fn_literals.clear();
+        self.match_scrutinee_stack.clear();
 
         self.emit_generated_banner(source_ion);
 
@@ -736,11 +763,13 @@ impl Codegen {
         self.fn_literal_forward_decls.clear();
         self.fn_literal_definitions.clear();
         self.generated_fn_literals.clear();
+        self.match_scrutinee_stack.clear();
 
         self.extern_functions.clear();
         self.function_return_types.clear();
         self.function_param_types.clear();
         for extern_block in &program.extern_blocks {
+            Self::assert_c_extern_linkage(extern_block);
             for ext_fn in &extern_block.functions {
                 self.extern_functions.insert(
                     ext_fn.name.clone(),
@@ -977,6 +1006,7 @@ impl Codegen {
 
         // Generate extern function prototypes (declarations only, implementations come from headers)
         for extern_block in &program.extern_blocks {
+            Self::assert_c_extern_linkage(extern_block);
             for ext_fn in &extern_block.functions {
                 let return_type = ext_fn
                     .return_type
@@ -3296,8 +3326,14 @@ impl Codegen {
                 self.write(&value.to_string());
             }
             IREexpr::Var(name) => {
-                self.scope_mark_binding_read(name);
-                self.write(name);
+                if name == crate::ir::MATCH_PARENT_SCRUTINEE {
+                    let resolved = self.parent_match_scrutinee().unwrap_or(name).to_string();
+                    self.scope_mark_binding_read(&resolved);
+                    self.write(&resolved);
+                } else {
+                    self.scope_mark_binding_read(name);
+                    self.write(name);
+                }
             }
             IREexpr::AddressOf { inner, mutable: _ } => {
                 // Generate address-of: &x
@@ -3552,14 +3588,16 @@ impl Codegen {
                 variant,
                 args,
                 named_fields,
+                ty,
             } => {
-                let monomorphized_enum_name = if let Some(context_ty) = type_context {
-                    let is_generic = self
-                        .enum_map
-                        .get(enum_name)
-                        .map(|e| !e.generics.is_empty())
-                        .unwrap_or(false);
-                    if is_generic {
+                let context_ty = type_context.or(Some(ty));
+                let is_generic = self
+                    .enum_map
+                    .get(enum_name)
+                    .map(|e| !e.generics.is_empty())
+                    .unwrap_or(false);
+                let monomorphized_enum_name = if is_generic {
+                    if let Some(context_ty) = context_ty {
                         self.type_to_c(context_ty)
                     } else {
                         enum_name.clone()
@@ -3573,7 +3611,7 @@ impl Codegen {
                     variant,
                     args,
                     named_fields.as_deref(),
-                    type_context,
+                    context_ty,
                 );
             }
             IREexpr::Match {
@@ -3582,73 +3620,8 @@ impl Codegen {
                 arms,
                 scrutinee_type,
             } => {
-                // Generate match expression using switch statement
-                // Get monomorphized enum name if it's generic
-                let enum_decl = self.enum_map.get(enum_type).cloned();
-
-                // Try to extract type from the expression if it's a Call to Vec::pop or Vec::get
-                let (monomorphized_enum_name, type_params) = self
-                    .resolve_option_match_instantiation(
-                        expr,
-                        enum_type,
-                        enum_decl.as_ref(),
-                        scrutinee_type.as_ref(),
-                    );
-
-                let match_var_name = format!("match_val_{}", self.match_counter);
-                self.match_counter += 1;
-
                 self.write("({ ");
-                // Check if the expression is a call to Vec::pop or Vec::get that returns void*
-                let needs_cast = if let IREexpr::Call { callee, .. } = expr.as_ref() {
-                    callee == "Vec::pop" || callee == "Vec::get"
-                } else {
-                    false
-                };
-
-                if needs_cast {
-                    let elem_c_type = if type_params.is_empty() {
-                        "int".to_string()
-                    } else {
-                        self.type_to_c(&type_params[0])
-                    };
-                    self.write_option_from_runtime_raw(
-                        &monomorphized_enum_name,
-                        &elem_c_type,
-                        &match_var_name,
-                        expr,
-                    );
-                } else if self.match_scrutinee_needs_deref(expr, scrutinee_type.as_ref()) {
-                    self.write(&format!(
-                        "{} {} = *",
-                        monomorphized_enum_name, match_var_name
-                    ));
-                    self.generate_expr(expr);
-                    self.writeln(";");
-                } else {
-                    // Evaluate expression once into a temporary with correct enum type
-                    self.write(&format!(
-                        "{} {} = ",
-                        monomorphized_enum_name, match_var_name
-                    ));
-                    self.generate_expr(expr);
-                    self.writeln(";");
-                }
-                self.match_in_switch += 1;
-                self.write_indent();
-                self.write(&format!("switch ({}.tag) {{", match_var_name));
-                self.writeln("");
-                self.emit_grouped_match_arms(
-                    arms,
-                    &monomorphized_enum_name,
-                    enum_decl.as_ref(),
-                    &match_var_name,
-                    &type_params,
-                    None,
-                );
-                self.write_indent();
-                self.writeln("}");
-                self.match_in_switch = self.match_in_switch.saturating_sub(1);
+                self.generate_match_block(expr, enum_type, arms, None, scrutinee_type.as_ref());
                 self.write(" 0 })");
             }
             IREexpr::Call {
@@ -3685,16 +3658,16 @@ impl Codegen {
 
                     self.write(&func_name);
                     self.write("(");
+                    let param_types = self.lookup_call_param_types(&resolved_callee, &func_name);
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 {
                             self.write(", ");
                         }
-                        let param_types = self.lookup_param_types(&resolved_callee, &func_name);
-                        let param_ty = param_types.and_then(|pts| pts.get(i).cloned());
+                        let param_ty = param_types.as_ref().and_then(|pts| pts.get(i).cloned());
                         // If this is an extern function expecting int by value, convert &int (immutable) arguments to int
                         // For &int -> int: just use the inner expression (the variable itself)
                         // For &mut int -> int*: keep the address-of (don't dereference)
-                        if let Some(param_types) = param_types
+                        if let Some(param_types) = param_types.as_ref()
                             && i < param_types.len()
                             && let Some((array_name, size, elem_ty)) =
                                 self.match_array_to_slice_coercion(&param_types[i], arg)
@@ -4308,12 +4281,14 @@ impl Codegen {
         self.generated_types.insert(enum_name.clone(), true);
     }
 
-    fn generate_extern_block(&mut self, extern_block: &ExternBlock) {
-        // Only support "C" linkage for now
+    fn assert_c_extern_linkage(extern_block: &ExternBlock) {
         if extern_block.linkage != "C" {
-            // Skip non-C linkage blocks
-            return;
+            panic!("compiler bug: non-C extern reached cgen");
         }
+    }
+
+    fn generate_extern_block(&mut self, extern_block: &ExternBlock) {
+        Self::assert_c_extern_linkage(extern_block);
 
         // Generate extern function prototypes
         for extern_fn in &extern_block.functions {
@@ -4691,6 +4666,7 @@ impl Codegen {
             self.mark_moves_in_expr(expr);
         }
         self.match_in_switch += 1;
+        self.match_scrutinee_stack.push(match_var_name.clone());
         self.write_indent();
         self.write(&format!("switch ({}.tag) {{", match_var_name));
         self.writeln("");
@@ -4704,6 +4680,7 @@ impl Codegen {
         );
         self.write_indent();
         self.writeln("}");
+        self.match_scrutinee_stack.pop();
         self.match_in_switch = self.match_in_switch.saturating_sub(1);
     }
 
@@ -4869,24 +4846,7 @@ impl Codegen {
                                     // Wildcard - don't extract, field is ignored
                                 }
                                 IRPattern::Variant { .. } => {
-                                    // Nested variant pattern - extract to temp
-                                    let temp_name = format!("_field_{}", field_name);
-                                    self.write_indent();
-                                    self.emit_binding_from_c_expr(
-                                        &concrete_field_ty,
-                                        &temp_name,
-                                        &format!(
-                                            "{}.data.variant_{}.{}",
-                                            match_var_name, variant_idx, field_name
-                                        ),
-                                    );
-                                    self.writeln("");
-                                    self.emit_match_scrutinee_payload_moved_out(
-                                        match_var_name,
-                                        variant_idx,
-                                        field_name,
-                                        &concrete_field_ty,
-                                    );
+                                    // Nested constructors are specialized to nested IR Match in lowering.
                                 }
                             }
                         }
@@ -4970,26 +4930,7 @@ impl Codegen {
                                 // Wildcard - don't extract, payload is ignored
                             }
                             IRPattern::Variant { .. } => {
-                                // Nested variant pattern - for now, extract to temp and match recursively
-                                // This is a simplified version - full implementation would recurse
-                                let payload_field = format!("arg{i}");
-                                let temp_name = format!("_payload_{}", i);
-                                self.write_indent();
-                                self.emit_binding_from_c_expr(
-                                    &concrete_payload_ty,
-                                    &temp_name,
-                                    &format!(
-                                        "{}.data.variant_{}.{}",
-                                        match_var_name, variant_idx, payload_field
-                                    ),
-                                );
-                                self.writeln("");
-                                self.emit_match_scrutinee_payload_moved_out(
-                                    match_var_name,
-                                    variant_idx,
-                                    &payload_field,
-                                    &concrete_payload_ty,
-                                );
+                                // Nested constructors are specialized to nested IR Match in lowering.
                             }
                         }
                     } else {
@@ -5126,10 +5067,27 @@ impl Codegen {
             }
             IRStmt::Expr(expr) => {
                 if is_last {
-                    self.write_indent();
-                    self.write(&format!("{} = ", result_var));
-                    self.generate_expr_with_type(expr, Some(result_type));
-                    self.writeln(";");
+                    if let IREexpr::Match {
+                        expr: match_expr,
+                        enum_type,
+                        arms,
+                        scrutinee_type,
+                    } = expr
+                    {
+                        self.generate_match_block(
+                            match_expr,
+                            enum_type,
+                            arms,
+                            Some((result_var, result_type)),
+                            scrutinee_type.as_ref(),
+                        );
+                    } else {
+                        self.write_indent();
+                        self.write(&format!("{} = ", result_var));
+                        self.generate_expr_with_type(expr, Some(result_type));
+                        self.writeln(";");
+                        self.mark_moves_in_expr(expr);
+                    }
                 } else {
                     self.generate_stmt(&stmts[idx]);
                     self.emit_match_arm_result_from_stmts(stmts, idx + 1, result_var, result_type);
@@ -7311,7 +7269,8 @@ fn collect_generic_from_expr(
         IREexpr::FieldAccess { base, .. } => {
             collect_generic_from_expr(base, instantiations);
         }
-        IREexpr::EnumLit { args, .. } => {
+        IREexpr::EnumLit { args, ty, .. } => {
+            collect_generic_from_type(ty, instantiations);
             for arg in args {
                 collect_generic_from_expr(arg, instantiations);
             }
@@ -7750,6 +7709,50 @@ fn main() -> int {
         assert!(
             !ok_arm.contains("ion_string_free(match_val_0"),
             "expected no enum drop on scrutinee string payload in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn rvalue_match_owned_string_arm_result_marks_payload_moved() {
+        let src = r#"enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn unwrap_or_empty(opt: Option<String>) -> String {
+    let out: String = match opt {
+        Option::Some(s) => {
+            s;
+        }
+        Option::None => {
+            String::new();
+        }
+    };
+    return out;
+}
+
+fn main() -> int {
+    return 0;
+}"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let some_arm = c
+            .split("case 0:")
+            .nth(1)
+            .and_then(|tail| tail.split("case 1:").next())
+            .unwrap_or("");
+        assert!(
+            some_arm.contains("out = s;"),
+            "expected arm result assignment in:\n{c}"
+        );
+        assert!(
+            some_arm.contains("match_val_0.data.variant_0.arg0 = NULL"),
+            "expected moved-out scrutinee payload to be nulled in:\n{c}"
+        );
+        assert!(
+            !some_arm.contains("ion_string_free(s)"),
+            "expected moved payload binding not dropped after rvalue assignment in:\n{some_arm}"
         );
     }
 
@@ -8270,6 +8273,40 @@ fn main() -> int {
         assert!(
             c.contains("ion_string_from_literal"),
             "expected imported String param to wrap literal in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn fn_pointer_enum_lit_arg_uses_mangled_type() {
+        let src = r#"
+enum Result<T, E> {
+    Ok(T);
+    Err(E);
+}
+fn main() -> int {
+    let f: fn(Result<int, int>) -> int = fn(r: Result<int, int>) -> int {
+        match r {
+            Result::Ok(v) => {
+                return v;
+            }
+            Result::Err(_) => {
+                return 0;
+            }
+        }
+    };
+    return f(Result::Ok(7));
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains("(Result_int_int){"),
+            "expected mangled Result literal at fn-pointer call, got:\n{c}"
+        );
+        assert!(
+            !c.contains("(Result){"),
+            "bare Result type name at fn-pointer call:\n{c}"
         );
     }
 }

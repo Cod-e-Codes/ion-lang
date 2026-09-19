@@ -1,0 +1,10 @@
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
+fn main() -> int {
+    let r: SetResult = SetResult::Ok;
+    let x = r?;
+    return 0;
+}

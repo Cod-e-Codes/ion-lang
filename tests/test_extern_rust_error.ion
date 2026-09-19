@@ -1,0 +1,10 @@
+extern "Rust" {
+    fn fake_add(a: int, b: int) -> int;
+}
+
+fn main() -> int {
+    // This should fail - only extern "C" linkage is allowed
+    unsafe {
+        return fake_add(1, 2);
+    }
+}

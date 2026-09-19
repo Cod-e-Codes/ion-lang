@@ -1,0 +1,18 @@
+import "stdlib/result.ion" as result;
+import "try_lib.ion" as lib;
+
+fn wrap() -> Result<int, int> {
+    let x = lib::give()?;
+    return Result::Ok(x);
+}
+
+fn main() -> int {
+    match wrap() {
+        Result::Ok(v) => {
+            return v;
+        }
+        Result::Err(_) => {
+            return 0;
+        }
+    }
+}

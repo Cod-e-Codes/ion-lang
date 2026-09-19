@@ -2420,6 +2420,21 @@ impl Parser {
                 continue;
             }
 
+            // Check for postfix try: expr?
+            if !self.is_at_end() && matches!(self.tokens[self.current].kind, TokenKind::Question) {
+                let start_span = expr.span();
+                self.advance(); // consume ?
+                let end_span = Span::from_token(self.previous());
+                let span = start_span.merge(&end_span);
+
+                expr = Expr::Try(TryExpr {
+                    id: ExprId::UNASSIGNED,
+                    operand: Box::new(expr),
+                    span,
+                });
+                continue;
+            }
+
             // Check for field access: expr.field
             let dot_idx = self.current;
             if self.is_at_end() {
@@ -3491,6 +3506,7 @@ impl HasSpan for Expr {
             Expr::FieldAccess(e) => e.span,
             Expr::EnumLit(e) => e.span,
             Expr::Match(e) => e.span,
+            Expr::Try(e) => e.span,
             Expr::Call(e) => e.span,
             Expr::MethodCall(e) => e.span,
             Expr::StringLit(e) => e.span,
@@ -3605,5 +3621,66 @@ fn main() -> int {
             Some("x coordinate")
         );
         assert!(program.structs[0].fields[1].doc.is_none());
+    }
+
+    fn first_fn_let_init(program: &Program) -> &Expr {
+        match &program.functions[0].body.statements[0] {
+            Stmt::Let(s) => s.init.as_ref().expect("let init"),
+            other => panic!("expected let, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_postfix_try() {
+        let program = parse_with_source(
+            r#"fn f(x: Option<int>) -> Option<int> {
+    let y = x?;
+    return y;
+}"#,
+        );
+        match first_fn_let_init(&program) {
+            Expr::Try(t) => match t.operand.as_ref() {
+                Expr::Var(v) => assert_eq!(v.name, "x"),
+                other => panic!("expected var, got {other:?}"),
+            },
+            other => panic!("expected try, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_postfix_try_after_method_call() {
+        let program = parse_with_source(
+            r#"fn f(v: Vec<int>) -> Option<int> {
+    let y = v.get(0)?;
+    return y;
+}"#,
+        );
+        match first_fn_let_init(&program) {
+            Expr::Try(t) => match t.operand.as_ref() {
+                Expr::MethodCall(m) => assert_eq!(m.method, "get"),
+                other => panic!("expected method call, got {other:?}"),
+            },
+            other => panic!("expected try, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_postfix_try_chain() {
+        let program = parse_with_source(
+            r#"fn f(x: Result<Result<int, int>, int>) -> Result<int, int> {
+    let y = x??;
+    return y;
+}"#,
+        );
+        match first_fn_let_init(&program) {
+            Expr::Try(outer) => match outer.operand.as_ref() {
+                Expr::Try(inner) => match inner.operand.as_ref() {
+                    Expr::Var(v) => assert_eq!(v.name, "x"),
+                    other => panic!("expected var, got {other:?}"),
+                },
+                other => panic!("expected inner try, got {other:?}"),
+            },
+            other => panic!("expected try, got {other:?}"),
+        }
     }
 }

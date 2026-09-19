@@ -72,6 +72,7 @@ pub enum TokenKind {
     Greater,      // >
     LessEqual,    // <=
     GreaterEqual, // >=
+    Question,     // ?
 
     // Delimiters
     LParen,    // (
@@ -240,6 +241,10 @@ impl Lexer {
                     } else {
                         TokenKind::Not
                     }
+                }
+                Some('?') => {
+                    self.advance();
+                    TokenKind::Question
                 }
                 Some('&') => {
                     self.advance();
@@ -803,7 +808,7 @@ mod tests {
 
     #[test]
     fn test_operators() {
-        let mut lexer = Lexer::new("+ - * / = ->");
+        let mut lexer = Lexer::new("+ - * / = -> ?");
         let tokens = lexer.tokenize().unwrap();
         assert_eq!(tokens[0].kind, TokenKind::Plus);
         assert_eq!(tokens[1].kind, TokenKind::Minus);
@@ -811,6 +816,7 @@ mod tests {
         assert_eq!(tokens[3].kind, TokenKind::Slash);
         assert_eq!(tokens[4].kind, TokenKind::Equals);
         assert_eq!(tokens[5].kind, TokenKind::Arrow);
+        assert_eq!(tokens[6].kind, TokenKind::Question);
     }
 
     #[test]

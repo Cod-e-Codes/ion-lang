@@ -1,0 +1,10 @@
+enum ReadResult {
+    Ok(String);
+    Err(int);
+}
+
+fn main() -> int {
+    let r: ReadResult = ReadResult::Err(-1);
+    let x = r?;
+    return 0;
+}

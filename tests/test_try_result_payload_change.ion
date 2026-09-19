@@ -1,0 +1,24 @@
+import "stdlib/result.ion" as result;
+
+fn as_flag() -> Result<bool, int> {
+    return Result::Ok(true);
+}
+
+fn as_int() -> Result<int, int> {
+    let flag = as_flag()?;
+    if flag {
+        return Result::Ok(5);
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    match as_int() {
+        Result::Ok(v) => {
+            return v;
+        }
+        Result::Err(_) => {
+            return 1;
+        }
+    }
+}

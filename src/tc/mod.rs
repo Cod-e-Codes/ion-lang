@@ -33,6 +33,7 @@ impl HasSpan for Expr {
             Expr::FieldAccess(e) => e.span,
             Expr::EnumLit(e) => e.span,
             Expr::Match(e) => e.span,
+            Expr::Try(e) => e.span,
             Expr::Call(e) => e.span,
             Expr::MethodCall(e) => e.span,
             Expr::StringLit(e) => e.span,
@@ -346,14 +347,16 @@ pub struct TypeChecker {
     loop_frames: Vec<LoopOwnershipFrame>,
     // Current function's resolved return type (for return statement checking)
     current_return_type: Option<Type>,
+    // True while type-checking a `spawn` body (does not reset current_return_type).
+    in_spawn: bool,
     // Expected type for the expression being checked (let annotation, struct field).
     expr_expected: Option<Type>,
     // LSP information collected during type checking
     pub lsp_info: LspInfo,
     type_info: TypeInfo,
     next_expr_id: u32,
-    // Active function generic type parameter names (innermost scope last)
-    type_param_scopes: Vec<Vec<String>>,
+    // Active function generic type parameters including bounds (innermost scope last)
+    type_param_scopes: Vec<Vec<TypeParam>>,
     // Borrows registered in nested scopes (released on scope pop)
     borrow_scopes: Vec<Vec<(String, bool)>>,
     // When false, skip recording expression-level LSP data (avoids span collisions from merged imports).
@@ -390,6 +393,7 @@ impl TypeChecker {
             loop_depth: 0,
             loop_frames: Vec::new(),
             current_return_type: None,
+            in_spawn: false,
             expr_expected: None,
             lsp_info: LspInfo::default(),
             type_info: TypeInfo::default(),
@@ -411,17 +415,29 @@ impl TypeChecker {
     }
 
     fn push_type_params(&mut self, params: &[TypeParam]) {
-        self.type_param_scopes.push(TypeParam::names(params));
+        self.type_param_scopes.push(params.to_vec());
     }
 
     fn pop_type_params(&mut self) {
         self.type_param_scopes.pop();
     }
 
-    fn is_type_param(&self, name: &str) -> bool {
+    fn lookup_type_param(&self, name: &str) -> Option<&TypeParam> {
         self.type_param_scopes
             .iter()
-            .any(|scope| scope.iter().any(|p| p == name))
+            .rev()
+            .find_map(|scope| scope.iter().find(|p| p.name == name))
+    }
+
+    fn is_type_param(&self, name: &str) -> bool {
+        self.lookup_type_param(name).is_some()
+    }
+
+    /// `Some(true)` iff `name` is a type parameter with a `Send` bound in the current scope.
+    /// `Some(false)` iff it is a type parameter without that bound. `None` if not a parameter.
+    fn type_param_is_send(&self, name: &str) -> Option<bool> {
+        self.lookup_type_param(name)
+            .map(|p| p.bounds.iter().any(|b| b == "Send"))
     }
 
     fn expected_generic_params(&self, enum_name: &str) -> Option<Vec<Type>> {
@@ -495,6 +511,29 @@ impl TypeChecker {
             Some(expected) => self.check_expr_with_expected(arg_expr, &expected),
             None => self.check_expr(arg_expr),
         }
+    }
+
+    /// Check a generic constructor payload against the expected instantiation when
+    /// known. Integer literals stay `int`; they are not placeholders for `T`.
+    fn generic_enum_payload_matches(
+        &self,
+        arg_ty: &Type,
+        declared_payload: &Type,
+        inferred_subst: &HashMap<String, Type>,
+        enum_name: &str,
+        generic_names: &[String],
+    ) -> (bool, Type) {
+        if let Some(expected) =
+            self.expected_enum_payload_type(declared_payload, enum_name, generic_names)
+        {
+            let ok = Self::can_coerce_numeric(arg_ty, &expected) || types_equal(arg_ty, &expected);
+            return (ok, expected);
+        }
+        let expected_now = substitute_generic_types_impl(declared_payload, inferred_subst);
+        let ok = Self::can_coerce_numeric(arg_ty, &expected_now)
+            || types_equal(arg_ty, &expected_now)
+            || Self::is_generic_placeholder(declared_payload, generic_names);
+        (ok, expected_now)
     }
 
     fn record_hover_doc(&mut self, span: Span, doc: String) {
@@ -994,9 +1033,16 @@ impl TypeChecker {
             self.functions.insert(f.name.clone(), f.clone());
         }
 
-        // Record extern function declarations
+        // Record extern function declarations. Only `"C"` linkage is allowed.
         self.extern_functions.clear();
         for extern_block in &program.extern_blocks {
+            if extern_block.linkage != "C" {
+                errors.push(TypeCheckError::Message(format!(
+                    "unsupported extern \"{}\" linkage; only extern \"C\" is allowed",
+                    extern_block.linkage
+                )));
+                continue;
+            }
             for extern_fn in &extern_block.functions {
                 self.extern_functions
                     .insert(extern_fn.name.clone(), extern_fn.clone());
@@ -2693,13 +2739,19 @@ impl TypeChecker {
             self.variables
                 .insert(name, Self::new_variable_info(ty, span));
         }
+        let prev_spawn = self.in_spawn;
+        self.in_spawn = true;
         self.push_borrow_scope();
-        for inner in &body.statements {
-            self.check_stmt(inner)?;
-        }
+        let body_result = (|| {
+            for inner in &body.statements {
+                self.check_stmt(inner)?;
+            }
+            Ok(())
+        })();
         self.pop_borrow_scope();
         self.variables = parent_vars;
-        Ok(())
+        self.in_spawn = prev_spawn;
+        body_result
     }
 
     fn check_select_stmt(&mut self, select_stmt: &SelectStmt) -> Result<(), TypeCheckError> {
@@ -3564,7 +3616,7 @@ impl TypeChecker {
 
                     // If this is a generic enum, infer type params from the payload
                     // (tuple variants such as Result::Err(E) and Option::Some(T)).
-                    let types_match = if is_generic {
+                    let (types_match, expected_for_err) = if is_generic {
                         let subs = infer_generic_substitutions(
                             &resolved_expected_ty,
                             &resolved_arg_ty,
@@ -3588,28 +3640,25 @@ impl TypeChecker {
                             .zip(inferred_params.iter())
                             .map(|(g, t)| (g.name.clone(), t.clone()))
                             .collect();
-                        let expected_now =
-                            substitute_generic_types_impl(&resolved_expected_ty, &subst_map);
-                        Self::can_coerce_numeric(&resolved_arg_ty, &expected_now)
-                            || types_equal(&resolved_arg_ty, &expected_now)
-                            || matches!(
-                                &resolved_expected_ty,
-                                Type::Struct(p) if generic_names.iter().any(|g| g == p)
-                            )
-                            || matches!(
-                                &resolved_expected_ty,
-                                Type::Generic { name: p, params }
-                                    if params.is_empty() && generic_names.iter().any(|g| g == p)
-                            )
+                        self.generic_enum_payload_matches(
+                            &resolved_arg_ty,
+                            &resolved_expected_ty,
+                            &subst_map,
+                            &enum_decl.name,
+                            &generic_names,
+                        )
                     } else {
                         let numeric_coerced =
                             Self::can_coerce_numeric(&resolved_arg_ty, &resolved_expected_ty);
-                        numeric_coerced || types_equal(&resolved_arg_ty, &resolved_expected_ty)
+                        (
+                            numeric_coerced || types_equal(&resolved_arg_ty, &resolved_expected_ty),
+                            resolved_expected_ty.clone(),
+                        )
                     };
 
                     if !types_match {
                         return Err(TypeCheckError::TypeMismatch {
-                            expected: type_to_string(&resolved_expected_ty),
+                            expected: type_to_string(&expected_for_err),
                             got: type_to_string(&resolved_arg_ty),
                             span: arg_expr.span(),
                         });
@@ -3666,15 +3715,26 @@ impl TypeChecker {
                             .zip(inferred_params.iter())
                             .map(|(g, t)| (g.name.clone(), t.clone()))
                             .collect();
-                        let expected_now =
-                            substitute_generic_types_impl(&resolved_expected_ty, &subst_map);
-                        let types_match = Self::can_coerce_numeric(&resolved_arg_ty, &expected_now)
-                            || types_equal(&resolved_arg_ty, &expected_now)
-                            || (is_generic
-                                && matches!(&resolved_expected_ty, Type::Struct(p) if generic_names.iter().any(|g| g == p)));
+                        let (types_match, expected_for_err) = if is_generic {
+                            self.generic_enum_payload_matches(
+                                &resolved_arg_ty,
+                                &resolved_expected_ty,
+                                &subst_map,
+                                &enum_decl.name,
+                                &generic_names,
+                            )
+                        } else {
+                            let expected_now =
+                                substitute_generic_types_impl(&resolved_expected_ty, &subst_map);
+                            (
+                                Self::can_coerce_numeric(&resolved_arg_ty, &expected_now)
+                                    || types_equal(&resolved_arg_ty, &expected_now),
+                                expected_now,
+                            )
+                        };
                         if !types_match {
                             return Err(TypeCheckError::TypeMismatch {
-                                expected: type_to_string(&expected_now),
+                                expected: type_to_string(&expected_for_err),
                                 got: type_to_string(&resolved_arg_ty),
                                 span: field_expr.span(),
                             });
@@ -3688,9 +3748,9 @@ impl TypeChecker {
                         while inferred_params.len() <= i {
                             inferred_params.push(Type::Struct(g.name.clone()));
                         }
-                        let is_placeholder = matches!(&inferred_params[i], Type::Int)
-                            || matches!(&inferred_params[i], Type::Struct(n) if n == &g.name)
-                            || matches!(&inferred_params[i], Type::Generic { name, params } if name == &g.name && params.is_empty());
+                        let param_names = [g.name.clone()];
+                        let is_placeholder =
+                            Self::is_generic_placeholder(&inferred_params[i], &param_names);
                         if is_placeholder {
                             if let Some(ref exp) = expected_params
                                 && i < exp.len()
@@ -3698,6 +3758,20 @@ impl TypeChecker {
                                 inferred_params[i] = exp[i].clone();
                             } else if self.is_type_param(&g.name) {
                                 inferred_params[i] = Type::Struct(g.name.clone());
+                            }
+                        } else if let Some(ref exp) = expected_params
+                            && i < exp.len()
+                            && !types_equal(&inferred_params[i], &exp[i])
+                        {
+                            let expected_ty = &exp[i];
+                            if Self::can_coerce_numeric(&inferred_params[i], expected_ty) {
+                                inferred_params[i] = expected_ty.clone();
+                            } else {
+                                return Err(TypeCheckError::TypeMismatch {
+                                    expected: type_to_string(expected_ty),
+                                    got: type_to_string(&inferred_params[i]),
+                                    span: enum_lit.span,
+                                });
                             }
                         }
                         let still_unresolved = matches!(&inferred_params[i], Type::Struct(n) if n == &g.name)
@@ -3963,8 +4037,11 @@ impl TypeChecker {
                     }
                 }
 
+                self.check_nested_constructor_exhaustiveness(&match_expr.arms, &enum_decl)?;
+
                 Ok(match_value_type.unwrap_or(Type::Void))
             }
+            Expr::Try(try_expr) => self.check_try_expr(try_expr),
             Expr::Call(call_expr) => {
                 // Check if this is a built-in function first
                 if let Some(return_type) = self.check_builtin_call(call_expr)? {
@@ -4812,7 +4889,9 @@ impl TypeChecker {
 
                 let prev_vars = self.variables.clone();
                 let prev_return = self.current_return_type.clone();
+                let prev_spawn = self.in_spawn;
                 self.current_return_type = Some(resolved_return.clone());
+                self.in_spawn = false;
 
                 for (param, param_ty) in lit.params.iter().zip(resolved_params.iter()) {
                     self.check_no_off_stack_reference(param_ty, lit.span)?;
@@ -4830,6 +4909,7 @@ impl TypeChecker {
 
                 self.variables = prev_vars;
                 self.current_return_type = prev_return;
+                self.in_spawn = prev_spawn;
 
                 let fn_ty = Type::Fn {
                     params: resolved_params,
@@ -4885,6 +4965,123 @@ impl TypeChecker {
             }
             _ => None,
         }
+    }
+
+    fn check_try_expr(&mut self, try_expr: &TryExpr) -> Result<Type, TypeCheckError> {
+        let prev_expected = self.expr_expected.take();
+        let operand_ty = self.check_expr(&try_expr.operand);
+        self.expr_expected = prev_expected;
+        let operand_ty = operand_ty?;
+        if self.in_spawn {
+            return Err(TypeCheckError::Message(
+                "? operator cannot be used inside spawn".to_string(),
+            ));
+        }
+        let kind = self.try_kind_from_type(&operand_ty, try_expr.span)?;
+        let Some(return_ty) = self.current_return_type.clone() else {
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "function returning Option<_> or Result<_, _>".to_string(),
+                got: "expression outside a function".to_string(),
+                span: try_expr.span,
+            });
+        };
+        let return_ty = self.resolve_type_name(&return_ty)?;
+        match kind {
+            TryKind::Option { payload } => match &return_ty {
+                Type::Generic { name, params } if name == "Option" && params.len() == 1 => {
+                    Ok(payload)
+                }
+                other => Err(TypeCheckError::TypeMismatch {
+                    expected: "function returning Option<_>".to_string(),
+                    got: type_to_string(other),
+                    span: try_expr.span,
+                }),
+            },
+            TryKind::Result { ok, err } => match &return_ty {
+                Type::Generic { name, params } if name == "Result" && params.len() == 2 => {
+                    if !types_equal(&params[1], &err) {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: format!(
+                                "function returning Result<_, {}>",
+                                type_to_string(&err)
+                            ),
+                            got: type_to_string(&return_ty),
+                            span: try_expr.span,
+                        });
+                    }
+                    Ok(ok)
+                }
+                other => Err(TypeCheckError::TypeMismatch {
+                    expected: format!("function returning Result<_, {}>", type_to_string(&err)),
+                    got: type_to_string(other),
+                    span: try_expr.span,
+                }),
+            },
+        }
+    }
+
+    fn try_kind_from_type(&self, ty: &Type, span: Span) -> Result<TryKind, TypeCheckError> {
+        let resolved = self.resolve_type_name(ty)?;
+        if let Type::Ref { inner, mutable } = &resolved {
+            let prefix = if *mutable { "&mut " } else { "&" };
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "owned Option<T> or Result<T, E>".to_string(),
+                got: format!("{}{}", prefix, type_to_string(inner)),
+                span,
+            });
+        }
+        match &resolved {
+            Type::Generic { name, params } if name == "Option" && params.len() == 1 => {
+                if !self.enum_has_try_shape(name, &[("Some", true), ("None", false)]) {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "owned Option<T> or Result<T, E>".to_string(),
+                        got: type_to_string(&resolved),
+                        span,
+                    });
+                }
+                Ok(TryKind::Option {
+                    payload: params[0].clone(),
+                })
+            }
+            Type::Generic { name, params } if name == "Result" && params.len() == 2 => {
+                if !self.enum_has_try_shape(name, &[("Ok", true), ("Err", true)]) {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "owned Option<T> or Result<T, E>".to_string(),
+                        got: type_to_string(&resolved),
+                        span,
+                    });
+                }
+                Ok(TryKind::Result {
+                    ok: params[0].clone(),
+                    err: params[1].clone(),
+                })
+            }
+            other => Err(TypeCheckError::TypeMismatch {
+                expected: "owned Option<T> or Result<T, E>".to_string(),
+                got: type_to_string(other),
+                span,
+            }),
+        }
+    }
+
+    fn enum_has_try_shape(&self, name: &str, variants: &[(&str, bool)]) -> bool {
+        let Some(decl) = self.enums.get(name) else {
+            return name == "Option";
+        };
+        if decl.variants.len() != variants.len() {
+            return false;
+        }
+        variants.iter().all(|(variant_name, has_payload)| {
+            decl.variants.iter().any(|variant| {
+                variant.name == *variant_name
+                    && variant.named_fields.is_none()
+                    && if *has_payload {
+                        variant.payload_types.len() == 1
+                    } else {
+                        variant.payload_types.is_empty()
+                    }
+            })
+        })
     }
 
     pub(crate) fn require_named_enum(
@@ -5628,6 +5825,19 @@ impl TypeChecker {
         self.is_send_rec(ty, &mut HashSet::new())
     }
 
+    fn enum_payloads_are_send(&self, decl: &EnumDecl, visiting: &mut HashSet<String>) -> bool {
+        decl.variants.iter().all(|v| {
+            v.payload_types
+                .iter()
+                .all(|ty| self.is_send_rec(ty, visiting))
+                && v.named_fields.as_ref().is_none_or(|named_fields| {
+                    named_fields
+                        .iter()
+                        .all(|(_, ty)| self.is_send_rec(ty, visiting))
+                })
+        })
+    }
+
     fn is_send_rec(&self, ty: &Type, visiting: &mut HashSet<String>) -> bool {
         match ty {
             Type::Void => true,
@@ -5648,6 +5858,9 @@ impl TypeChecker {
             Type::RawPtr { inner } => self.is_send_rec(inner, visiting),
             Type::Channel { elem_type } => self.is_send_rec(elem_type, visiting),
             Type::Struct(name) => {
+                if let Some(is_send) = self.type_param_is_send(name) {
+                    return is_send;
+                }
                 if !visiting.insert(name.clone()) {
                     // Coinductive: a cycle does not introduce non-Send by itself.
                     return true;
@@ -5656,29 +5869,30 @@ impl TypeChecker {
                     decl.fields
                         .iter()
                         .all(|f| self.is_send_rec(&f.ty, visiting))
+                } else if let Some(decl) = self.enums.get(name) {
+                    // Parser stores enum names as Type::Struct until resolve_type_name.
+                    self.enum_payloads_are_send(decl, visiting)
+                } else if let Some(alias) = self.type_aliases.get(name) {
+                    self.is_send_rec(&alias.target, visiting)
                 } else {
-                    true
+                    false
                 };
                 visiting.remove(name);
                 result
             }
             Type::Enum(name) => {
+                if let Some(is_send) = self.type_param_is_send(name) {
+                    return is_send;
+                }
                 if !visiting.insert(name.clone()) {
                     return true;
                 }
                 let result = if let Some(decl) = self.enums.get(name) {
-                    decl.variants.iter().all(|v| {
-                        v.payload_types
-                            .iter()
-                            .all(|ty| self.is_send_rec(ty, visiting))
-                            && v.named_fields.as_ref().is_none_or(|named_fields| {
-                                named_fields
-                                    .iter()
-                                    .all(|(_, ty)| self.is_send_rec(ty, visiting))
-                            })
-                    })
+                    self.enum_payloads_are_send(decl, visiting)
+                } else if let Some(alias) = self.type_aliases.get(name) {
+                    self.is_send_rec(&alias.target, visiting)
                 } else {
-                    true
+                    false
                 };
                 visiting.remove(name);
                 result
@@ -5713,6 +5927,210 @@ impl TypeChecker {
         }
     }
 
+    fn enum_decl_named(&self, name: &str, span: Span) -> Result<EnumDecl, TypeCheckError> {
+        if let Some(decl) = self.enums.get(name) {
+            return Ok(decl.clone());
+        }
+        if name == "Option" {
+            return Ok(synthetic_option_enum(span));
+        }
+        Err(TypeCheckError::TypeMismatch {
+            expected: "known enum type".to_string(),
+            got: name.to_string(),
+            span,
+        })
+    }
+
+    fn enum_decl_for_scrutinee(
+        &self,
+        scrutinee_ty: &Type,
+        span: Span,
+    ) -> Result<(String, EnumDecl), TypeCheckError> {
+        match scrutinee_ty {
+            Type::Enum(name) | Type::Struct(name) => {
+                let decl = self.enum_decl_named(name, span)?;
+                Ok((name.clone(), decl))
+            }
+            Type::Generic { name, .. } => {
+                let decl =
+                    self.enum_decl_named(name, span)
+                        .map_err(|_| TypeCheckError::TypeMismatch {
+                            expected: "enum type for match".to_string(),
+                            got: type_to_string(scrutinee_ty),
+                            span,
+                        })?;
+                Ok((name.clone(), decl))
+            }
+            _ => Err(TypeCheckError::TypeMismatch {
+                expected: "enum type for match".to_string(),
+                got: type_to_string(scrutinee_ty),
+                span,
+            }),
+        }
+    }
+
+    fn bind_nested_variant_pattern(
+        &mut self,
+        sub_pattern: &Pattern,
+        concrete_ty: Type,
+        match_through_ref: bool,
+        ref_mutability: bool,
+        expr: &Expr,
+    ) -> Result<(), TypeCheckError> {
+        let Pattern::Variant {
+            enum_name,
+            span: pat_span,
+            ..
+        } = sub_pattern
+        else {
+            return Ok(());
+        };
+        let resolved = self.resolve_type_name(&concrete_ty)?;
+        let (inner_ty, inner_through_ref, inner_mut) = match &resolved {
+            Type::Ref { inner, mutable } => {
+                let inner_resolved = self.resolve_type_name(inner)?;
+                (inner_resolved, true, *mutable)
+            }
+            _ if match_through_ref => (resolved, true, ref_mutability),
+            _ => (resolved, false, false),
+        };
+        let (inner_name, inner_decl) = self.enum_decl_for_scrutinee(&inner_ty, *pat_span)?;
+        if enum_name != &inner_name {
+            return Err(TypeCheckError::TypeMismatch {
+                expected: type_to_string(&inner_ty),
+                got: enum_name.clone(),
+                span: *pat_span,
+            });
+        }
+        let inner_expr_ty = if inner_through_ref {
+            Type::Ref {
+                inner: Box::new(inner_ty),
+                mutable: inner_mut,
+            }
+        } else {
+            inner_ty
+        };
+        self.add_pattern_bindings(
+            sub_pattern,
+            &inner_decl,
+            &inner_expr_ty,
+            inner_through_ref,
+            inner_mut,
+            expr,
+        )
+    }
+
+    fn check_nested_constructor_exhaustiveness(
+        &self,
+        arms: &[MatchArm],
+        enum_decl: &EnumDecl,
+    ) -> Result<(), TypeCheckError> {
+        let catch_all = arms.iter().any(|arm| {
+            matches!(
+                arm.pattern,
+                Pattern::Wildcard { .. } | Pattern::Binding { .. }
+            )
+        });
+        if catch_all {
+            return Ok(());
+        }
+        for variant in &enum_decl.variants {
+            let covering: Vec<&Pattern> = arms
+                .iter()
+                .filter_map(|arm| match &arm.pattern {
+                    Pattern::Variant { variant: name, .. } if name == &variant.name => {
+                        Some(&arm.pattern)
+                    }
+                    _ => None,
+                })
+                .collect();
+            if covering.is_empty() || covering.iter().any(|p| pattern_fully_covers_ctor(p)) {
+                continue;
+            }
+            self.check_ctor_payload_exhaustiveness(variant, &covering)?;
+        }
+        Ok(())
+    }
+
+    fn check_ctor_payload_exhaustiveness(
+        &self,
+        variant: &EnumVariant,
+        covering: &[&Pattern],
+    ) -> Result<(), TypeCheckError> {
+        if let Some(named_fields) = &variant.named_fields {
+            for (field_name, _) in named_fields {
+                let slot_pats: Vec<&Pattern> = covering
+                    .iter()
+                    .filter_map(|p| match p {
+                        Pattern::Variant {
+                            named_fields: Some(fields),
+                            ..
+                        } => fields
+                            .iter()
+                            .find(|(n, _)| n == field_name)
+                            .map(|(_, pat)| pat),
+                        _ => None,
+                    })
+                    .collect();
+                self.check_slot_exhaustiveness(&slot_pats)?;
+            }
+        } else {
+            for i in 0..variant.payload_types.len() {
+                let slot_pats: Vec<&Pattern> = covering
+                    .iter()
+                    .filter_map(|p| match p {
+                        Pattern::Variant { sub_patterns, .. } => sub_patterns.get(i),
+                        _ => None,
+                    })
+                    .collect();
+                self.check_slot_exhaustiveness(&slot_pats)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn check_slot_exhaustiveness(&self, slot_pats: &[&Pattern]) -> Result<(), TypeCheckError> {
+        if slot_pats.is_empty()
+            || slot_pats
+                .iter()
+                .any(|p| matches!(p, Pattern::Binding { .. } | Pattern::Wildcard { .. }))
+        {
+            return Ok(());
+        }
+        let Some(Pattern::Variant {
+            enum_name, span, ..
+        }) = slot_pats.first()
+        else {
+            return Ok(());
+        };
+        let inner_decl = self.enum_decl_named(enum_name, *span)?;
+        let mut covered: HashSet<String> = HashSet::new();
+        let mut nested_by_variant: HashMap<String, Vec<&Pattern>> = HashMap::new();
+        for p in slot_pats {
+            if let Pattern::Variant { variant, .. } = p {
+                covered.insert(variant.clone());
+                nested_by_variant
+                    .entry(variant.clone())
+                    .or_default()
+                    .push(*p);
+            }
+        }
+        for v in &inner_decl.variants {
+            if !covered.contains(&v.name) {
+                return Err(TypeCheckError::Message(format!(
+                    "Match expression is not exhaustive: variant '{}' of enum '{}' is not covered",
+                    v.name, inner_decl.name
+                )));
+            }
+            if let Some(pats) = nested_by_variant.get(&v.name)
+                && !pats.iter().any(|p| pattern_fully_covers_ctor(p))
+            {
+                self.check_ctor_payload_exhaustiveness(v, pats)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Add pattern bindings to the variable scope
     fn add_pattern_bindings(
         &mut self,
@@ -5721,7 +6139,7 @@ impl TypeChecker {
         expr_ty: &Type,
         match_through_ref: bool,
         ref_mutability: bool,
-        _expr: &Expr,
+        expr: &Expr,
     ) -> Result<(), TypeCheckError> {
         let wrap_ref_binding = |ty: Type| -> Type {
             if match_through_ref && Self::is_copy_type(&ty) {
@@ -5775,7 +6193,7 @@ impl TypeChecker {
                                     // Substitute generic parameters in field type
                                     let concrete_field_ty =
                                         substitute_generic_types_impl(field_ty, &substitutions);
-                                    let binding_ty = wrap_ref_binding(concrete_field_ty);
+                                    let binding_ty = wrap_ref_binding(concrete_field_ty.clone());
 
                                     match field_pattern {
                                         Pattern::Binding { name, .. } => {
@@ -5785,8 +6203,13 @@ impl TypeChecker {
                                             );
                                         }
                                         Pattern::Variant { .. } => {
-                                            // Nested variant - recurse (simplified for now)
-                                            // For nested patterns, we'd need to handle them recursively
+                                            self.bind_nested_variant_pattern(
+                                                field_pattern,
+                                                concrete_field_ty,
+                                                match_through_ref,
+                                                ref_mutability,
+                                                expr,
+                                            )?;
                                         }
                                         Pattern::Wildcard { .. } => {
                                             // Wildcard - no binding to add
@@ -5814,7 +6237,7 @@ impl TypeChecker {
                                 // direct generic parameters and nested generic types correctly
                                 let concrete_payload_ty =
                                     substitute_generic_types_impl(payload_ty, &substitutions);
-                                let binding_ty = wrap_ref_binding(concrete_payload_ty);
+                                let binding_ty = wrap_ref_binding(concrete_payload_ty.clone());
 
                                 match sub_pattern {
                                     Pattern::Binding { name, .. } => {
@@ -5824,8 +6247,13 @@ impl TypeChecker {
                                         );
                                     }
                                     Pattern::Variant { .. } => {
-                                        // Nested variant - recurse (simplified for now)
-                                        // For nested patterns, we'd need to handle them recursively
+                                        self.bind_nested_variant_pattern(
+                                            sub_pattern,
+                                            concrete_payload_ty,
+                                            match_through_ref,
+                                            ref_mutability,
+                                            expr,
+                                        )?;
                                     }
                                     Pattern::Wildcard { .. } => {
                                         // Wildcard - no binding to add
@@ -5853,6 +6281,56 @@ impl TypeChecker {
     }
 }
 
+fn pattern_fully_covers_ctor(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Binding { .. } | Pattern::Wildcard { .. } => true,
+        Pattern::Variant {
+            sub_patterns,
+            named_fields,
+            ..
+        } => {
+            if let Some(fields) = named_fields {
+                fields
+                    .iter()
+                    .all(|(_, p)| matches!(p, Pattern::Binding { .. } | Pattern::Wildcard { .. }))
+            } else {
+                sub_patterns
+                    .iter()
+                    .all(|p| matches!(p, Pattern::Binding { .. } | Pattern::Wildcard { .. }))
+            }
+        }
+    }
+}
+
+fn synthetic_option_enum(span: Span) -> EnumDecl {
+    EnumDecl {
+        doc: None,
+        pub_: false,
+        name: "Option".to_string(),
+        generics: vec![TypeParam::simple("T")],
+        variants: vec![
+            EnumVariant {
+                doc: None,
+                name: "Some".to_string(),
+                payload_types: vec![Type::Generic {
+                    name: "T".to_string(),
+                    params: vec![],
+                }],
+                named_fields: None,
+                span,
+            },
+            EnumVariant {
+                doc: None,
+                name: "None".to_string(),
+                payload_types: vec![],
+                named_fields: None,
+                span,
+            },
+        ],
+        span,
+    }
+}
+
 /// How a match arm contributes to rvalue unification.
 #[derive(Clone)]
 enum MatchArmValue {
@@ -5862,6 +6340,11 @@ enum MatchArmValue {
     Unit,
     /// Trailing expression statement.
     Value(Type),
+}
+
+enum TryKind {
+    Option { payload: Type },
+    Result { ok: Type, err: Type },
 }
 
 fn stmt_contains_break(stmt: &Stmt) -> bool {
@@ -5889,6 +6372,7 @@ fn expr_contains_break(expr: &Expr) -> bool {
             .arms
             .iter()
             .any(|arm| block_contains_break(&arm.body)),
+        Expr::Try(try_expr) => expr_contains_break(&try_expr.operand),
         _ => false,
     }
 }
@@ -6189,6 +6673,7 @@ fn collect_expr_var_refs(
                 collect_block_var_refs(&arm.body, refs, &mut arm_locals);
             }
         }
+        Expr::Try(try_expr) => collect_expr_var_refs(&try_expr.operand, refs, locals),
         Expr::Call(call_expr) => {
             for arg in &call_expr.args {
                 collect_expr_var_refs(arg, refs, locals);

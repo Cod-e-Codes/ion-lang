@@ -21,6 +21,9 @@
             "include": "#comments"
         },
         {
+            "include": "#operators"
+        },
+        {
             "include": "#numbers"
         },
         {
@@ -76,6 +79,14 @@
                 {
                     "name": "comment.line.double-slash.ion",
                     "match": "//.*$"
+                }
+            ]
+        },
+        "operators": {
+            "patterns": [
+                {
+                    "name": "keyword.operator.try.ion",
+                    "match": "\\?"
                 }
             ]
         },

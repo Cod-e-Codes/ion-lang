@@ -1,0 +1,28 @@
+enum Inner {
+    A;
+    B;
+}
+
+enum Outer {
+    Wrap(Inner);
+    Other;
+}
+
+fn main() -> int {
+    let o: Outer = Outer::Wrap(Inner::B);
+    match o {
+        Outer::Wrap(Inner::A) => {
+            return 1;
+        },
+        other => {
+            match other {
+                Outer::Other => {
+                    return 3;
+                },
+                Outer::Wrap(_) => {
+                    return 4;
+                },
+            }
+        },
+    }
+}

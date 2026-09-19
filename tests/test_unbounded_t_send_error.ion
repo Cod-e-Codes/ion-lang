@@ -1,0 +1,18 @@
+// Unbounded T is not Send. channel<T>() inside wrap<T> must fail even if
+// the call site later passes a non-Send &int (which would also be illegal
+// under wrap<T: Send>).
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+fn wrap<T>(v: T) {
+    let (tx, _rx): (Sender<T>, Receiver<T>) = channel<T>();
+    send(&tx, v);
+}
+
+fn main() -> int {
+    let x: int = 1;
+    wrap(&x);
+    return 0;
+}

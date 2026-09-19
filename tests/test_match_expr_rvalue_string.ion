@@ -1,0 +1,31 @@
+// Rvalue match: success arm is a bare owned String binding (`s;`), same shape as
+// examples/todo_demo first_token and as postfix `?` lowering on Result<String, _>.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn unwrap_or_empty(opt: Option<String>) -> String {
+    let out: String = match opt {
+        Option::Some(s) => {
+            s;
+        }
+        Option::None => {
+            String::new();
+        }
+    };
+    return out;
+}
+
+fn main() -> int {
+    let empty: String = unwrap_or_empty(Option::None);
+    if String::len(&empty) != 0 {
+        return 1;
+    }
+    let hello: String = "hello";
+    let out: String = unwrap_or_empty(Option::Some(hello));
+    if String::len(&out) != 5 {
+        return 2;
+    }
+    return 93;
+}

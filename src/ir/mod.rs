@@ -1,5 +1,9 @@
 use crate::ast::*;
 use crate::tc::{TypeInfo, collect_captured_vars};
+
+/// Sentinel lowered into nested-match catch-all bindings. Codegen rewrites it to
+/// the parent match's C scrutinee temp so `other` is the whole outer value.
+pub(crate) const MATCH_PARENT_SCRUTINEE: &str = "__ion_match_parent_scrutinee";
 use crate::types_util::{infer_generic_substitutions, ref_to_vec_elem};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -160,6 +164,8 @@ pub enum IREexpr {
         variant: String,
         args: Vec<IREexpr>,                           // For tuple variants
         named_fields: Option<Vec<(String, IREexpr)>>, // For struct variants: { field: expr }
+        /// Instantiated enum type from TypeInfo (`Result<int, int>`, not the bare name).
+        ty: Type,
     },
     Match {
         expr: Box<IREexpr>,
@@ -227,6 +233,7 @@ pub struct IRMatchArm {
 struct LoweringContext {
     var_types: HashMap<String, Type>,
     struct_decls: HashMap<String, StructDecl>,
+    enum_decls: HashMap<String, EnumDecl>,
     enum_param_counts: HashMap<String, usize>,
     tuple_temp_counter: usize,
     fn_literal_counter: Rc<Cell<usize>>,
@@ -238,6 +245,7 @@ impl LoweringContext {
     fn from_params(
         params: &[IRParam],
         struct_decls: HashMap<String, StructDecl>,
+        enum_decls: HashMap<String, EnumDecl>,
         enum_param_counts: HashMap<String, usize>,
         fn_literal_counter: Rc<Cell<usize>>,
         function_returns: HashMap<String, Option<Type>>,
@@ -250,6 +258,7 @@ impl LoweringContext {
         Self {
             var_types,
             struct_decls,
+            enum_decls,
             enum_param_counts,
             tuple_temp_counter: 0,
             fn_literal_counter,
@@ -278,11 +287,18 @@ fn record_match_arm_bindings(pattern: &Pattern, scrutinee_ty: &Type, ctx: &mut L
         }
         Pattern::Wildcard { .. } => {}
         Pattern::Variant {
-            variant: _,
+            variant,
             sub_patterns,
             named_fields,
             ..
         } => {
+            record_variant_payload_bindings(
+                variant,
+                sub_patterns,
+                named_fields.as_ref(),
+                scrutinee_ty,
+                ctx,
+            );
             if let Type::Generic { params, .. } = scrutinee_ty
                 && let Some(payload_ty) = params.first()
             {
@@ -376,6 +392,447 @@ pub enum IRPattern {
     },
 }
 
+#[derive(Clone)]
+enum NestedSlot {
+    Pos(usize),
+    Named(String),
+}
+
+fn generic_subst_from_scrutinee(decl: &EnumDecl, scrutinee: &Type) -> HashMap<String, Type> {
+    let peeled = match scrutinee {
+        Type::Ref { inner, .. } => inner.as_ref(),
+        other => other,
+    };
+    if let Type::Generic { params, .. } = peeled {
+        decl.generics
+            .iter()
+            .zip(params.iter())
+            .map(|(tp, ty)| (tp.name.clone(), ty.clone()))
+            .collect()
+    } else {
+        HashMap::new()
+    }
+}
+
+fn peel_type_ref(ty: &Type) -> Type {
+    match ty {
+        Type::Ref { inner, .. } => peel_type_ref(inner),
+        other => other.clone(),
+    }
+}
+
+fn ir_pattern_has_nested_variant(pattern: &IRPattern) -> bool {
+    match pattern {
+        IRPattern::Variant {
+            sub_patterns,
+            named_fields,
+            ..
+        } => {
+            sub_patterns
+                .iter()
+                .any(|p| matches!(p, IRPattern::Variant { .. }) || ir_pattern_has_nested_variant(p))
+                || named_fields.as_ref().is_some_and(|fields| {
+                    fields.iter().any(|(_, p)| {
+                        matches!(p, IRPattern::Variant { .. }) || ir_pattern_has_nested_variant(p)
+                    })
+                })
+        }
+        _ => false,
+    }
+}
+
+fn slot_pattern<'a>(pattern: &'a IRPattern, slot: &NestedSlot) -> Option<&'a IRPattern> {
+    match (pattern, slot) {
+        (
+            IRPattern::Variant {
+                sub_patterns,
+                named_fields,
+                ..
+            },
+            NestedSlot::Pos(i),
+        ) => {
+            if named_fields.is_some() {
+                None
+            } else {
+                sub_patterns.get(*i)
+            }
+        }
+        (
+            IRPattern::Variant {
+                named_fields: Some(fields),
+                ..
+            },
+            NestedSlot::Named(name),
+        ) => fields.iter().find(|(n, _)| n == name).map(|(_, p)| p),
+        _ => None,
+    }
+}
+
+fn pattern_ctor_key(pattern: &IRPattern) -> String {
+    match pattern {
+        IRPattern::Variant { variant, .. } => format!("v:{variant}"),
+        IRPattern::Wildcard => "_".to_string(),
+        IRPattern::Binding { name } => format!("b:{name}"),
+    }
+}
+
+fn payload_type_for_slot(
+    ctx: &LoweringContext,
+    enum_type: &str,
+    variant: &str,
+    slot: &NestedSlot,
+    scrutinee_type: Option<&Type>,
+) -> Type {
+    let Some(decl) = ctx.enum_decls.get(enum_type) else {
+        return Type::Enum("Unknown".to_string());
+    };
+    let subst = scrutinee_type
+        .map(|ty| generic_subst_from_scrutinee(decl, ty))
+        .unwrap_or_default();
+    let Some(vdecl) = decl.variants.iter().find(|v| v.name == variant) else {
+        return Type::Enum("Unknown".to_string());
+    };
+    let raw = match slot {
+        NestedSlot::Pos(i) => vdecl.payload_types.get(*i).cloned(),
+        NestedSlot::Named(name) => vdecl.named_fields.as_ref().and_then(|fields| {
+            fields
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, t)| t.clone())
+        }),
+    };
+    let ty = raw.unwrap_or_else(|| Type::Enum("Unknown".to_string()));
+    peel_type_ref(&ctx.types.resolve(&substitute_type(&ty, &subst)))
+}
+
+fn nested_slots_for_group(group: &[IRMatchArm]) -> Vec<NestedSlot> {
+    let mut slots = Vec::new();
+    let Some(IRPattern::Variant {
+        sub_patterns,
+        named_fields,
+        ..
+    }) = group.first().map(|a| &a.pattern)
+    else {
+        return slots;
+    };
+    if let Some(fields) = named_fields {
+        for (name, _) in fields {
+            if group.iter().any(|arm| {
+                slot_pattern(&arm.pattern, &NestedSlot::Named(name.clone()))
+                    .is_some_and(|p| matches!(p, IRPattern::Variant { .. }))
+            }) {
+                slots.push(NestedSlot::Named(name.clone()));
+            }
+        }
+    } else {
+        let max_len = group
+            .iter()
+            .map(|arm| match &arm.pattern {
+                IRPattern::Variant { sub_patterns, .. } => sub_patterns.len(),
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(sub_patterns.len());
+        for i in 0..max_len {
+            if group.iter().any(|arm| {
+                slot_pattern(&arm.pattern, &NestedSlot::Pos(i))
+                    .is_some_and(|p| matches!(p, IRPattern::Variant { .. }))
+            }) {
+                slots.push(NestedSlot::Pos(i));
+            }
+        }
+    }
+    slots
+}
+
+fn replace_nested_slots_with_bindings(
+    pattern: &IRPattern,
+    slots: &[(NestedSlot, String)],
+) -> IRPattern {
+    let IRPattern::Variant {
+        enum_name,
+        variant,
+        sub_patterns,
+        named_fields,
+    } = pattern
+    else {
+        return pattern.clone();
+    };
+    let mut sub_patterns = sub_patterns.clone();
+    let mut named_fields = named_fields.clone();
+    for (slot, temp) in slots {
+        match slot {
+            NestedSlot::Pos(i) => {
+                if let Some(p) = sub_patterns.get_mut(*i) {
+                    *p = IRPattern::Binding { name: temp.clone() };
+                }
+            }
+            NestedSlot::Named(name) => {
+                if let Some(fields) = named_fields.as_mut()
+                    && let Some((_, p)) = fields.iter_mut().find(|(n, _)| n == name)
+                {
+                    *p = IRPattern::Binding { name: temp.clone() };
+                }
+            }
+        }
+    }
+    IRPattern::Variant {
+        enum_name: enum_name.clone(),
+        variant: variant.clone(),
+        sub_patterns,
+        named_fields,
+    }
+}
+
+fn catch_all_body_binding_outer(ca: &IRMatchArm, scrutinee_ty: Option<&Type>) -> IRBlock {
+    match &ca.pattern {
+        IRPattern::Binding { name } => {
+            let ty = scrutinee_ty
+                .cloned()
+                .unwrap_or_else(|| Type::Enum("Unknown".to_string()));
+            let mut statements = vec![IRStmt::Let(IRLetStmt {
+                name: name.clone(),
+                ty,
+                init: Some(IREexpr::Var(MATCH_PARENT_SCRUTINEE.to_string())),
+            })];
+            statements.extend(ca.body.statements.iter().cloned());
+            IRBlock {
+                name: ca.body.name.clone(),
+                statements,
+                defers: ca.body.defers.clone(),
+            }
+        }
+        _ => ca.body.clone(),
+    }
+}
+
+fn compile_nested_slots(
+    group: &[IRMatchArm],
+    catch_alls: &[IRMatchArm],
+    temps: &[(NestedSlot, String, Type, String)],
+    slot_idx: usize,
+    ctx: &LoweringContext,
+    next_temp: &mut usize,
+    ctx_scrutinee_ty: Option<&Type>,
+) -> IRBlock {
+    if slot_idx >= temps.len() {
+        if let Some(arm) = group.first() {
+            return arm.body.clone();
+        }
+        return IRBlock {
+            name: "match_arm".to_string(),
+            statements: Vec::new(),
+            defers: Vec::new(),
+        };
+    }
+
+    let (slot, temp, payload_ty, inner_enum) = &temps[slot_idx];
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, Vec<IRMatchArm>> = HashMap::new();
+    for arm in group {
+        let pat = slot_pattern(&arm.pattern, slot)
+            .cloned()
+            .unwrap_or(IRPattern::Wildcard);
+        let mut key = pattern_ctor_key(&pat);
+        if arm.guard.is_some() {
+            key.push_str(&format!("#g{}", order.len()));
+        }
+        if !groups.contains_key(&key) {
+            order.push(key.clone());
+        }
+        groups.entry(key).or_default().push(arm.clone());
+    }
+
+    let mut inner_arms: Vec<IRMatchArm> = Vec::new();
+    for key in order {
+        let sub = groups.remove(&key).unwrap();
+        let inner_pat = slot_pattern(&sub[0].pattern, slot)
+            .cloned()
+            .unwrap_or(IRPattern::Wildcard);
+        let guard = if sub.len() == 1 {
+            sub[0].guard.clone()
+        } else {
+            None
+        };
+        let body = compile_nested_slots(
+            &sub,
+            &[],
+            temps,
+            slot_idx + 1,
+            ctx,
+            next_temp,
+            ctx_scrutinee_ty,
+        );
+        inner_arms.push(IRMatchArm {
+            pattern: inner_pat,
+            guard,
+            body,
+        });
+    }
+    if slot_idx == 0 {
+        for ca in catch_alls {
+            inner_arms.push(IRMatchArm {
+                pattern: IRPattern::Wildcard,
+                guard: ca.guard.clone(),
+                body: catch_all_body_binding_outer(ca, ctx_scrutinee_ty),
+            });
+        }
+    }
+
+    let inner_arms =
+        specialize_nested_match_arms(inner_arms, inner_enum, Some(payload_ty), ctx, next_temp);
+    IRBlock {
+        name: "match_arm".to_string(),
+        statements: vec![IRStmt::Expr(IREexpr::Match {
+            expr: Box::new(IREexpr::Var(temp.clone())),
+            enum_type: inner_enum.clone(),
+            scrutinee_type: Some(payload_ty.clone()),
+            arms: inner_arms,
+        })],
+        defers: Vec::new(),
+    }
+}
+
+fn specialize_constructor_group(
+    group: Vec<IRMatchArm>,
+    catch_alls: &[IRMatchArm],
+    enum_type: &str,
+    scrutinee_type: Option<&Type>,
+    ctx: &LoweringContext,
+    next_temp: &mut usize,
+) -> IRMatchArm {
+    let slots = nested_slots_for_group(&group);
+    let variant = match &group[0].pattern {
+        IRPattern::Variant { variant, .. } => variant.clone(),
+        _ => String::new(),
+    };
+    let mut temps: Vec<(NestedSlot, String, Type, String)> = Vec::new();
+    let mut slot_bindings: Vec<(NestedSlot, String)> = Vec::new();
+    for slot in slots {
+        let temp = format!("__ion_nested_{}", *next_temp);
+        *next_temp += 1;
+        let payload_ty = payload_type_for_slot(ctx, enum_type, &variant, &slot, scrutinee_type);
+        let inner_enum = group
+            .iter()
+            .find_map(|arm| match slot_pattern(&arm.pattern, &slot) {
+                Some(IRPattern::Variant { enum_name, .. }) => Some(enum_name.clone()),
+                _ => None,
+            })
+            .or_else(|| enum_name_from_type(&payload_ty))
+            .unwrap_or_else(|| "Unknown".to_string());
+        slot_bindings.push((slot.clone(), temp.clone()));
+        temps.push((slot, temp, payload_ty, inner_enum));
+    }
+
+    let outer_pattern = replace_nested_slots_with_bindings(&group[0].pattern, &slot_bindings);
+    let body = compile_nested_slots(
+        &group,
+        catch_alls,
+        &temps,
+        0,
+        ctx,
+        next_temp,
+        scrutinee_type,
+    );
+    IRMatchArm {
+        pattern: outer_pattern,
+        guard: None,
+        body,
+    }
+}
+
+fn specialize_nested_match_arms(
+    arms: Vec<IRMatchArm>,
+    enum_type: &str,
+    scrutinee_type: Option<&Type>,
+    ctx: &LoweringContext,
+    next_temp: &mut usize,
+) -> Vec<IRMatchArm> {
+    if !arms
+        .iter()
+        .any(|a| ir_pattern_has_nested_variant(&a.pattern))
+    {
+        return arms;
+    }
+
+    let mut ctor_order: Vec<String> = Vec::new();
+    let mut ctor_groups: HashMap<String, Vec<IRMatchArm>> = HashMap::new();
+    let mut catch_alls: Vec<IRMatchArm> = Vec::new();
+    for arm in arms {
+        match &arm.pattern {
+            IRPattern::Variant { variant, .. } => {
+                if !ctor_groups.contains_key(variant) {
+                    ctor_order.push(variant.clone());
+                }
+                ctor_groups.entry(variant.clone()).or_default().push(arm);
+            }
+            IRPattern::Wildcard | IRPattern::Binding { .. } => catch_alls.push(arm),
+        }
+    }
+
+    let mut out = Vec::new();
+    for variant in ctor_order {
+        let group = ctor_groups.remove(&variant).unwrap();
+        if group
+            .iter()
+            .any(|a| ir_pattern_has_nested_variant(&a.pattern))
+        {
+            out.push(specialize_constructor_group(
+                group,
+                &catch_alls,
+                enum_type,
+                scrutinee_type,
+                ctx,
+                next_temp,
+            ));
+        } else {
+            out.extend(group);
+        }
+    }
+    out.extend(catch_alls);
+    out
+}
+
+fn record_variant_payload_bindings(
+    variant: &str,
+    sub_patterns: &[Pattern],
+    named_fields: Option<&Vec<(String, Pattern)>>,
+    scrutinee_ty: &Type,
+    ctx: &mut LoweringContext,
+) {
+    let peeled = match scrutinee_ty {
+        Type::Ref { inner, .. } => inner.as_ref(),
+        other => other,
+    };
+    let Some(name) = enum_name_from_type(peeled) else {
+        return;
+    };
+    let Some(decl) = ctx.enum_decls.get(&name).cloned() else {
+        return;
+    };
+    let subst = generic_subst_from_scrutinee(&decl, peeled);
+    let Some(vdecl) = decl.variants.iter().find(|v| v.name == variant).cloned() else {
+        return;
+    };
+    if let Some(named) = named_fields {
+        if let Some(fields) = &vdecl.named_fields {
+            for (fname, sub) in named {
+                if let Some((_, ty)) = fields.iter().find(|(n, _)| n == fname) {
+                    let concrete = ctx.types.resolve(&substitute_type(ty, &subst));
+                    record_match_arm_bindings(sub, &concrete, ctx);
+                }
+            }
+        }
+    } else {
+        for (i, sub) in sub_patterns.iter().enumerate() {
+            if let Some(ty) = vdecl.payload_types.get(i) {
+                let concrete = ctx.types.resolve(&substitute_type(ty, &subst));
+                record_match_arm_bindings(sub, &concrete, ctx);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IRStructLitField {
     pub name: String,
@@ -398,6 +855,11 @@ impl IRBuilder {
             .iter()
             .map(|s| (s.name.clone(), s.clone()))
             .collect();
+        let enum_decls: HashMap<String, EnumDecl> = ast
+            .enums
+            .iter()
+            .map(|e| (e.name.clone(), e.clone()))
+            .collect();
         let enum_param_counts: HashMap<String, usize> = ast
             .enums
             .iter()
@@ -411,6 +873,7 @@ impl IRBuilder {
                     f,
                     &function_returns,
                     &struct_decls,
+                    &enum_decls,
                     &enum_param_counts,
                     types,
                 )
@@ -432,6 +895,7 @@ impl IRBuilder {
         function: &FnDecl,
         function_returns: &HashMap<String, Option<Type>>,
         struct_decls: &HashMap<String, StructDecl>,
+        enum_decls: &HashMap<String, EnumDecl>,
         enum_param_counts: &HashMap<String, usize>,
         types: &TypeInfo,
     ) -> IRFunction {
@@ -449,6 +913,7 @@ impl IRBuilder {
         let mut ctx = LoweringContext::from_params(
             &params,
             struct_decls.clone(),
+            enum_decls.clone(),
             enum_param_counts.clone(),
             fn_literal_counter,
             function_returns.clone(),
@@ -919,6 +1384,93 @@ fn resolve_recv_elem_type(channel: &Expr, ctx: &LoweringContext) -> Type {
     }
 }
 
+fn lower_try_expr(try_expr: &TryExpr, ctx: &LoweringContext) -> IREexpr {
+    let operand_ty = ctx.expr_type(&try_expr.operand);
+    let id = try_expr.id.0;
+    let ok_name = format!("__ion_try_ok_{id}");
+    let err_name = format!("__ion_try_err_{id}");
+    let (enum_name, success_variant, error_variant, error_has_payload) = match &operand_ty {
+        Type::Generic { name, .. } if name == "Option" => (
+            "Option".to_string(),
+            "Some".to_string(),
+            "None".to_string(),
+            false,
+        ),
+        Type::Generic { name, .. } if name == "Result" => (
+            "Result".to_string(),
+            "Ok".to_string(),
+            "Err".to_string(),
+            true,
+        ),
+        other => panic!(
+            "compiler bug: ? lowering expected Option or Result, got {:?}",
+            other
+        ),
+    };
+
+    let success_arm = IRMatchArm {
+        pattern: IRPattern::Variant {
+            enum_name: enum_name.clone(),
+            variant: success_variant,
+            sub_patterns: vec![IRPattern::Binding {
+                name: ok_name.clone(),
+            }],
+            named_fields: None,
+        },
+        guard: None,
+        body: IRBlock {
+            name: "try_ok".to_string(),
+            statements: vec![IRStmt::Expr(IREexpr::Var(ok_name))],
+            defers: Vec::new(),
+        },
+    };
+
+    let error_return = if error_has_payload {
+        IREexpr::EnumLit {
+            enum_name: enum_name.clone(),
+            variant: error_variant.clone(),
+            args: vec![IREexpr::Var(err_name.clone())],
+            named_fields: None,
+            ty: operand_ty.clone(),
+        }
+    } else {
+        IREexpr::EnumLit {
+            enum_name: enum_name.clone(),
+            variant: error_variant.clone(),
+            args: Vec::new(),
+            named_fields: None,
+            ty: operand_ty.clone(),
+        }
+    };
+    let error_arm = IRMatchArm {
+        pattern: IRPattern::Variant {
+            enum_name: enum_name.clone(),
+            variant: error_variant,
+            sub_patterns: if error_has_payload {
+                vec![IRPattern::Binding { name: err_name }]
+            } else {
+                Vec::new()
+            },
+            named_fields: None,
+        },
+        guard: None,
+        body: IRBlock {
+            name: "try_err".to_string(),
+            statements: vec![IRStmt::Return(IRReturn {
+                value: Some(error_return),
+            })],
+            defers: Vec::new(),
+        },
+    };
+
+    IREexpr::Match {
+        expr: Box::new(build_expr_with_ctx(&try_expr.operand, ctx)),
+        enum_type: enum_name,
+        scrutinee_type: Some(operand_ty),
+        arms: vec![success_arm, error_arm],
+    }
+}
+
 fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
     match expr {
         Expr::Lit(lit_expr) => IREexpr::Lit(lit_expr.value),
@@ -1040,6 +1592,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     })
                     .collect()
             }),
+            ty: ctx.expr_type(expr),
         },
         Expr::Match(match_expr) => {
             let scrutinee_ty = match_scrutinee_type(&match_expr.expr, ctx);
@@ -1052,6 +1605,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     let mut arm_ctx = LoweringContext {
                         var_types: ctx.var_types.clone(),
                         struct_decls: ctx.struct_decls.clone(),
+                        enum_decls: ctx.enum_decls.clone(),
                         enum_param_counts: ctx.enum_param_counts.clone(),
                         tuple_temp_counter: ctx.tuple_temp_counter,
                         fn_literal_counter: ctx.fn_literal_counter.clone(),
@@ -1086,6 +1640,14 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 .unwrap_or_else(|| "Unknown".to_string());
 
             let scrutinee_type = ctx.resolve_expr_type(&match_expr.expr);
+            let mut next_temp = 0;
+            let arms = specialize_nested_match_arms(
+                arms,
+                &enum_name,
+                scrutinee_type.as_ref(),
+                ctx,
+                &mut next_temp,
+            );
             IREexpr::Match {
                 expr: Box::new(build_expr_with_ctx(&match_expr.expr, ctx)),
                 enum_type: enum_name,
@@ -1093,6 +1655,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 arms,
             }
         }
+        Expr::Try(try_expr) => lower_try_expr(try_expr, ctx),
         Expr::Call(call_expr) => {
             let return_type = Some(ctx.expr_type(expr));
             IREexpr::Call {
@@ -1299,6 +1862,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             let mut lit_ctx = LoweringContext::from_params(
                 &lit_params,
                 ctx.struct_decls.clone(),
+                ctx.enum_decls.clone(),
                 ctx.enum_param_counts.clone(),
                 ctx.fn_literal_counter.clone(),
                 ctx.function_returns.clone(),
@@ -2141,6 +2705,7 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             variant,
             args,
             named_fields,
+            ty,
         } => IREexpr::EnumLit {
             enum_name: enum_name.clone(),
             variant: variant.clone(),
@@ -2156,6 +2721,7 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
                     })
                     .collect()
             }),
+            ty: substitute_type(ty, substitutions),
         },
         IREexpr::Match {
             expr: inner,

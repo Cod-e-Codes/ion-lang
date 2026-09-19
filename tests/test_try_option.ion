@@ -1,0 +1,26 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn bump(o: Option<int>) -> Option<int> {
+    let v = o?;
+    return Option::Some(v + 1);
+}
+
+fn main() -> int {
+    match bump(Option::None) {
+        Option::None => {}
+        Option::Some(_) => {
+            return 1;
+        }
+    }
+    match bump(Option::Some(5)) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 2;
+        }
+    }
+}

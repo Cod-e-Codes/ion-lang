@@ -1,0 +1,22 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn get_at(v: Vec<int>, i: int) -> Option<int> {
+    let x = v.get(i)?;
+    return Option::Some(x);
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    v.push(42);
+    match get_at(v, 0) {
+        Option::Some(n) => {
+            return n;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

@@ -193,6 +193,7 @@ Integer `+`, `-`, and `*` wrap in two's complement on every integer type. Genera
 - Assignment: `=`, `+=` (compound assignment desugars to `x = x + e` for supported `+` types). Assignment targets may be locals, index expressions, or field paths on owned structs or `&mut Struct` receivers (for example `vm.ip += 1`).
 - Type casting: `as` keyword for explicit type conversions
 - Field access: `.`
+- Postfix try: `?` on owned `Option<T>` and `Result<T, E>` (see Section 8.1)
 - Address-of / borrow: `&` (borrow shared) and `&mut` (borrow exclusive)
 - Channel I/O: `send(sender, value)`, `recv(receiver)`, `clone_sender(sender)`, and `channel<T>()` / `channel<T>(cap)` built-ins (see Section 7.2)
 
@@ -432,7 +433,7 @@ unary_expr       = ( "!" | "-" | "&" | "&mut" ) , unary_expr
                  | postfix_expr ;
 
 postfix_expr     = primary_expr ,
-                   { selector | index | call | cast } ;
+                   { selector | index | call | cast | try_op } ;
 
 selector         = "." , identifier ;
 index            = "[" , expr , "]" ;
@@ -440,6 +441,7 @@ call             = "(" , arg_list? , ")" ;
 arg_list         = expr , { "," , expr } ;
 
 cast             = "as" , type_expr ;  (* type casting *)
+try_op           = "?" ;  (* quoted terminal; not EBNF optional *)
 
 primary_expr     = identifier
                  | literal
@@ -488,6 +490,10 @@ pattern_list     = pattern , { "," , pattern } ;
 named_pattern_fields = named_pattern_field , { "," , named_pattern_field } ;
 named_pattern_field = identifier , ":" , pattern ;
 ```
+
+#### 3.6 Nested constructors
+
+Nested constructors (`Outer::Wrap(Inner::A)`) are type-checked against the payload type, and if every covering arm uses nested constructors, those constructors must exhaust the inner enum (same "variant not covered" message, inner name). A later catch-all binding (`other =>`) covers remaining outer values, including other payloads of a nested constructor, and binds the whole outer scrutinee. The compiler lowers nested constructors to nested `match` on extracted payloads; codegen sees only the existing match form.
 
 Channel send and receive use the `send` and `recv` built-ins. `channel<T>()` uses capacity 1. `channel<T>(cap)` sets a program-visible bound (`cap` is `int`, must be `>= 1`). `clone_sender` is a built-in call (Section 7.2).
 
@@ -684,14 +690,15 @@ Ion supports a **local, Hindley–Milner-inspired inference**:
 
 - Function parameter and return types **must be annotated** (no inference across function boundaries).
 - Generic type parameters on functions and types must be explicit at declaration sites, but may usually be inferred at call sites when unambiguous.
-- `match` expressions: non-diverging arms must produce the same type (trailing expression or unit for an empty block). Arms that always `return`, `break`, or `continue` do not contribute a value to arm unification (see also Section 5.2). A match used as an rvalue where one arm diverges and another produces a value is a compile error. Within a single arm, control-flow paths that mix `return`/`break`/`continue` with value-producing fall-through are also a compile error. Numeric coercion between arm types follows the same rules as assignment.
+- `match` expressions: non-diverging arms must produce the same type (trailing expression or unit for an empty block). Arms that always `return`, `break`, or `continue` do not contribute a value to arm unification (see also Section 5.2). An rvalue `match` may mix a diverging arm with a value-producing arm (postfix `?` desugars to this shape). Within a single arm, control-flow paths that mix `return`/`break`/`continue` with value-producing fall-through are also a compile error. Numeric coercion between arm types follows the same rules as assignment.
 
 The inference engine is intentionally limited:
 
 - No higher-rank polymorphism.
 - Generic enum variants with no payload (`Option::None`) infer type arguments only from an adjacent expected type (a `let` annotation, a struct field, a function parameter / call argument including built-in value parameters such as `send` and `Box::new`, a return type, an assignment target, or an element of an array or tuple literal including `[value; N]` repeat arrays and enum variant payloads). They do not take `T` from a later statement; without that context the compiler requires an annotation.
+- Generic enum constructor payloads are checked against the expected generic instantiation when one is known. Integer literals are `int`, not placeholders for a type parameter `T`: `let x: Option<bool> = Option::Some(1)` and `let x: Option<String> = Option::Some(1)` are type errors.
 - Generic type parameters may declare optional **trait bounds** (`Copy`, `Eq`, `Send`). Bounds are checked at monomorphization: each concrete instantiation must satisfy every bound on the corresponding parameter. There are no user-defined traits; bounds name structural capabilities checked by the compiler (see Section 4.8).
-- Structural `Send` still applies per instantiation even without an explicit bound: for a generic type `Wrapper<T>`, each monomorphized `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`.
+- Structural `Send` still applies per instantiation even without an explicit bound: for a generic type `Wrapper<T>`, each monomorphized `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`. An unbounded function parameter `T` is not itself `Send`; see Sections 4.8 and 7.3.
 
 #### 4.5 Type Casting and Array Assignment
 
@@ -734,6 +741,8 @@ Syntax: `identifier : Bound [ + Bound ... ]` after each type parameter name. Bou
 | `Copy` | Type is copied rather than moved at the ownership level (primitives, references, function pointers). |
 | `Eq` | Type supports `==` and `!=` with correct semantics (primitives, `String`, references, function pointers, arrays and tuples of `Eq` types, structs and enums whose fields or payloads are all `Eq`). |
 | `Send` | Type may cross thread boundaries (Section 7.3). |
+
+A type parameter is `Send` only when it has a `Send` bound in the current scope (`T: Send`). Unbounded `T` is not `Send`. `channel<T>()` and `spawn` capture use that predicate: `fn wrap<T>(v: T) { channel<T>(); }` is a type error; `fn wrap<T: Send>(v: T) { channel<T>(); }` is allowed. Instantiation still checks declared bounds, so `wrap(&x)` is `TraitBoundNotSatisfied` when `wrap` requires `T: Send`. Names that are neither a declared `struct`/`enum` nor a type parameter are not `Send`.
 
 At each monomorphization site (generic call, struct or enum construction, type-alias substitution), the compiler substitutes concrete types for parameters and rejects any instantiation where a concrete type does not satisfy a declared bound. Unknown bound names are rejected at the declaration site.
 
@@ -780,6 +789,8 @@ Whether a move is implemented as a copy is an implementation detail. The `Copy` 
 After an `if` statement, ownership is merged from branches that can reach the following code. Branches that always `return`, `break`, or `continue` are omitted from the merge. If two fall-through paths disagree on whether a binding is still valid, the compiler reports an error.
 
 After a `match` expression, ownership is joined from arms whose bodies can fall through. Diverging arms are omitted. If fall-through arms disagree on whether a binding is still valid, the compiler reports an error at the match. Nested unstructured leftovers (for example a `let` whose initializer is a fully diverging match) stay conservative AST-structured analysis, not a CFG rewrite.
+
+Postfix `?` consumes its operand like a `match` scrutinee: the `Option` or `Result` is moved, and the success payload is a fresh owned rvalue. The error arm diverges via `return` (Section 8.1).
 
 After a `while`, `loop`, or `for` statement, ownership uses the same join lattice on structured edge snapshots (not a full CFG):
 
@@ -981,7 +992,7 @@ By default, `struct` and `enum` layouts are **C-compatible**:
 - No hidden metadata is inserted into structs.
 - Enums lower to a tagged union: `int tag` plus `union { struct variant_N { ... payload fields ... }; ... } data`. Variant index `N` is declaration order. Payload-less variants still set `tag` and leave `data` unused. FFI must match this layout from the same compiler version.
 
-Functions may be declared `extern "C"`. Raw pointer types `*T` are available for FFI (distinct from safe references `&T`). Raw pointers are pass-through only in Ion code (the language has no unary `*` deref). The compiler assumes:
+Functions may be declared `extern "C"`. Linkage other than `"C"` is a compile-time error. Raw pointer types `*T` are available for FFI (distinct from safe references `&T`). Raw pointers are pass-through only in Ion code (the language has no unary `*` deref). The compiler assumes:
 
 - Ion compiles to C functions with straightforward signatures.
 - Parameter and return passing follows the C calling convention of the target platform.
@@ -1086,6 +1097,8 @@ The `Send` property marks types that are safe to transfer to another thread by v
 
 User-defined `struct` and `enum` types are `Send` if and only if **all of their fields / payloads are `Send`**. For generic types, this rule is applied **per instantiation**: e.g., `Wrapper<int>` may be `Send` while `Wrapper<NonSend>` is not, depending on the fields.
 
+A type parameter is `Send` if and only if it has a `Send` bound in the current scope. Unbounded parameters and unknown type names (not a declared `struct`/`enum`, not a type parameter) are not `Send`. `channel<T>()` and `spawn` capture use this predicate.
+
 The compiler checks `Send` when:
 
 - Moving a value into a `spawn` body.
@@ -1117,6 +1130,28 @@ Semantics follow the conventional meaning:
 - `Result<T, E>` represents success (`Ok`) or failure (`Err`).
 
 These enums follow standard ownership rules (payloads are moved in and out).
+
+Postfix `?` is visible sugar for `match` plus `return` on these two enums only (identified by **enum type name** and the variant shapes above). It is not legal on `&Option<T>`, `&Result<T, E>`, or other enums such as `ReadResult`, `SetResult`, `SendResult`, `TrySendResult`, or `TryRecvResult`. There is no `From` / `FromResidual`, no `Try` trait, and no error-set widening.
+
+```ion
+// Result<T, E> in a function that returns Result<U, E>  (U may differ; E must be equal)
+let x: T = expr?;
+// same as
+let x: T = match expr {
+    Result::Ok(v) => { v; }
+    Result::Err(e) => { return Result::Err(e); }
+};
+
+// Option<T> in a function that returns Option<U>
+let x: T = expr?;
+// same as
+let x: T = match expr {
+    Option::Some(v) => { v; }
+    Option::None => { return Option::None; }
+};
+```
+
+`?` is postfix, same tier as `.field`, `[index]`, and call. `Option?` is only legal in a function or fn literal whose return type is `Option<_>`. `Result?` is only legal when the return type is `Result<_, E>` with the same `E`. Mixing `Option` and `Result` is a type error. `?` is a compile error inside `spawn` bodies (spawn lowers to a different C function). Propagating `Option<&T>` still hits `ReferenceEscape` on return.
 
 #### 8.2 `Vec<T>`
 

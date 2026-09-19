@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- **Language**: postfix `?` on owned `Option<T>` and `Result<T, E>` is match-plus-return sugar (same `E`; no `From`). Illegal on `ReadResult` / `SetResult` / channel result enums, `&Option` / `&Result`, and inside `spawn`. This impacts Result/Option early-return that previously needed an explicit match.
+- **Fix**: generic enum literals passed to fn-pointer parameters emit the instantiated C type (`Result_int_int`), not a bare `Result`. This impacts `fn(Result<int, int>)` arguments written as `Result::Ok(n)` (previously gcc saw a bare `Result` type).
+- **Tests**: `test_try_result_ok.ion`, `test_try_result_err.ion`, `test_try_option.ion`, `test_try_result_payload_change.ion`, `test_try_result_string.ion`, `test_try_vec_get.ion`, `test_try_fn_literal.ion`, `test_fn_ptr_enum_lit_arg.ion`, `test_try_import.ion`, and the `test_try_*_error.ion` negatives.
+- **Docs**: ION_SPEC §2.2.4 / §3.5 / §5.2 / §8.1, BETA, README, tests/README, writing-ion-code.
+
+- **Fix**: rvalue `match` arm result assignment marks moved bindings, so a bare owned `String` tail (`s;`) is not dropped twice on arm exit. This impacts value-producing match of `Option<String>` / `Result<String, _>` (the same shape postfix `?` will lower to).
+- **Tests**: `test_match_expr_rvalue_string.ion`.
+- **Docs**: tests/README, bug hotspots.
+
+- **Language**: a type parameter is `Send` only with a `T: Send` bound. Unbounded `T` and unknown type names are not `Send`. `channel<T>()` and `spawn` capture use that predicate; instantiation still checks declared bounds. This impacts generic functions that built `channel<T>()` without `T: Send` and would previously treat `T` as `Send`.
+- **Tests**: `test_unbounded_t_send_error.ion`, `test_trait_bound_send_channel_ok.ion`.
+- **Docs**: ION_SPEC §4.8 / §7.3.
+
+- **Fix**: generic enum constructor payloads are checked against the expected instantiation. Integer literals are `int`, not placeholders for `T`, so `let x: Option<bool> = Option::Some(1)` and `let x: Option<String> = Option::Some(1)` are type errors in ion-compiler (the latter previously reached gcc `-Wint-conversion`). This impacts generic `Some`/`Ok`/`Err` literals whose payload is not the expected `T`.
+- **Tests**: `test_option_some_bool_int_error.ion`, `test_option_some_string_int_error.ion`, `test_option_some_int.ion`, `test_option_some_bool.ion`.
+- **Docs**: ION_SPEC §4.4, tests/README, bug hotspots.
+
+- **Type checker**: `extern` linkage other than `"C"` is a compile-time error. Those functions are not registered, so a call cannot fall through to C codegen without a prototype. This impacts programs that used `extern "Rust"` or any ABI other than `"C"` (the checker previously accepted them and cgen skipped the prototype).
+- **Codegen**: if a non-`C` extern block still reaches cgen, that is a compiler bug (`panic!`), not a silent skip.
+- **Tests**: `test_extern_rust_error.ion`.
+- **Docs**: ION_SPEC §6.4, bug hotspots.
+
+- **Language**: nested enum constructors (`Outer::Wrap(Inner::A)`) are type-checked against the payload type and must exhaust the inner enum when every covering arm uses nested constructors. Lowering specializes them to nested `match` on extracted payloads; codegen sees only the existing match form. A catch-all binding mixed with a nested constructor binds the whole outer value. This impacts `match` on nested enums that previously had to unpack one layer at a time.
+- **Tests**: `test_nested_match_pattern.ion`, `test_nested_match_named.ion`, `test_nested_match_catchall_binding.ion`, `test_nested_match_unknown_error.ion`, `test_nested_match_nonexhaustive_error.ion`.
+- **Docs**: ION_SPEC §3.6, tests/README, bug hotspots, verified-patterns.
+
 ## 0.2.1 - 2026-09-08
 
 - **Fix**: blocking `select` (no `default`/`timeout`) rechecks `try_recv` after registering waiters so a concurrent send cannot park forever on a message already in the buffer. This impacts `select { recv(...) => ... }` racing a `send` on another thread.

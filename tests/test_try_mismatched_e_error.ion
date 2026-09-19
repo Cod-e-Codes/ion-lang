@@ -1,0 +1,11 @@
+import "stdlib/result.ion" as result;
+
+fn wrap() -> Result<int, int> {
+    let r: Result<int, bool> = Result::Err(true);
+    let x = r?;
+    return Result::Ok(x);
+}
+
+fn main() -> int {
+    return 0;
+}

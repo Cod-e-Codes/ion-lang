@@ -95,6 +95,7 @@ Tuple values: `let t: (int, int) = (1, 2);` then `t.0`, `t.1`, or `let (a, b) = 
 - `if` / `else if` / `else` conditions must be `bool`.
 - `while`, `loop`, `break`, `continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`)
 - `match expr { Pattern => { ... } }` with guards `pattern if cond =>`.
+- postfix `?` on owned `Option<T>` / `Result<T, E>` (same `E`; not `ReadResult` / `SetResult` / `spawn`)
 - `select { let v = recv(&mut rx) => { ... } default => { ... } }` (or `timeout(ms)` instead of `default`). Without `default`/`timeout`, `select` waits until a recv arm is ready (`test_select_blocking_send.ion`).
 
 **Methods**
@@ -208,7 +209,7 @@ These are **not** in Ion today. Check ION_SPEC.md section 10.3 before using anyt
 - References in struct fields, enum payloads, or channels
 - Shared mutable state across threads (only channels + move)
 - Macros (`println!`, `vec!`, etc.)
-- `?` operator, `async`/`await`, `panic!`, `unwrap()` except `Box::unwrap`
+- `async`/`await`, `panic!`, `unwrap()` except `Box::unwrap`
 - Union types `A | B` (reserved; use enums)
 - `==` / `!=` on `JoinHandle` or `File` (not `Eq`)
 - `mut` on function parameters (use `&mut T` in the signature instead)

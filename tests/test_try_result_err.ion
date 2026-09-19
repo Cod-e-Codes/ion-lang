@@ -1,0 +1,21 @@
+import "stdlib/result.ion" as result;
+
+fn fail() -> Result<int, int> {
+    return Result::Err(7);
+}
+
+fn wrap() -> Result<int, int> {
+    let x = fail()?;
+    return Result::Ok(x);
+}
+
+fn main() -> int {
+    match wrap() {
+        Result::Ok(_) => {
+            return 0;
+        }
+        Result::Err(e) => {
+            return e;
+        }
+    }
+}

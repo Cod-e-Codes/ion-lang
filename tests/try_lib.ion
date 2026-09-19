@@ -1,0 +1,5 @@
+import "stdlib/result.ion" as result;
+
+pub fn give() -> Result<int, int> {
+    return Result::Ok(21);
+}

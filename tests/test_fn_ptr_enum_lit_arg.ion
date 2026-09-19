@@ -1,0 +1,15 @@
+import "stdlib/result.ion" as result;
+
+fn main() -> int {
+    let f: fn(Result<int, int>) -> int = fn(r: Result<int, int>) -> int {
+        match r {
+            Result::Ok(v) => {
+                return v;
+            }
+            Result::Err(_) => {
+                return 0;
+            }
+        }
+    };
+    return f(Result::Ok(7));
+}

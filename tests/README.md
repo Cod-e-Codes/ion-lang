@@ -130,6 +130,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_enum_basic.ion` - Enum declarations and literals
 - `test_enum_unannotated_let.ion` - unannotated `let flag = Flag::On` / `let status = Status::Ok { ... }` types as the enum, not default int (exit 7); cgen asserts `Flag flag =` / `Status status =`
 - `test_enum_generic_unannotated_let.ion` - unannotated `let x = Option::Some(42)` types as `Option<int>` (exit 42); cgen asserts `Option_int x =`
+- `test_option_some_int.ion` - `let x: Option<int> = Option::Some(1)` (exit 1)
+- `test_option_some_bool.ion` - `let x: Option<bool> = Option::Some(true)` (exit 1)
+- `test_option_some_bool_int_error.ion` - `let x: Option<bool> = Option::Some(1)` is `TypeMismatch`
+- `test_option_some_string_int_error.ion` - `let x: Option<String> = Option::Some(1)` is `TypeMismatch` in ion-compiler (not gcc)
 - `test_option_none_unannotated_error.ion` - `let empty = Option::None` then use as `Option<Box<Node>>` needs a type annotation (`cannot infer type parameter`)
 - `test_option_none_struct_field.ion` - `Node { next: Option::None }` infers `T` from the field (exit 2)
 - `test_option_none_call_arg.ion` - `take(Option::None)` infers `T` from the parameter (exit 3)
@@ -165,6 +169,11 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_match_basic.ion` - Pattern matching
 - `test_match_pattern_bindings.ion` - Pattern matching with bindings
 - `test_match_complex.ion` - Complex pattern matching scenarios
+- `test_nested_match_pattern.ion` - Nested constructors `Outer::Wrap(Inner::B)` (exit 2)
+- `test_nested_match_named.ion` - Named-field nested constructor `Outer::Wrap { inner: Inner::B }` (exit 2)
+- `test_nested_match_catchall_binding.ion` - Nested constructor plus catch-all binding `other` (exit 4)
+- `test_nested_match_unknown_error.ion` - Unknown nested enum `Nope` is TypeMismatch
+- `test_nested_match_nonexhaustive_error.ion` - Inner variant `B` not covered
 - `test_while_basic.ion` - While loops
 - `test_break_continue.ion` - `break` and `continue` in `while` and `for` loops
 - `test_match_break_in_while.ion` - `break` inside `match` within `while` exits the loop (exit 3)
@@ -250,6 +259,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_module_basic.ion` - Module system and imports
 - `test_module_visibility.ion` - Module visibility control (negative test)
 - `test_ffi_basic.ion` - Foreign Function Interface (FFI)
+- `test_extern_rust_error.ion` - `extern "Rust"` (or any non-`"C"` ABI) is a compile error
 
 ### Arrays, slices, and unsafe
 - `test_array_basic.ion` - Fixed-size arrays
@@ -273,6 +283,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_match_move_join_error.ion` - match arm move joined with a fall-through arm is `UseAfterMove`
 - `test_unsafe_basic.ion` - Unsafe blocks
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls (negative test)
+- `test_extern_rust_error.ion` - Non-`"C"` `extern` linkage (negative test)
 - `test_multifile.ion` - Multi-file compilation
 - `test_multi_struct.ion` - Multi-file module with private struct in library
 - `test_multi_fmt_io.ion` - Multi-file link with both `fmt` and `io` stdlib modules
@@ -330,10 +341,30 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 ### Match expression types
 - `test_match_result_type.ion` - `match` infers non-`int` result type (`bool` via `-> bool` helper, exit 88)
 - `test_match_expr_rvalue.ion` - `match` as rvalue in `let` binding (exit 91)
+- `test_match_expr_rvalue_string.ion` - rvalue `match` whose success arm is a bare owned `String` binding (`s;`) (exit 93)
 - `test_match_arm_type_mismatch.ion` - Mismatched arm result types (negative)
 - `test_match_arm_divergent_rvalue.ion` - Diverging arm mixed with value arm in rvalue `match` (negative)
 - `test_match_arm_if_else_value_rvalue.ion` - `if`/`else` value branches unify in rvalue `match` (exit 80)
 - `test_match_arm_if_else_mixed_rvalue.ion` - Mixed diverging and value paths within one rvalue arm (negative)
+
+### Postfix try operator
+- `test_try_result_ok.ion` - `Result` success and chained `?` (exit 21)
+- `test_try_result_err.ion` - `Result` error path returns `Err` (exit 7)
+- `test_try_option.ion` - `Option` `None` and `Some` via `?` (exit 6)
+- `test_try_result_payload_change.ion` - `Result<T, E>` in a `Result<U, E>` function (exit 5)
+- `test_try_result_string.ion` - owned `Result<String, int>` success arm (exit 5)
+- `test_try_vec_get.ion` - `v.get(i)?` (exit 42)
+- `test_try_fn_literal.ion` - `?` in a capture-free fn literal; `Result::Ok(7)` at the fn-pointer call site (exit 8)
+- `test_fn_ptr_enum_lit_arg.ion` - generic enum literal passed to a fn-pointer parameter (exit 7)
+- `test_try_import.ion` - `?` on a `Result` returned from an imported function (exit 21)
+- `test_try_on_int_error.ion` - `?` on `int` (negative)
+- `test_try_in_int_fn_error.ion` - `Result?` in `fn -> int` (negative)
+- `test_try_option_in_result_error.ion` - `Option?` in a `Result` function (negative)
+- `test_try_mismatched_e_error.ion` - mismatched `Result` error type (negative)
+- `test_try_readresult_error.ion` - `?` on `ReadResult` (negative)
+- `test_try_setresult_error.ion` - `?` on `SetResult` (negative)
+- `test_try_spawn_error.ion` - `?` inside `spawn` (negative)
+- `test_try_move_error.ion` - use-after-move of a `?` operand (negative)
 
 ### if/else ownership merge
 - `test_if_else_move_ok.ion` - Move in diverging branch; use after `if` (exit 60)
@@ -367,11 +398,13 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 ### Trait bounds on generics
 
 - `test_trait_bound_send_ok.ion` - generic fn with `T: Send` accepts `int`
+- `test_trait_bound_send_channel_ok.ion` - `fn wrap<T: Send>` may `channel<T>()` with `int` (exit 42)
 - `test_trait_bound_copy_ok.ion` - generic fn with `T: Copy` accepts `int`
 - `test_trait_bound_copy_fn_ok.ion` - generic fn with `T: Copy` accepts a function identifier
 - `test_trait_bound_eq_ok.ion` - generic fn with `T: Eq` compares ints
 - `test_trait_bound_eq_fn_ok.ion` - generic fn with `T: Eq` compares function pointers
 - `test_trait_bound_send_error.ion` - `&int` rejected for `T: Send`
+- `test_unbounded_t_send_error.ion` - unbounded `T` is not `Send`; `channel<T>()` inside `wrap<T>` plus `wrap(&x)` is rejected
 - `test_trait_bound_copy_error.ion` - `String` rejected for `T: Copy`
 - `test_trait_bound_eq_error.ion` - `Vec<int>` rejected for `T: Eq`
 - `test_trait_bound_unknown_error.ion` - unknown bound name rejected at declaration
@@ -406,6 +439,7 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 - `test_ref_return_error.ion` - Reference escape errors
 - `test_ref_return_error2.ion` - Additional reference escape errors
 - `test_channel_ref_error.ion` - Non-Send channel elements
+- `test_unbounded_t_send_error.ion` - unbounded generic `T` is not a Send channel element (also listed under Trait bounds)
 - `test_send_ref_error.ion` - Non-Send send operations
 - `test_send_result_ref_error.ion` - `SendResult<&int>` is not Send as a channel element
 - `test_channel_capacity_literal_error.ion` - Literal `channel<T>(0)` is a compile error
@@ -424,6 +458,7 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 - `test_nested_struct_ref_error.ion` - Nested struct storing a reference field (ReferenceEscape)
 - `test_module_visibility.ion` - Module visibility violations
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls
+- `test_extern_rust_error.ion` - Non-`"C"` `extern` linkage
 - `test_if_bool_required.ion` - Boolean requirement for if conditions
 - `test_break_continue_error.ion` - `break` outside of a loop (negative test)
 

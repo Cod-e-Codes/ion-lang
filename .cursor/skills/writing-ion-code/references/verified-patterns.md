@@ -12,7 +12,7 @@ Collections: `Vec<T>`, `String`, `Box<T>`, `[T; N]`, `[]T` (slice).
 
 Channels: `Sender<T>`, `Receiver<T>` from `channel<T>()` / `channel<T>(cap)`; `clone_sender`; `send` -> `SendResult<T>`; `recv` -> `Option<T>`.
 
-Function types (named functions only): `let f: fn(int) -> int = add;`
+Function types and capture-free fn literals: `let f: fn(int) -> int = add;` and `let g: fn(int) -> int = fn(x: int) -> int { return x + 1; };`. Generic enum literals at fn-pointer call sites keep the instantiated C type (`f(Result::Ok(7))` is `Result_int_int`, not a bare `Result`).
 
 ## Struct literal
 
@@ -37,6 +37,8 @@ match opt {
 
 Guard: `Option::Some(v) if v > 0 => { ... }`
 
+Nested constructors: `Outer::Wrap(Inner::A)`, `Outer::Wrap { inner: Inner::A }`. Every covering arm that nests constructors must exhaust the inner enum.
+
 ## Result with a local error enum
 
 `Result<T, E>` from `stdlib/result.ion` accepts a user-defined enum as `E` ([tests/test_result_custom_enum.ion](../../../../tests/test_result_custom_enum.ion)):
@@ -53,6 +55,15 @@ fn f1(x: int) -> Result<int, MyError> {
         return Result::Err(MyError::Bad);
     }
     return Result::Ok(x);
+}
+```
+
+Postfix `?` is match-plus-return sugar on owned `Option<T>` / `Result<T, E>` only (same `E`; no `From`). `Option?` needs an `Option<_>` return type; `Result?` needs `Result<_, E>`. Not legal on `ReadResult`, `SetResult`, or inside `spawn` ([tests/test_try_result_ok.ion](../../../../tests/test_try_result_ok.ion), [tests/test_try_option.ion](../../../../tests/test_try_option.ion)):
+
+```ion
+fn wrap(r: Result<int, int>) -> Result<int, int> {
+    let x = r?;
+    return Result::Ok(x + 1);
 }
 ```
 

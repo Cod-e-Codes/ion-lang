@@ -1,0 +1,22 @@
+import "stdlib/result.ion" as result;
+
+fn inner() -> Result<int, int> {
+    return Result::Ok(10);
+}
+
+fn outer() -> Result<int, int> {
+    let x = inner()?;
+    let y = inner()?;
+    return Result::Ok(x + y + 1);
+}
+
+fn main() -> int {
+    match outer() {
+        Result::Ok(v) => {
+            return v;
+        }
+        Result::Err(_) => {
+            return 0;
+        }
+    }
+}

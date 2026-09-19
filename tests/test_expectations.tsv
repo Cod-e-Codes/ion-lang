@@ -47,6 +47,11 @@ test_call_basic.ion	run	30
 test_string_basic.ion	run	0			
 test_match_pattern_bindings.ion	run	42			
 test_match_complex.ion	run	10			
+test_nested_match_pattern.ion	run	2
+test_nested_match_named.ion	run	2
+test_nested_match_catchall_binding.ion	run	4
+test_nested_match_unknown_error.ion	error		TypeMismatch
+test_nested_match_nonexhaustive_error.ion	error		not exhaustive
 test_generic_types.ion	run	0			
 test_box_basic.ion	run	0			
 test_vec_basic.ion	run	0			
@@ -56,6 +61,10 @@ test_enum_unannotated_let.ion	cgen			Flag flag =	int flag =
 test_enum_unannotated_let.ion	cgen			Status status =	int status =
 test_enum_generic_unannotated_let.ion	run	42
 test_enum_generic_unannotated_let.ion	cgen			Option_int x =	^[[:space:]]*int x =
+test_option_some_int.ion	run	1
+test_option_some_bool.ion	run	1
+test_option_some_bool_int_error.ion	error		TypeMismatch
+test_option_some_string_int_error.ion	error		TypeMismatch
 test_option_none_unannotated_error.ion	error		cannot infer type parameter
 test_option_none_struct_field.ion	run	2
 test_option_none_call_arg.ion	run	3
@@ -255,6 +264,7 @@ test_fn_literal_capture_error.ion	error		ClosureCapture
 test_fn_literal_ref_capture_error.ion	error		ClosureCapture
 test_tuple_basic.ion	run	81			
 test_match_expr_rvalue.ion	run	91			
+test_match_expr_rvalue_string.ion	run	93			
 test_struct_field_drop_vec.ion	run	46			
 test_move_error.ion	error		UseAfterMove		
 test_move_in_loop.ion	error		UseAfterMove		
@@ -278,6 +288,7 @@ test_vec_index_ref_error.ion	error		ReferenceEscape
 test_nested_struct_ref_error.ion	error		ReferenceEscape		
 test_module_visibility.ion	error		Cannot access non-public		
 test_unsafe_extern_required.ion	error		must be inside an unsafe block		
+test_extern_rust_error.ion	error		unsupported extern "Rust"		
 test_if_bool_required.ion	error		bool.*if condition\|if condition.*bool		
 test_break_continue_error.ion	error		break statement outside of loop		
 test_match_arm_type_mismatch.ion	error		TypeMismatch		
@@ -316,11 +327,13 @@ test_nested_vec_generic.ion	run	60
 test_match_break_in_loop.ion	run	3
 test_str_from_literal.ion	run	71
 test_trait_bound_send_ok.ion	run	42
+test_trait_bound_send_channel_ok.ion	run	42
 test_trait_bound_copy_ok.ion	run	7
 test_trait_bound_copy_fn_ok.ion	run	11
 test_trait_bound_eq_ok.ion	run	61
 test_trait_bound_eq_fn_ok.ion	run	99
 test_trait_bound_send_error.ion	error		TraitBoundNotSatisfied
+test_unbounded_t_send_error.ion	error		Send element type for channel
 test_trait_bound_copy_error.ion	error		TraitBoundNotSatisfied
 test_trait_bound_eq_error.ion	error		TraitBoundNotSatisfied
 test_trait_bound_unknown_error.ion	error		UnknownTraitBound
@@ -389,3 +402,20 @@ test_vec_set_result.ion	run	0
 test_file_rw.ion	run	0
 test_select_timeout_neg_error.ion	error		select timeout must be >= 0
 test_file_send_error.ion	error		Send element type for channel
+test_try_result_ok.ion	run	21
+test_try_result_err.ion	run	7
+test_try_option.ion	run	6
+test_try_result_payload_change.ion	run	5
+test_try_result_string.ion	run	5
+test_try_vec_get.ion	run	42
+test_try_fn_literal.ion	run	8
+test_fn_ptr_enum_lit_arg.ion	run	7
+test_try_import.ion	run	21
+test_try_on_int_error.ion	error		owned Option<T> or Result<T, E>
+test_try_in_int_fn_error.ion	error		function returning Result
+test_try_option_in_result_error.ion	error		function returning Option
+test_try_mismatched_e_error.ion	error		function returning Result<_, bool>
+test_try_readresult_error.ion	error		owned Option<T> or Result<T, E>
+test_try_setresult_error.ion	error		owned Option<T> or Result<T, E>
+test_try_spawn_error.ion	error		cannot be used inside spawn
+test_try_move_error.ion	error		UseAfterMove

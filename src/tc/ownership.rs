@@ -388,6 +388,7 @@ impl TypeChecker {
                 }
                 Ok(())
             }
+            Expr::Try(try_expr) => self.check_expr_for_moves(&try_expr.operand),
             Expr::Call(call_expr) => {
                 for arg in &call_expr.args {
                     self.check_expr_for_moves(arg)?;

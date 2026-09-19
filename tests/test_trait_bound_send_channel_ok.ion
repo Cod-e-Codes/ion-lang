@@ -1,0 +1,28 @@
+// Generic function with T: Send may construct channel<T>() and send an int.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+fn wrap<T: Send>(v: T) -> int {
+    let (tx, rx): (Sender<T>, Receiver<T>) = channel<T>();
+    send(&tx, v);
+    let mut rx_mut: Receiver<T> = rx;
+    match recv(&mut rx_mut) {
+        Option::Some(_) => {
+            return 42;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}
+
+fn main() -> int {
+    return wrap(7);
+}

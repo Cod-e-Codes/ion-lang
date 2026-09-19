@@ -23,8 +23,8 @@ library may rely on without an unstable marker:
 - functions, structs, enums, type aliases, modules, imports, and visibility;
 - primitive numeric and boolean types, arrays, slices, `String`, `Vec<T>`,
   `Box<T>`, and `Result<T, E>`;
-- `if`, `while`, `for`, `loop`, `break`, `continue`, `match`, `select`, guards, and
-  `defer`;
+- `if`, `while`, `for`, `loop`, `break`, `continue`, `match`, `select`, guards,
+  `defer`, and postfix `?` on `Option`/`Result`;
 - FFI through `extern "C"` and `unsafe`;
 - channels, `try_send` / `try_recv`, `select`, `spawn` / `JoinHandle` / `join`, and structural `Send`;
 - owned `File` streaming I/O and `stdlib/fs.ion` whole-file read;
