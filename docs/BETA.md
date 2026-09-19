@@ -34,6 +34,8 @@ library may rely on without an unstable marker:
 
 0.2.0 is a breaking 0.x contract and language-surface change: wrapping arithmetic, abort panics, UTF-8 `String`, match ownership join, `Vec::set` as `SetResult`, joinable `spawn`, `select`, nested tuples, and owned `File`. See CHANGELOG 0.2.0.
 
+0.2.2 tightens generic `Send` and `extern` checking: unbounded `T` is not `Send` without `T: Send`, and `extern` linkage other than `"C"` is a compile error. See CHANGELOG 0.2.2.
+
 ## Unstable or constrained in beta
 
 The following features may change shape before 1.0:
