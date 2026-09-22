@@ -36,6 +36,8 @@ library may rely on without an unstable marker:
 
 0.2.2 tightens generic `Send` and `extern` checking: unbounded `T` is not `Send` without `T: Send`, and `extern` linkage other than `"C"` is a compile error. See CHANGELOG 0.2.2.
 
+0.3.0 adds capabilities, `Drop`, const, richer patterns, lasting borrows, and stdlib `option`, `string`, `hash`, `map`, `math`, `path`, `env`, and `time`. A lasting borrow stays live until the last use of every binding that holds it, so a later borrow of that place is a compile error. A `Drop` value cannot be partially moved. See CHANGELOG 0.3.0.
+
 ## Unstable or constrained in beta
 
 The following features may change shape before 1.0:
@@ -51,7 +53,9 @@ The following features may change shape before 1.0:
 - The compiler, bundled standard library, runtime C ABI, and `ion-build`
   manifest format are versioned together.
 - Public stdlib import paths such as `stdlib/io.ion`, `stdlib/fmt.ion`,
-  `stdlib/fs.ion`, `stdlib/result.ion`, and `stdlib/handle.ion` should not be
+  `stdlib/fs.ion`, `stdlib/result.ion`, `stdlib/handle.ion`, `stdlib/option.ion`,
+  `stdlib/string.ion`, `stdlib/hash.ion`, `stdlib/map.ion`, `stdlib/math.ion`,
+  `stdlib/path.ion`, `stdlib/env.ion`, and `stdlib/time.ion` should not be
   removed or renamed in a patch release.
 - Additions are allowed in patch releases. Breaking language, stdlib, runtime,
   or manifest changes require a minor version while Ion is `0.x`.
