@@ -3464,7 +3464,8 @@ impl Codegen {
                         self.write_indent();
                         self.writeln(&format!("goto {};", label));
                         self.write_indent();
-                        self.writeln(&format!("{}:", label));
+                        // Empty statement: a declaration may follow, and Clang rejects a label on a declaration.
+                        self.writeln(&format!("{}: ;", label));
                     }
                     self.generate_block(step);
                 }
@@ -3473,7 +3474,8 @@ impl Codegen {
                 self.writeln("}");
                 if self.loop_break_label_used {
                     self.write_indent();
-                    self.writeln(&format!("{}:", break_label));
+                    // Empty statement: a declaration may follow, and Clang rejects a label on a declaration.
+                    self.writeln(&format!("{}: ;", break_label));
                 }
                 self.loop_break_label = prev_break;
                 self.loop_break_label_used = prev_break_used;
@@ -8726,6 +8728,30 @@ fn main() -> int {
         assert!(
             !c.contains("(Result){"),
             "bare Result type name at fn-pointer call:\n{c}"
+        );
+    }
+
+    #[test]
+    fn loop_break_label_is_empty_statement() {
+        let src = r#"fn main() -> int {
+    let mut i: int = 0;
+    while i < 2 {
+        if i == 1 { break; }
+        i = i + 1;
+    }
+    let end: int = i;
+    return end;
+}"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let label = c
+            .lines()
+            .find(|line| line.contains("loop_break_") && line.contains(':'))
+            .unwrap_or("");
+        assert!(
+            label.trim().ends_with(": ;"),
+            "break label must be an empty statement so the next declaration is valid C, got:\n{c}"
         );
     }
 }

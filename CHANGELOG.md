@@ -15,6 +15,7 @@
 - **Fix**: a struct literal that stores a reference keeps that loan on the struct. A field that is already a reference is passed as that pointer.
 - **Fix**: a reference created inside a struct, enum, tuple, or `match` result keeps that loan while the value that holds the pointer is live.
 - **Fix**: a `match` arm that stores a fresh reference in a local and then yields that local keeps the loan on the match result.
+- **Fix**: a loop break or continue label is an empty statement, so a declaration after `break` is valid C. Clang rejects a label placed directly on a declaration.
 - **Docs**: in-range shift results wrap modulo `2^width` (`4660u16 << 4` is `9024`). Integer `as` keeps the low bits of the destination width (`0x12ff as u8` is `0xff`).
 - **Tests**: `test_capability_show.ion` (exit 42), `test_capability_generic_impl.ion` (exit 7), and the `test_capability_*_error.ion` negatives.
 - **Tests**: `test_array_indexing.ion` assigns through an index (exit 200). `test_while_basic.ion` assigns in the loop (exit 2). `test_bool_literal.ion` uses `!`. `test_bitwise_ops.ion` uses hex literals, asserts shift wrap, and asserts integer narrowing.
