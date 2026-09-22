@@ -12,10 +12,31 @@ test_assign_while_borrowed_error.ion	error		BorrowConflict
 test_mut_borrow_block_ok.ion	run	62			
 test_shared_borrow_ok.ion	run	63			
 test_nested_shared_borrow_ok.ion	run	64			
-test_field_double_mut_borrow_error.ion	error		BorrowConflict		
-test_field_mut_borrow_blocks_owner_error.ion	error		BorrowConflict		
+test_field_double_mut_borrow_error.ion	run	0
+test_field_mut_borrow_blocks_owner_error.ion	run	2
 test_field_whole_mut_borrow_error.ion	error		BorrowConflict		
 test_field_shared_borrow_ok.ion	run	65			
+test_field_same_mut_borrow_error.ion	error	BorrowConflict
+test_field_nested_prefix_borrow_error.ion	error	BorrowConflict
+test_borrow_last_use.ion	run	2
+test_borrow_nested_last_use.ion	run	2
+test_borrow_copy_last_use.ion	run	2
+test_borrow_nested_use_error.ion	error		BorrowConflict
+test_borrow_copy_error.ion	error		BorrowConflict
+test_borrow_reborrow_error.ion	error		BorrowConflict
+test_borrow_tuple_error.ion	error		BorrowConflict
+test_borrow_match_alias_error.ion	error		BorrowConflict
+test_borrow_assign_error.ion	error		BorrowConflict
+test_borrow_index_reborrow_error.ion	error		BorrowConflict
+test_borrow_enum_ref_error.ion	error		BorrowConflict
+test_borrow_struct_ref_error.ion	error		BorrowConflict
+test_borrow_struct_fresh_error.ion	error		BorrowConflict
+test_borrow_enum_fresh_error.ion	error		BorrowConflict
+test_borrow_tuple_fresh_error.ion	error		BorrowConflict
+test_borrow_match_fresh_error.ion	error		BorrowConflict
+test_borrow_match_yield_local_error.ion	error		BorrowConflict
+test_borrow_get_ref_yield_error.ion	error		BorrowConflict
+test_borrow_match_use_error.ion	error		BorrowConflict
 test_field_mut_borrow_scope_ok.ion	run	66			
 test_send_basic.ion	run	42			
 test_defer_basic.ion	run	7			
@@ -41,7 +62,7 @@ test_if_elif_no_else.ion	run	5
 test_struct_basic.ion	run	7			
 test_enum_basic.ion	run	0			
 test_match_basic.ion	run	0			
-test_while_basic.ion	run	0			
+test_while_basic.ion	run	2			
 test_break_continue.ion	run	27			
 test_call_basic.ion	run	30			
 test_string_basic.ion	run	0			
@@ -189,7 +210,7 @@ test_module_basic.ion	run	30
 test_ffi_basic.ion	run	0			
 test_array_basic.ion	run	6			
 test_array_literal.ion	run	21			
-test_array_indexing.ion	run	150			
+test_array_indexing.ion	run	200			
 test_slice_basic.ion	run	3			
 test_slice_indexing.ion	run	42			
 test_array_to_slice_coercion.ion	run	10			
@@ -420,3 +441,61 @@ test_try_readresult_error.ion	error		owned Option<T> or Result<T, E>
 test_try_setresult_error.ion	error		owned Option<T> or Result<T, E>
 test_try_spawn_error.ion	error		cannot be used inside spawn
 test_try_move_error.ion	error		UseAfterMove
+test_capability_show.ion	run	42
+test_capability_generic_impl.ion	run	7
+test_capability_impl_copy_error.ion	error		cannot impl built-in capability
+test_capability_missing_method_error.ion	error		missing method
+test_capability_bound_error.ion	error		TraitBoundNotSatisfied
+test_capability_ambiguous_error.ion	error		provided by
+test_capability_foreign_impl_error.ion	error		same module
+test_drop_sends.ion	run	42
+test_field_replace_drop.ion	run	42
+test_aggregate_eq.ion	run	0
+test_drop_partial_move_error.ion	error		cannot partially move a value that implements Drop
+test_drop_match_partial_move_error.ion	error		cannot partially move a value that implements Drop
+test_drop_match_rest.ion	run	7
+test_drop_receiver_error.ion	error		receiver must be &mut Self
+test_match_named_field_pun.ion	run	0
+test_match_struct_rest.ion	run	9
+test_tuple_rest.ion	run	4
+test_match_or_pattern.ion	run	7
+test_match_at_binding.ion	run	3
+test_match_or_bindings_error.ion	error	same names
+test_match_int_range.ion	run	8
+test_match_bool.ion	run	5
+test_match_string_lit.ion	run	4
+test_match_string_lit.ion	cgen			memcmp	ion_string_equals
+test_match_struct_pattern.ion	run	7
+test_match_struct_string.ion	run	5
+test_match_struct_string.ion	cgen			.name = NULL
+test_match_ref_struct.ion	run	5
+test_match_ref_struct.ion	cgen			(*match_val	Pair match_val
+test_match_option_ref.ion	run	7
+test_match_option_ref.ion	cgen			int* p =	int p = \*
+test_borrow_struct_ref_call.ion	run	1
+test_borrow_struct_ref_call.ion	cgen			touch(h.v)	&\(h\.v\)
+test_borrow_struct_fresh.ion	run	1
+test_borrow_struct_fresh.ion	cgen			touch(h.v)	&\(h\.v\)
+test_borrow_enum_fresh.ion	run	1
+test_borrow_tuple_fresh.ion	run	2
+test_borrow_match_fresh.ion	run	1
+test_borrow_match_yield_local.ion	run	2
+test_match_value_rvalue.ion	run	5
+test_match_value_rvalue.ion	cgen			_ion_match_res
+test_match_pattern_generic.ion	run	4
+test_match_pattern_generic.ion	cgen			id_int
+test_match_not_exhaustive_error.ion	error	not exhaustive
+test_let_refutable_error.ion	error	refutable pattern in let
+test_const_item.ion	run	4
+test_const_param.ion	run	3
+test_const_assert_error.ion	error	const_assert failed
+test_const_fn_error.ion	error	not a const fn
+test_stdlib_result.ion	run	8
+test_stdlib_option.ion	run	8
+test_stdlib_string.ion	run	3
+test_stdlib_math.ion	run	4
+test_stdlib_path.ion	run	5
+test_stdlib_hash.ion	run	0
+test_stdlib_map.ion	run	170
+test_stdlib_time.ion	run	1
+test_stdlib_env.ion	run	1

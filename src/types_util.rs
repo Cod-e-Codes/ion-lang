@@ -67,10 +67,13 @@ pub fn infer_generic_substitutions(
             subs.extend(infer_generic_substitutions(e, a, fn_generics));
         }
         (
-            Type::Array { inner: e, size: es },
+            Type::Array {
+                inner: e, size: es, ..
+            },
             Type::Array {
                 inner: a,
                 size: asz,
+                ..
             },
         ) if es == asz => {
             subs.extend(infer_generic_substitutions(e, a, fn_generics));
@@ -87,6 +90,21 @@ pub fn infer_generic_substitutions(
         | (Type::Receiver { elem_type: e }, Type::Receiver { elem_type: a })
         | (Type::Channel { elem_type: e }, Type::Channel { elem_type: a }) => {
             subs.extend(infer_generic_substitutions(e, a, fn_generics));
+        }
+        (
+            Type::Fn {
+                params: e,
+                return_type: er,
+            },
+            Type::Fn {
+                params: a,
+                return_type: ar,
+            },
+        ) if e.len() == a.len() => {
+            for (ee, aa) in e.iter().zip(a.iter()) {
+                subs.extend(infer_generic_substitutions(ee, aa, fn_generics));
+            }
+            subs.extend(infer_generic_substitutions(er, ar, fn_generics));
         }
         _ => {}
     }

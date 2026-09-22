@@ -132,6 +132,16 @@ impl Compiler {
         // Parse
         let mut parser = Parser::with_source(tokens, &content);
         let mut program = parser.parse().map_err(CompileError::ParseError)?;
+        for imp in &program.impls {
+            let known = program.structs.iter().any(|s| s.name == imp.type_name)
+                || program.enums.iter().any(|e| e.name == imp.type_name);
+            if !known {
+                return Err(CompileError::ParseError(ParseError::Message(format!(
+                    "impl {} for {} must be in the same module as that type",
+                    imp.capability, imp.type_name
+                ))));
+            }
+        }
         crate::ast::number_program(&mut program, &mut self.next_expr_id);
 
         // Recursively parse imports and build export maps
@@ -237,7 +247,10 @@ impl Compiler {
             structs: main_program.structs.clone(),
             enums: main_program.enums.clone(),
             type_aliases: main_program.type_aliases.clone(),
+            capabilities: main_program.capabilities.clone(),
+            impls: main_program.impls.clone(),
             functions: main_program.functions.clone(),
+            consts: main_program.consts.clone(),
             extern_blocks: main_program.extern_blocks.clone(),
         };
 
@@ -284,6 +297,29 @@ impl Compiler {
                 }
             }
 
+            for cap in &module_program.capabilities {
+                if !merged
+                    .capabilities
+                    .iter()
+                    .any(|existing| existing.name == cap.name)
+                {
+                    merged.capabilities.push(cap.clone());
+                }
+            }
+            for imp in &module_program.impls {
+                merged.impls.push(imp.clone());
+            }
+
+            // Public functions are renamed `{alias}_{name}`. Calls inside this
+            // module still use the bare name, so rewrite those callees to the
+            // mangled symbol. Private names stay bare.
+            let pub_names: HashSet<String> = module_program
+                .functions
+                .iter()
+                .filter(|f| f.pub_)
+                .map(|f| f.name.clone())
+                .collect();
+
             // Private helpers referenced by merged pub functions must be present too.
             for f in &module_program.functions {
                 if f.pub_ {
@@ -296,7 +332,11 @@ impl Compiler {
                 {
                     continue;
                 }
-                merged.functions.push(f.clone());
+                let mut f_copy = f.clone();
+                if let Some(alias) = alias {
+                    rewrite_module_function_calls(&mut f_copy, alias, &pub_names);
+                }
+                merged.functions.push(f_copy);
             }
 
             // Add public functions, prefixed with import alias to avoid name collisions
@@ -315,6 +355,7 @@ impl Compiler {
                         continue;
                     }
                     let mut f_copy = f.clone();
+                    rewrite_module_function_calls(&mut f_copy, alias, &pub_names);
                     f_copy.name = mangled_name;
                     merged.functions.push(f_copy);
                 }
@@ -380,6 +421,153 @@ impl Compiler {
 impl Default for Compiler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn rewrite_module_function_calls(func: &mut FnDecl, alias: &str, pub_names: &HashSet<String>) {
+    rewrite_block_calls(&mut func.body, alias, pub_names);
+}
+
+fn rewrite_block_calls(block: &mut Block, alias: &str, pub_names: &HashSet<String>) {
+    for stmt in &mut block.statements {
+        rewrite_stmt_calls(stmt, alias, pub_names);
+    }
+}
+
+fn rewrite_stmt_calls(stmt: &mut Stmt, alias: &str, pub_names: &HashSet<String>) {
+    match stmt {
+        Stmt::Let(let_stmt) => {
+            if let Some(init) = &mut let_stmt.init {
+                rewrite_expr_calls(init, alias, pub_names);
+            }
+        }
+        Stmt::Return(ret) => {
+            if let Some(value) = &mut ret.value {
+                rewrite_expr_calls(value, alias, pub_names);
+            }
+        }
+        Stmt::Expr(expr_stmt) => rewrite_expr_calls(&mut expr_stmt.expr, alias, pub_names),
+        Stmt::Defer(defer_stmt) => rewrite_expr_calls(&mut defer_stmt.expr, alias, pub_names),
+        Stmt::Spawn(spawn) => rewrite_block_calls(&mut spawn.body, alias, pub_names),
+        Stmt::Select(sel) => {
+            for arm in &mut sel.recv_arms {
+                rewrite_expr_calls(&mut arm.recv.channel, alias, pub_names);
+                rewrite_block_calls(&mut arm.body, alias, pub_names);
+            }
+            if let Some(body) = &mut sel.default_body {
+                rewrite_block_calls(body, alias, pub_names);
+            }
+            if let Some(timeout) = &mut sel.timeout_ms {
+                rewrite_expr_calls(timeout, alias, pub_names);
+            }
+            if let Some(body) = &mut sel.timeout_body {
+                rewrite_block_calls(body, alias, pub_names);
+            }
+        }
+        Stmt::If(if_stmt) => {
+            rewrite_expr_calls(&mut if_stmt.cond, alias, pub_names);
+            rewrite_block_calls(&mut if_stmt.then_block, alias, pub_names);
+            if let Some(else_block) = &mut if_stmt.else_block {
+                rewrite_block_calls(else_block, alias, pub_names);
+            }
+        }
+        Stmt::While(while_stmt) => {
+            rewrite_expr_calls(&mut while_stmt.cond, alias, pub_names);
+            rewrite_block_calls(&mut while_stmt.body, alias, pub_names);
+        }
+        Stmt::Loop(loop_stmt) => rewrite_block_calls(&mut loop_stmt.body, alias, pub_names),
+        Stmt::For(for_stmt) => {
+            rewrite_expr_calls(&mut for_stmt.iterable, alias, pub_names);
+            rewrite_block_calls(&mut for_stmt.body, alias, pub_names);
+        }
+        Stmt::UnsafeBlock(block) => rewrite_block_calls(&mut block.body, alias, pub_names),
+        Stmt::Break(_) | Stmt::Continue(_) => {}
+    }
+}
+
+fn rewrite_expr_calls(expr: &mut Expr, alias: &str, pub_names: &HashSet<String>) {
+    match expr {
+        Expr::Call(call) => {
+            if !call.callee.contains("::") && pub_names.contains(&call.callee) {
+                call.callee = format!("{alias}_{}", call.callee);
+            }
+            for arg in &mut call.args {
+                rewrite_expr_calls(arg, alias, pub_names);
+            }
+        }
+        Expr::BinOp(binop) => {
+            rewrite_expr_calls(&mut binop.left, alias, pub_names);
+            rewrite_expr_calls(&mut binop.right, alias, pub_names);
+        }
+        Expr::UnOp(unop) => rewrite_expr_calls(&mut unop.operand, alias, pub_names),
+        Expr::Ref(r) => rewrite_expr_calls(&mut r.inner, alias, pub_names),
+        Expr::Send(send) => {
+            rewrite_expr_calls(&mut send.channel, alias, pub_names);
+            rewrite_expr_calls(&mut send.value, alias, pub_names);
+        }
+        Expr::Recv(recv) => rewrite_expr_calls(&mut recv.channel, alias, pub_names),
+        Expr::Spawn(spawn) => rewrite_block_calls(&mut spawn.body, alias, pub_names),
+        Expr::StructLit(lit) => {
+            for field in &mut lit.fields {
+                rewrite_expr_calls(&mut field.value, alias, pub_names);
+            }
+        }
+        Expr::FieldAccess(acc) => rewrite_expr_calls(&mut acc.base, alias, pub_names),
+        Expr::EnumLit(lit) => {
+            for arg in &mut lit.args {
+                rewrite_expr_calls(arg, alias, pub_names);
+            }
+            if let Some(fields) = &mut lit.named_fields {
+                for (_, value) in fields {
+                    rewrite_expr_calls(value, alias, pub_names);
+                }
+            }
+        }
+        Expr::Match(m) => {
+            rewrite_expr_calls(&mut m.expr, alias, pub_names);
+            for arm in &mut m.arms {
+                if let Some(guard) = &mut arm.guard {
+                    rewrite_expr_calls(guard, alias, pub_names);
+                }
+                rewrite_block_calls(&mut arm.body, alias, pub_names);
+            }
+        }
+        Expr::Try(try_expr) => rewrite_expr_calls(&mut try_expr.operand, alias, pub_names),
+        Expr::MethodCall(call) => {
+            rewrite_expr_calls(&mut call.receiver, alias, pub_names);
+            for arg in &mut call.args {
+                rewrite_expr_calls(arg, alias, pub_names);
+            }
+        }
+        Expr::ArrayLiteral(arr) => {
+            for elem in &mut arr.elements {
+                rewrite_expr_calls(elem, alias, pub_names);
+            }
+            if let Some((value, _)) = &mut arr.repeat {
+                rewrite_expr_calls(value, alias, pub_names);
+            }
+        }
+        Expr::TupleLit(tup) => {
+            for elem in &mut tup.elements {
+                rewrite_expr_calls(elem, alias, pub_names);
+            }
+        }
+        Expr::Index(index) => {
+            rewrite_expr_calls(&mut index.target, alias, pub_names);
+            rewrite_expr_calls(&mut index.index, alias, pub_names);
+        }
+        Expr::Cast(cast) => rewrite_expr_calls(&mut cast.expr, alias, pub_names),
+        Expr::Assign(assign) => {
+            rewrite_expr_calls(&mut assign.target, alias, pub_names);
+            rewrite_expr_calls(&mut assign.value, alias, pub_names);
+        }
+        Expr::FnLiteral(lit) => rewrite_block_calls(&mut lit.body, alias, pub_names),
+        Expr::Lit(_)
+        | Expr::BoolLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::Var(_)
+        | Expr::StringLit(_)
+        | Expr::TypeConst(_) => {}
     }
 }
 

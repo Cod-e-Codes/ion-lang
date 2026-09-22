@@ -1,0 +1,11 @@
+fn helper(n: int) -> int {
+    return n;
+}
+
+const fn uses_helper(n: int) -> int {
+    return helper(n);
+}
+
+fn main() -> int {
+    return uses_helper(1);
+}

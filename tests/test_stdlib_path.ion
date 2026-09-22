@@ -1,0 +1,17 @@
+import "stdlib/path.ion" as path;
+
+fn main() -> int {
+    let p: String = "a/b/c";
+    let name: String = path::file_name(&p);
+    if String::len(&name) != 1 {
+        return 1;
+    }
+    let par: String = path::parent(&p);
+    if String::len(&par) != 3 {
+        return 2;
+    }
+    let dir: String = "dir";
+    let file: String = "f";
+    let joined: String = path::join(&dir, &file);
+    return String::len(&joined);
+}

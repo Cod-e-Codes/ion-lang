@@ -1,0 +1,13 @@
+capability Show {
+    fn show(self: &Self) -> int;
+}
+
+impl Show for Missing {
+    fn show(self: &Missing) -> int {
+        return 1;
+    }
+}
+
+fn main() -> int {
+    return 0;
+}

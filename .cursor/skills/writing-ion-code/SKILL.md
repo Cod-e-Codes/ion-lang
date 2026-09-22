@@ -203,8 +203,8 @@ For programs under `tests/`, follow the `ion-integration-tests` skill (`test_exp
 
 These are **not** in Ion today. Check ION_SPEC.md section 10.3 before using anything similar:
 
-- Capturing closures (fn literals that reference outer variables), or `impl` blocks in user code
-- User-defined traits, `where` clauses, or bounds other than built-in `Copy`, `Eq`, and `Send`
+- Capturing closures (fn literals that reference outer variables)
+- Trait objects, blanket impls, capability inheritance, or `where` clauses. `capability` / `impl` and bounds other than `Copy`, `Eq`, and `Send` are in Section 4.8. `Copy`, `Eq`, and `Send` cannot be implemented by user code.
 - Returning `&T` / `&mut T` or `Option<&T>` from functions (`Arena::get_ref` / `Vec::get_ref` stay stack-local)
 - References in struct fields, enum payloads, or channels
 - Shared mutable state across threads (only channels + move)

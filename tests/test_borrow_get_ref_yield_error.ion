@@ -1,0 +1,22 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn touch(p: &int) -> int {
+    return 1;
+}
+
+fn main() -> int {
+    let mut arr: [int; 1] = [4];
+    let r: &int = match Slice::get_ref(&arr, 0) {
+        Option::Some(p) => {
+            p;
+        }
+        Option::None => {
+            return 0;
+        }
+    };
+    arr[0] = 9;
+    return touch(r);
+}

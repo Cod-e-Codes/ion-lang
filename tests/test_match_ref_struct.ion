@@ -1,0 +1,25 @@
+struct Pair {
+    name: String;
+    n: int;
+}
+
+fn main() -> int {
+    let p: Pair = Pair { name: String::from("ok"), n: 1 };
+    let r: &Pair = &p;
+    let n: int = match r {
+        Pair { name: s, .. } => {
+            String::len(s);
+        }
+    };
+    if n + String::len(&p.name) != 4 {
+        return 1;
+    }
+    let mut q: Pair = Pair { name: String::from("ok"), n: 3 };
+    let m: &mut Pair = &mut q;
+    let k: int = match m {
+        Pair { n, .. } => {
+            n;
+        }
+    };
+    return k + String::len(&q.name);
+}

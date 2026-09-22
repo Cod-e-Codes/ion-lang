@@ -1,0 +1,28 @@
+capability Left {
+    fn code(self: &Self) -> int;
+}
+
+capability Right {
+    fn code(self: &Self) -> int;
+}
+
+struct Point {
+    x: int;
+}
+
+impl Left for Point {
+    fn code(self: &Point) -> int {
+        return self.x;
+    }
+}
+
+impl Right for Point {
+    fn code(self: &Point) -> int {
+        return self.x;
+    }
+}
+
+fn main() -> int {
+    let p: Point = Point { x: 1 };
+    return p.code();
+}

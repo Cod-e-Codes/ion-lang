@@ -1,0 +1,11 @@
+fn main() -> int {
+    let s: String = "ok";
+    match s {
+        "ok" => {
+            return 4;
+        }
+        _ => {
+            return 0;
+        }
+    };
+}

@@ -1,0 +1,27 @@
+import "stdlib/result.ion" as result;
+
+fn inc(x: int) -> int {
+    return x + 1;
+}
+
+fn ok_inc(x: int) -> Result<int, int> {
+    return Result::Ok(x + 1);
+}
+
+fn main() -> int {
+    let ok_one: Result<int, int> = Result::Ok(1);
+    let mapped: Result<int, int> = result::map(ok_one, inc);
+    let chained: Result<int, int> = result::and_then(mapped, ok_inc);
+    let err: Result<int, int> = Result::Err(0);
+    let fallback: int = result::unwrap_or(err, 4);
+    let ok_expect: Result<int, int> = Result::Ok(1);
+    let ok: int = result::expect(ok_expect, "missing");
+    match chained {
+        Result::Ok(n) => {
+            return n + fallback + ok;
+        }
+        Result::Err(_) => {
+            return 0;
+        }
+    }
+}

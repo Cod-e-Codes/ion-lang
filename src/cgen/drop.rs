@@ -10,7 +10,61 @@ impl Codegen {
         self.type_needs_drop_rec(ty, &mut HashSet::new())
     }
 
+    fn user_drop_symbol(&self, ty: &Type) -> Option<String> {
+        let base = match ty {
+            Type::Struct(name) | Type::Enum(name) => name.clone(),
+            Type::Generic { name, .. } => name.clone(),
+            _ => return None,
+        };
+        let prefix = format!("{base}_Drop_drop");
+        for (name, params) in &self.function_param_types {
+            if name != &prefix && !name.starts_with(&format!("{prefix}_")) {
+                continue;
+            }
+            let Some(first) = params.first() else {
+                continue;
+            };
+            let owned = match first {
+                Type::Ref { inner, .. } => inner.as_ref(),
+                other => other,
+            };
+            if Self::drop_types_match(owned, ty) {
+                return Some(name.clone());
+            }
+        }
+        None
+    }
+
+    fn drop_types_match(a: &Type, b: &Type) -> bool {
+        match (a, b) {
+            (Type::Struct(left), Type::Struct(right)) | (Type::Enum(left), Type::Enum(right)) => {
+                left == right
+            }
+            (
+                Type::Generic {
+                    name: left,
+                    params: left_params,
+                },
+                Type::Generic {
+                    name: right,
+                    params: right_params,
+                },
+            ) => {
+                left == right
+                    && left_params.len() == right_params.len()
+                    && left_params
+                        .iter()
+                        .zip(right_params.iter())
+                        .all(|(left_ty, right_ty)| Self::drop_types_match(left_ty, right_ty))
+            }
+            _ => false,
+        }
+    }
+
     fn type_needs_drop_rec(&self, ty: &Type, visiting: &mut HashSet<String>) -> bool {
+        if self.user_drop_symbol(ty).is_some() {
+            return true;
+        }
         if let Some((decl, substitutions)) = self.struct_decl_for_type(ty) {
             let name = match ty {
                 Type::Struct(n) => n.clone(),
@@ -247,6 +301,10 @@ impl Codegen {
     }
 
     fn emit_drop_adt_inline(&mut self, path: &str, ty: &Type) {
+        if let Some(symbol) = self.user_drop_symbol(ty) {
+            self.write_indent();
+            self.writeln(&format!("{symbol}(&({path}));"));
+        }
         if let Some((decl, substitutions)) = self.struct_decl_for_type(ty) {
             let fields: Vec<(String, Type)> = decl
                 .fields
@@ -406,7 +464,7 @@ impl Codegen {
                     self.emit_drop_at_path(&format!("{path}.f{i}"), &elem_ty);
                 }
             }
-            Type::Array { inner, size } if self.type_needs_drop(&inner) => {
+            Type::Array { inner, size, .. } if self.type_needs_drop(&inner) => {
                 let elem_ty = *inner;
                 let idx = self.fresh_temp("_ion_di");
                 self.write_indent();

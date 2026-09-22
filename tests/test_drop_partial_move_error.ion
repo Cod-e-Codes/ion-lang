@@ -1,0 +1,17 @@
+struct Guard {
+    msg: String;
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+    }
+}
+
+fn take(msg: String) -> int {
+    return String::len(&msg);
+}
+
+fn main() -> int {
+    let g: Guard = Guard { msg: String::from("ok") };
+    return take(g.msg);
+}

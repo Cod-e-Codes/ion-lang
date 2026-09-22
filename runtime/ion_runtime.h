@@ -22,6 +22,12 @@ extern "C" {
 void ion_panic(const char *message);
 
 /**
+ * Panics from an Ion `String` data pointer.
+ * `message` may be null. Casts to `const char *` and calls `ion_panic`.
+ */
+void ion_abort_bytes(uint8_t *message);
+
+/**
  * Initializes platform networking (WSAStartup on Windows, no-op elsewhere).
  * Call once before socket FFI in programs that use BSD sockets.
  */
@@ -413,6 +419,70 @@ int ion_file_write(ion_file_t *file, const void *buf, size_t n, size_t *out_n);
  * Closes the file if still open and clears fp. Safe to call twice.
  */
 void ion_file_close(ion_file_t *file);
+
+/**
+ * Mixes the bits of an integer. `value` is `&T` for an integer primitive.
+ */
+static inline int ion_hash_mix(uint64_t x) {
+  x ^= x >> 30;
+  x *= 0xbf58476d1ce4e5b9ULL;
+  x ^= x >> 27;
+  x *= 0x94d049bb133111ebULL;
+  x ^= x >> 31;
+  return (int)x;
+}
+static inline int ion_hash_int(const int *value) {
+  return ion_hash_mix((uint64_t)(int64_t)(*value));
+}
+static inline int ion_hash_i8(const int8_t *value) {
+  return ion_hash_mix((uint64_t)(int64_t)(*value));
+}
+static inline int ion_hash_i16(const int16_t *value) {
+  return ion_hash_mix((uint64_t)(int64_t)(*value));
+}
+static inline int ion_hash_i32(const int32_t *value) {
+  return ion_hash_mix((uint64_t)(int64_t)(*value));
+}
+static inline int ion_hash_i64(const int64_t *value) {
+  return ion_hash_mix((uint64_t)(*value));
+}
+static inline int ion_hash_u8(const uint8_t *value) {
+  return ion_hash_mix((uint64_t)(*value));
+}
+static inline int ion_hash_u16(const uint16_t *value) {
+  return ion_hash_mix((uint64_t)(*value));
+}
+static inline int ion_hash_u32(const uint32_t *value) {
+  return ion_hash_mix((uint64_t)(*value));
+}
+static inline int ion_hash_u64(const uint64_t *value) {
+  return ion_hash_mix(*value);
+}
+static inline int ion_hash_uint(const unsigned *value) {
+  return ion_hash_mix((uint64_t)(*value));
+}
+/** `value` is `&String`, which is `ion_string_t**` in C. */
+static inline int ion_hash_string(ion_string_t *const *value) {
+  const ion_string_t *s = (value != NULL) ? *value : NULL;
+  uint64_t h = 14695981039346656037ULL;
+  if (s != NULL && s->data != NULL) {
+    for (size_t i = 0; i < s->len; i++) {
+      h ^= (uint64_t)s->data[i];
+      h *= 1099511628211ULL;
+    }
+  }
+  return ion_hash_mix(h);
+}
+
+/** Milliseconds since the Unix epoch, masked to a non-negative `int`. */
+int ion_millis(void);
+
+/**
+ * Copies the environment value for `name` into `buf`.
+ * Returns the copied length, or -1 when `name` is missing.
+ * A value longer than `cap` is truncated.
+ */
+int ion_env_copy(uint8_t *name, uint8_t *buf, int cap);
 
 #ifdef __cplusplus
 }

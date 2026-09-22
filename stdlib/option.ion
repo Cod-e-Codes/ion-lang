@@ -1,0 +1,51 @@
+import "panic.ion" as panic;
+
+pub enum Option<T> {
+    Some(T);
+    None;
+}
+
+pub fn map<T, U>(value: Option<T>, f: fn(T) -> U) -> Option<U> {
+    match value {
+        Option::Some(v) => {
+            return Option::Some(f(v));
+        }
+        Option::None => {
+            return Option::None;
+        }
+    }
+}
+
+pub fn and_then<T, U>(value: Option<T>, f: fn(T) -> Option<U>) -> Option<U> {
+    match value {
+        Option::Some(v) => {
+            return f(v);
+        }
+        Option::None => {
+            return Option::None;
+        }
+    }
+}
+
+pub fn unwrap_or<T>(value: Option<T>, fallback: T) -> T {
+    match value {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return fallback;
+        }
+    }
+}
+
+pub fn expect<T>(value: Option<T>, message: String) -> T {
+    match value {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            panic::abort(message);
+            loop { }
+        }
+    }
+}

@@ -1,4 +1,51 @@
+import "panic.ion" as panic;
+
 pub enum Result<T, E> {
     Ok(T);
     Err(E);
+}
+
+pub fn map<T, U, E>(value: Result<T, E>, f: fn(T) -> U) -> Result<U, E> {
+    match value {
+        Result::Ok(v) => {
+            return Result::Ok(f(v));
+        }
+        Result::Err(e) => {
+            return Result::Err(e);
+        }
+    }
+}
+
+pub fn and_then<T, U, E>(value: Result<T, E>, f: fn(T) -> Result<U, E>) -> Result<U, E> {
+    match value {
+        Result::Ok(v) => {
+            return f(v);
+        }
+        Result::Err(e) => {
+            return Result::Err(e);
+        }
+    }
+}
+
+pub fn unwrap_or<T, E>(value: Result<T, E>, fallback: T) -> T {
+    match value {
+        Result::Ok(v) => {
+            return v;
+        }
+        Result::Err(_) => {
+            return fallback;
+        }
+    }
+}
+
+pub fn expect<T, E>(value: Result<T, E>, message: String) -> T {
+    match value {
+        Result::Ok(v) => {
+            return v;
+        }
+        Result::Err(_) => {
+            panic::abort(message);
+            loop { }
+        }
+    }
 }

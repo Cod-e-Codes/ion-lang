@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cgen;
 use crate::compiler;
+use crate::const_eval;
 use crate::ir;
 use crate::tc;
 
@@ -85,7 +86,8 @@ fn type_check(
 ) -> Result<tc::TypeInfo, BuildError> {
     let mut checker = tc::TypeChecker::new();
     checker.set_module_exports(compiler.get_module_exports().clone());
-    let merged = compiler.merge_modules(ast, main_path);
+    let mut merged = compiler.merge_modules(ast, main_path);
+    const_eval::prepare(&mut merged).map_err(BuildError::TypeCheck)?;
     let (result, errors) = checker.check_program_collecting(&merged);
     if !errors.is_empty() {
         return Err(BuildError::TypeCheck(tc::format_type_errors(&errors)));
@@ -109,9 +111,11 @@ fn build_single(
         Some(project.root.clone()),
     );
     let ast = compiler.parse_module(main_path)?;
-    let type_info = type_check(&compiler, &ast, main_path)?;
+    let mut type_info = type_check(&compiler, &ast, main_path)?;
 
-    let merged = compiler.merge_modules(&ast, main_path);
+    let mut merged = compiler.merge_modules(&ast, main_path);
+    const_eval::prepare(&mut merged).map_err(BuildError::TypeCheck)?;
+    const_eval::instantiate(&mut merged, &mut type_info).map_err(BuildError::TypeCheck)?;
     let ir = ir::IRBuilder::build(&merged, &type_info);
     let mut codegen = cgen::Codegen::new();
     codegen.set_type_info(&type_info);

@@ -1,0 +1,27 @@
+capability Show {
+    fn show(self: &Self) -> int;
+}
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+impl Show for Point {
+    fn show(self: &Point) -> int {
+        return self.x + self.y;
+    }
+}
+
+struct Plain {
+    x: int;
+}
+
+fn paint<T: Show>(value: &T) -> int {
+    return value.show();
+}
+
+fn main() -> int {
+    let plain: Plain = Plain { x: 1 };
+    return paint(&plain);
+}

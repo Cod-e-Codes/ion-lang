@@ -2,5 +2,7 @@ fn main() -> int {
     let mut x = 5;
     let a = &mut x;
     let b = &mut x;
+    let _ = a;
+    let _ = b;
     return 0;
 }

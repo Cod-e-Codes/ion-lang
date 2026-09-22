@@ -63,6 +63,18 @@ pub(crate) struct VariableInfo {
     mut_borrow_count: u32,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct LiveBorrow {
+    owner: String,
+    /// `None` borrows the whole owner. `Some` is a field path from that owner.
+    fields: Option<Vec<String>>,
+    mutable: bool,
+    released: bool,
+    /// `borrow_scopes.len()` when this loan was registered. An inner statement
+    /// sequence must not end a loan from an outer scope.
+    depth: usize,
+}
+
 /// Structured edge snapshots for one loop nesting level (AST-level join, not a CFG).
 #[derive(Debug, Clone)]
 pub(crate) struct LoopOwnershipFrame {
@@ -253,12 +265,24 @@ pub fn format_type_errors(errors: &[TypeCheckError]) -> String {
     message
 }
 
+/// Method call resolved by the type checker. IR copies this. It does not reclassify the receiver.
+#[derive(Debug, Clone)]
+pub struct ResolvedMethod {
+    pub callee: String,
+    /// Wrap a non-reference receiver in `&` or `&mut`.
+    pub take_address: bool,
+    pub address_mutable: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TypeInfo {
     pub expr_types: HashMap<ExprId, Type>,
     pub function_params: HashMap<String, Vec<Type>>,
     pub function_returns: HashMap<String, Option<Type>>,
     pub enum_names: HashSet<String>,
+    pub resolved_methods: HashMap<ExprId, ResolvedMethod>,
+    /// Qualified capability calls (`Show::show`) lowered to the impl function.
+    pub call_callees: HashMap<ExprId, String>,
 }
 
 impl TypeInfo {
@@ -287,9 +311,14 @@ impl TypeInfo {
             Type::Vec { elem_type } => Type::Vec {
                 elem_type: Box::new(self.resolve(elem_type)),
             },
-            Type::Array { inner, size } => Type::Array {
+            Type::Array {
+                inner,
+                size,
+                len_name,
+            } => Type::Array {
                 inner: Box::new(self.resolve(inner)),
                 size: *size,
+                len_name: len_name.clone(),
             },
             Type::Slice { inner } => Type::Slice {
                 inner: Box::new(self.resolve(inner)),
@@ -334,6 +363,14 @@ pub struct TypeChecker {
     enums: HashMap<String, EnumDecl>,
     type_aliases: HashMap<String, TypeAliasDecl>,
     functions: HashMap<String, FnDecl>,
+    capabilities: HashMap<String, CapabilityDecl>,
+    /// `(type name, capability, method) -> impl function symbol`.
+    impl_methods: HashMap<(String, String, String), String>,
+    /// `(type name, method) -> symbol` when exactly one capability provides it.
+    unique_methods: HashMap<(String, String), String>,
+    impls: Vec<ImplDecl>,
+    /// Type name to compiler-called `Type_Drop_drop` symbol.
+    drop_impls: HashMap<String, String>,
     extern_functions: HashMap<String, ExternFnDecl>,
     // Module imports: maps import alias to module exports
     module_imports: HashMap<String, ModuleExports>,
@@ -357,8 +394,23 @@ pub struct TypeChecker {
     next_expr_id: u32,
     // Active function generic type parameters including bounds (innermost scope last)
     type_param_scopes: Vec<Vec<TypeParam>>,
-    // Borrows registered in nested scopes (released on scope pop)
-    borrow_scopes: Vec<Vec<(String, bool)>>,
+    // Borrows registered in nested scopes (indices into live_borrows).
+    borrow_scopes: Vec<Vec<usize>>,
+    /// Names overwritten in each borrow scope, restored when that scope pops.
+    borrow_shadows: Vec<Vec<(String, Vec<usize>)>>,
+    live_borrows: Vec<LiveBorrow>,
+    /// Every binding that holds a lasting loan. A name can carry more than one.
+    borrow_names: HashMap<String, Vec<usize>>,
+    /// Loans that escape a `match` as its result. Pattern bindings are gone
+    /// by the time the result is bound, so the match expression remembers them.
+    match_result_loans: HashMap<ExprId, Vec<usize>>,
+    /// Lasting loans created by a `&` / `&mut` stored inside a value.
+    /// Keyed by the reference expression so a later read of that value finds them.
+    stored_ref_loans: HashMap<ExprId, Vec<usize>>,
+    /// Loans created by earlier arms of the matches currently being checked.
+    /// A later arm does not run together with those arms, so it may borrow the
+    /// same place. The frame is popped when the match check ends.
+    match_sibling_loans: Vec<Vec<usize>>,
     // When false, skip recording expression-level LSP data (avoids span collisions from merged imports).
     lsp_recording: bool,
 }
@@ -386,6 +438,11 @@ impl TypeChecker {
             enums: HashMap::new(),
             type_aliases: HashMap::new(),
             functions: HashMap::new(),
+            capabilities: HashMap::new(),
+            impl_methods: HashMap::new(),
+            unique_methods: HashMap::new(),
+            impls: Vec::new(),
+            drop_impls: HashMap::new(),
             extern_functions: HashMap::new(),
             module_imports: HashMap::new(),
             module_paths: HashMap::new(),
@@ -400,6 +457,12 @@ impl TypeChecker {
             next_expr_id: 1_000_000,
             type_param_scopes: Vec::new(),
             borrow_scopes: Vec::new(),
+            borrow_shadows: Vec::new(),
+            live_borrows: Vec::new(),
+            borrow_names: HashMap::new(),
+            match_result_loans: HashMap::new(),
+            stored_ref_loans: HashMap::new(),
+            match_sibling_loans: Vec::new(),
             lsp_recording: true,
         }
     }
@@ -1033,6 +1096,106 @@ impl TypeChecker {
             self.functions.insert(f.name.clone(), f.clone());
         }
 
+        self.capabilities.clear();
+        self.impl_methods.clear();
+        self.unique_methods.clear();
+        self.impls.clear();
+        self.drop_impls.clear();
+        for cap in &program.capabilities {
+            if self.capabilities.contains_key(&cap.name) {
+                errors.push(TypeCheckError::Message(format!(
+                    "capability '{}' is declared more than once",
+                    cap.name
+                )));
+            }
+            self.capabilities.insert(cap.name.clone(), cap.clone());
+        }
+        for imp in &program.impls {
+            if imp.capability == "Drop" {
+                self.register_drop_impl(imp, &mut errors);
+                continue;
+            }
+            if matches!(imp.capability.as_str(), "Copy" | "Eq" | "Send") {
+                errors.push(TypeCheckError::Message(format!(
+                    "cannot impl built-in capability '{}'",
+                    imp.capability
+                )));
+                continue;
+            }
+            let Some(cap) = self.capabilities.get(&imp.capability).cloned() else {
+                errors.push(TypeCheckError::Message(format!(
+                    "unknown capability '{}'",
+                    imp.capability
+                )));
+                continue;
+            };
+            let prefix = format!("{}_{}_", imp.type_name, imp.capability);
+            for method in &imp.methods {
+                let Some(short) = method.name.strip_prefix(&prefix) else {
+                    panic!(
+                        "compiler bug: impl method '{}' missing prefix '{prefix}'",
+                        method.name
+                    );
+                };
+                let key = (
+                    imp.type_name.clone(),
+                    imp.capability.clone(),
+                    short.to_string(),
+                );
+                if self.impl_methods.contains_key(&key) {
+                    errors.push(TypeCheckError::Message(format!(
+                        "duplicate impl {} for {}",
+                        imp.capability, imp.type_name
+                    )));
+                    continue;
+                }
+                let Some(sig) = cap.methods.iter().find(|m| m.name == short) else {
+                    errors.push(TypeCheckError::Message(format!(
+                        "method '{short}' is not in capability '{}'",
+                        imp.capability
+                    )));
+                    continue;
+                };
+                if let Err(e) = self.impl_method_matches(method, sig, &imp.target) {
+                    errors.push(e);
+                    continue;
+                }
+                self.impl_methods.insert(key, method.name.clone());
+            }
+            for sig in &cap.methods {
+                let key = (
+                    imp.type_name.clone(),
+                    imp.capability.clone(),
+                    sig.name.clone(),
+                );
+                if !self.impl_methods.contains_key(&key) {
+                    errors.push(TypeCheckError::Message(format!(
+                        "impl {} for {} is missing method '{}'",
+                        imp.capability, imp.type_name, sig.name
+                    )));
+                }
+            }
+            self.impls.push(imp.clone());
+        }
+        let mut method_caps: HashMap<(String, String), Vec<String>> = HashMap::new();
+        for ((ty, cap, method), symbol) in &self.impl_methods {
+            method_caps
+                .entry((ty.clone(), method.clone()))
+                .or_default()
+                .push(cap.clone());
+            let _ = symbol;
+        }
+        for ((ty, method), caps) in method_caps {
+            if caps.len() == 1 {
+                let symbol = self
+                    .impl_methods
+                    .get(&(ty.clone(), caps[0].clone(), method.clone()))
+                    .cloned()
+                    .expect("impl method just inserted");
+                self.unique_methods.insert((ty, method), symbol);
+            }
+        }
+
         // Record extern function declarations. Only `"C"` linkage is allowed.
         self.extern_functions.clear();
         for extern_block in &program.extern_blocks {
@@ -1234,6 +1397,16 @@ impl TypeChecker {
         receiver_type: &Type,
         type_name: &str,
     ) -> Result<Option<Type>, TypeCheckError> {
+        if crate::integer_limits::builtin_hash_symbol(type_name) == Some(qualified_name) {
+            let owned = match receiver_type {
+                Type::Ref { inner, .. } => inner.as_ref().clone(),
+                other => other.clone(),
+            };
+            return Ok(Some(Type::Ref {
+                inner: Box::new(owned),
+                mutable: false,
+            }));
+        }
         match (type_name, qualified_name) {
             ("Vec", "Vec::push") | ("Vec", "Vec::pop") | ("Vec", "Vec::set") => {
                 // These methods require &mut Vec<T>
@@ -1331,6 +1504,352 @@ impl TypeChecker {
             }
             _ => Ok(None),
         }
+    }
+
+    fn register_drop_impl(&mut self, imp: &ImplDecl, errors: &mut Vec<TypeCheckError>) {
+        if self.drop_impls.contains_key(&imp.type_name) {
+            errors.push(TypeCheckError::Message(format!(
+                "duplicate impl Drop for {}",
+                imp.type_name
+            )));
+            return;
+        }
+        if imp.methods.len() != 1 {
+            errors.push(TypeCheckError::Message(
+                "impl Drop must define fn drop(self: &mut Self)".to_string(),
+            ));
+            return;
+        }
+        let method = &imp.methods[0];
+        let prefix = format!("{}_Drop_", imp.type_name);
+        let Some(short) = method.name.strip_prefix(&prefix) else {
+            panic!(
+                "compiler bug: drop method '{}' missing prefix '{prefix}'",
+                method.name
+            );
+        };
+        if short != "drop" {
+            errors.push(TypeCheckError::Message(
+                "impl Drop must define fn drop(self: &mut Self)".to_string(),
+            ));
+            return;
+        }
+        let expected = Type::Ref {
+            inner: Box::new(imp.target.clone()),
+            mutable: true,
+        };
+        if method.params.len() != 1 || !types_equal(&method.params[0].ty, &expected) {
+            errors.push(TypeCheckError::Message(
+                "Drop::drop receiver must be &mut Self".to_string(),
+            ));
+            return;
+        }
+        if method.return_type.is_some() {
+            errors.push(TypeCheckError::Message(
+                "Drop::drop must not return a value".to_string(),
+            ));
+            return;
+        }
+        self.drop_impls
+            .insert(imp.type_name.clone(), method.name.clone());
+    }
+
+    fn type_has_user_drop(&self, ty: &Type) -> bool {
+        let name = match ty {
+            Type::Ref { inner, .. } => return self.type_has_user_drop(inner),
+            Type::Struct(name) | Type::Enum(name) => name,
+            Type::Generic { name, .. } => name,
+            _ => return false,
+        };
+        self.drop_impls.contains_key(name)
+    }
+
+    /// A pattern moves a non-Copy place out of the value being matched.
+    fn pattern_moves_owned(&self, pattern: &Pattern, ty: &Type) -> bool {
+        match pattern {
+            Pattern::Wildcard { .. }
+            | Pattern::Lit { .. }
+            | Pattern::Range { .. }
+            | Pattern::Rest { .. } => false,
+            Pattern::Binding { .. } => !Self::is_copy_type(ty),
+            Pattern::At { pattern, .. } => {
+                !Self::is_copy_type(ty) || self.pattern_moves_owned(pattern, ty)
+            }
+            Pattern::Or { alts, .. } => alts.iter().any(|alt| self.pattern_moves_owned(alt, ty)),
+            Pattern::Struct { .. } | Pattern::Variant { .. } => !Self::is_copy_type(ty),
+        }
+    }
+
+    fn reject_drop_partial_move(
+        &self,
+        owner_ty: &Type,
+        field_ty: &Type,
+        pattern: &Pattern,
+        through_ref: bool,
+    ) -> Result<(), TypeCheckError> {
+        if through_ref || !self.type_has_user_drop(owner_ty) {
+            return Ok(());
+        }
+        if self.pattern_moves_owned(pattern, field_ty) {
+            return Err(TypeCheckError::Message(
+                "cannot partially move a value that implements Drop".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn struct_field_type(&self, base_ty: &Type, field: &str) -> Option<Type> {
+        let (name, substitutions) = match base_ty {
+            Type::Ref { inner, .. } => return self.struct_field_type(inner, field),
+            Type::Struct(name) => (name.clone(), HashMap::new()),
+            Type::Generic { name, params } => {
+                let decl = self.structs.get(name)?;
+                let substitutions = decl
+                    .generics
+                    .iter()
+                    .zip(params.iter())
+                    .map(|(param, concrete)| (param.name.clone(), concrete.clone()))
+                    .collect();
+                (name.clone(), substitutions)
+            }
+            _ => return None,
+        };
+        let decl = self.structs.get(&name)?;
+        let field_ty = decl.fields.iter().find(|f| f.name == field)?.ty.clone();
+        Some(substitute_generic_types_impl(&field_ty, &substitutions))
+    }
+
+    fn chain_has_user_drop(&self, expr: &Expr) -> bool {
+        let Expr::FieldAccess(acc) = expr else {
+            return false;
+        };
+        if let Some(ty) = self.type_info.expr_types.get(&acc.base.id())
+            && self.type_has_user_drop(ty)
+        {
+            return true;
+        }
+        self.chain_has_user_drop(&acc.base)
+    }
+
+    fn impl_method_matches(
+        &self,
+        method: &FnDecl,
+        sig: &CapabilityMethod,
+        target: &Type,
+    ) -> Result<(), TypeCheckError> {
+        if method.params.len() != sig.params.len() {
+            return Err(TypeCheckError::Message(format!(
+                "method '{}' has {} parameters, capability requires {}",
+                sig.name,
+                method.params.len(),
+                sig.params.len()
+            )));
+        }
+        for (got, expected) in method.params.iter().zip(sig.params.iter()) {
+            let expected_ty = substitute_self_type(&expected.ty, target);
+            if !types_equal(&got.ty, &expected_ty) {
+                return Err(TypeCheckError::Message(format!(
+                    "method '{}' parameter '{}' has type {}, capability requires {}",
+                    sig.name,
+                    got.name,
+                    type_to_string(&got.ty),
+                    type_to_string(&expected_ty)
+                )));
+            }
+        }
+        let expected_ret = sig
+            .return_type
+            .as_ref()
+            .map(|ty| substitute_self_type(ty, target));
+        match (&method.return_type, &expected_ret) {
+            (None, None) => Ok(()),
+            (Some(got), Some(expected)) if types_equal(got, expected) => Ok(()),
+            _ => Err(TypeCheckError::Message(format!(
+                "method '{}' return type does not match capability",
+                sig.name
+            ))),
+        }
+    }
+
+    fn resolve_method_callee(&self, base: &str, method: &str) -> Result<String, TypeCheckError> {
+        if method == "hash"
+            && let Some(symbol) = crate::integer_limits::builtin_hash_symbol(base)
+        {
+            return Ok(symbol.to_string());
+        }
+        if crate::integer_limits::integer_type_from_keyword(base).is_some() {
+            return Err(TypeCheckError::Message(format!(
+                "Cannot call methods on primitive type '{base}'"
+            )));
+        }
+        if let Some(param) = self.lookup_type_param(base) {
+            let found: Vec<&String> = param
+                .bounds
+                .iter()
+                .filter(|bound| {
+                    self.capabilities
+                        .get(bound.as_str())
+                        .is_some_and(|cap| cap.methods.iter().any(|m| m.name == method))
+                })
+                .collect();
+            match found.as_slice() {
+                [cap] => return Ok(format!("CAP::{cap}::{method}")),
+                [] => {}
+                _ => {
+                    return Err(TypeCheckError::Message(format!(
+                        "method '{method}' is provided by more than one capability bound; call Capability::{method}(...)"
+                    )));
+                }
+            }
+        }
+        if let Some(symbol) = self
+            .unique_methods
+            .get(&(base.to_string(), method.to_string()))
+        {
+            return Ok(symbol.clone());
+        }
+        let providers: Vec<&str> = self
+            .impl_methods
+            .iter()
+            .filter(|((ty, _, m), _)| ty == base && m == method)
+            .map(|((_, cap, _), _)| cap.as_str())
+            .collect();
+        if providers.len() > 1 {
+            return Err(TypeCheckError::Message(format!(
+                "method '{method}' on '{base}' is provided by {}; call Capability::{method}(...)",
+                providers.join(", ")
+            )));
+        }
+        Ok(format!("{base}::{method}"))
+    }
+
+    fn split_capability_callee<'a>(&self, qualified: &'a str) -> Option<(&'a str, &'a str)> {
+        let (cap, method) = qualified.strip_prefix("CAP::")?.split_once("::")?;
+        if self.capabilities.contains_key(cap) {
+            Some((cap, method))
+        } else {
+            None
+        }
+    }
+
+    fn capability_method(
+        &self,
+        cap: &str,
+        method: &str,
+    ) -> Result<CapabilityMethod, TypeCheckError> {
+        let decl = self
+            .capabilities
+            .get(cap)
+            .ok_or_else(|| TypeCheckError::Message(format!("unknown capability '{cap}'")))?;
+        decl.methods
+            .iter()
+            .find(|m| m.name == method)
+            .cloned()
+            .ok_or_else(|| {
+                TypeCheckError::Message(format!("capability '{cap}' has no method '{method}'"))
+            })
+    }
+
+    fn owned_type_for_capability(ty: &Type) -> Type {
+        match ty {
+            Type::Ref { inner, .. } => Self::owned_type_for_capability(inner),
+            other => other.clone(),
+        }
+    }
+
+    fn capability_method_receiver(
+        &self,
+        qualified: &str,
+        receiver_ty: &Type,
+    ) -> Result<Type, TypeCheckError> {
+        let (cap, method) = self.split_capability_callee(qualified).ok_or_else(|| {
+            TypeCheckError::Message(format!("invalid capability callee '{qualified}'"))
+        })?;
+        let sig = self.capability_method(cap, method)?;
+        let Some(first) = sig.params.first() else {
+            return Err(TypeCheckError::Message(format!(
+                "capability method '{cap}::{method}' needs a receiver"
+            )));
+        };
+        let owned = Self::owned_type_for_capability(receiver_ty);
+        self.resolve_type_name(&substitute_self_type(&first.ty, &owned))
+    }
+
+    fn check_against_capability(
+        &mut self,
+        qualified: &str,
+        call: &CallExpr,
+        receiver_ty: &Type,
+    ) -> Result<Type, TypeCheckError> {
+        let (cap, method) = self.split_capability_callee(qualified).ok_or_else(|| {
+            TypeCheckError::Message(format!("invalid capability callee '{qualified}'"))
+        })?;
+        let sig = self.capability_method(cap, method)?;
+        let owned = Self::owned_type_for_capability(receiver_ty);
+        if call.args.len() != sig.params.len() {
+            return Err(TypeCheckError::TypeMismatch {
+                expected: format!("{} arguments", sig.params.len()),
+                got: format!("{} arguments", call.args.len()),
+                span: call.span,
+            });
+        }
+        for (arg, param) in call.args.iter().zip(sig.params.iter()) {
+            let expected = self.resolve_type_name(&substitute_self_type(&param.ty, &owned))?;
+            let arg_ty = self.check_expr_with_expected(arg, &expected)?;
+            let resolved_arg = self.resolve_type_name(&arg_ty)?;
+            if !Self::arg_types_compatible(&resolved_arg, &expected) {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: type_to_string(&expected),
+                    got: type_to_string(&resolved_arg),
+                    span: arg.span(),
+                });
+            }
+        }
+        match &sig.return_type {
+            Some(ret) => self.resolve_type_name(&substitute_self_type(ret, &owned)),
+            None => Ok(Type::Void),
+        }
+    }
+
+    /// `Show::show(value)` resolves from the first argument's type.
+    /// Returns the impl symbol, or `None` when `callee` is not a capability path.
+    fn capability_call_symbol(
+        &mut self,
+        call: &CallExpr,
+    ) -> Result<Option<String>, TypeCheckError> {
+        let Some((cap, method)) = call.callee.split_once("::") else {
+            return Ok(None);
+        };
+        if !self.capabilities.contains_key(cap) {
+            return Ok(None);
+        }
+        if call.args.is_empty() {
+            return Err(TypeCheckError::Message(format!(
+                "{cap}::{method} needs a receiver argument"
+            )));
+        }
+        let saved_vars = self.variables.clone();
+        let saved_borrows = self.borrow_scopes.clone();
+        let arg_ty = self.check_expr(&call.args[0])?;
+        self.variables = saved_vars;
+        self.borrow_scopes = saved_borrows;
+        let resolved = self.resolve_type_name(&arg_ty)?;
+        let owned = Self::owned_type_for_capability(&resolved);
+        let (base, _, _) = Self::extract_type_name_for_method(&owned).map_err(|_| {
+            TypeCheckError::Message(format!(
+                "cannot call {cap}::{method} on {}",
+                type_to_string(&owned)
+            ))
+        })?;
+        if self.is_type_param(&base) {
+            return Ok(Some(format!("CAP::{cap}::{method}")));
+        }
+        let key = (base.clone(), cap.to_string(), method.to_string());
+        let symbol =
+            self.impl_methods.get(&key).cloned().ok_or_else(|| {
+                TypeCheckError::Message(format!("type '{base}' has no impl {cap}"))
+            })?;
+        Ok(Some(symbol))
     }
 
     /// Look up a method function by qualified name.
@@ -1486,9 +2005,14 @@ impl TypeChecker {
             Type::Channel { elem_type } => Type::Channel {
                 elem_type: Box::new(Self::substitute_type_params(elem_type, substitutions)),
             },
-            Type::Array { inner, size } => Type::Array {
+            Type::Array {
+                inner,
+                size,
+                len_name,
+            } => Type::Array {
                 inner: Box::new(Self::substitute_type_params(inner, substitutions)),
                 size: *size,
+                len_name: len_name.clone(),
             },
             Type::Slice { inner } => Type::Slice {
                 inner: Box::new(Self::substitute_type_params(inner, substitutions)),
@@ -1517,6 +2041,16 @@ impl TypeChecker {
             },
             _ => ty.clone(),
         }
+    }
+
+    fn check_stmt_seq(&mut self, stmts: &[Stmt]) -> Result<(), TypeCheckError> {
+        let last = ownership::lasting_borrow_uses(stmts);
+        let depth = self.borrow_scopes.len();
+        for (index, stmt) in stmts.iter().enumerate() {
+            self.check_stmt(stmt)?;
+            self.release_borrows_ending_at(index, &last, depth);
+        }
+        Ok(())
     }
 
     fn check_function(&mut self, function: &FnDecl) -> Result<(), TypeCheckError> {
@@ -1562,12 +2096,18 @@ impl TypeChecker {
                 Self::new_variable_info(resolved_param_ty, function.span),
             );
         }
+        for generic in &function.generics {
+            if generic.const_ty.is_some() {
+                self.variables.insert(
+                    generic.name.clone(),
+                    Self::new_variable_info(Type::Int, function.span),
+                );
+            }
+        }
 
         // Check function body
         self.push_borrow_scope();
-        for stmt in &function.body.statements {
-            self.check_stmt(stmt)?;
-        }
+        self.check_stmt_seq(&function.body.statements)?;
         self.pop_borrow_scope();
 
         // Restore previous scope and return type
@@ -1725,14 +2265,49 @@ impl TypeChecker {
                             span: let_stmt.span,
                         });
                     };
-                    if patterns.len() != elements.len() {
+                    if patterns
+                        .iter()
+                        .filter(|p| matches!(p, Pattern::Rest { .. }))
+                        .count()
+                        > 1
+                    {
+                        return Err(TypeCheckError::Message(
+                            "tuple pattern can contain '..' once".to_string(),
+                        ));
+                    }
+                    let has_rest = patterns.iter().any(|p| matches!(p, Pattern::Rest { .. }));
+                    if !has_rest && patterns.len() != elements.len() {
                         return Err(TypeCheckError::TypeMismatch {
                             expected: format!("{} tuple patterns", elements.len()),
                             got: format!("{} patterns", patterns.len()),
                             span: let_stmt.span,
                         });
                     }
-                    for (pattern, elem_ty) in patterns.iter().zip(elements.iter()) {
+                    if has_rest && patterns.len() - 1 > elements.len() {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: format!("at most {} tuple patterns", elements.len() + 1),
+                            got: format!("{} patterns", patterns.len()),
+                            span: let_stmt.span,
+                        });
+                    }
+                    let rest_at = patterns
+                        .iter()
+                        .position(|p| matches!(p, Pattern::Rest { .. }));
+                    let tail = rest_at.map(|i| patterns.len() - i - 1).unwrap_or(0);
+                    for (i, pattern) in patterns.iter().enumerate() {
+                        if matches!(pattern, Pattern::Rest { .. }) {
+                            continue;
+                        }
+                        let elem_index = if let Some(rest_at) = rest_at {
+                            if i < rest_at {
+                                i
+                            } else {
+                                elements.len() - tail + (i - rest_at - 1)
+                            }
+                        } else {
+                            i
+                        };
+                        let elem_ty = &elements[elem_index];
                         match pattern {
                             Pattern::Binding { name, .. } => {
                                 self.check_no_off_stack_reference(elem_ty, let_stmt.span)?;
@@ -1741,10 +2316,10 @@ impl TypeChecker {
                                     Self::new_variable_info(elem_ty.clone(), let_stmt.span),
                                 );
                             }
+                            Pattern::Wildcard { .. } | Pattern::Rest { .. } => {}
                             _ => {
                                 return Err(TypeCheckError::Message(
-                                    "tuple destructuring patterns must be variable bindings"
-                                        .to_string(),
+                                    "refutable pattern in let".to_string(),
                                 ));
                             }
                         }
@@ -1818,10 +2393,12 @@ impl TypeChecker {
                                 Type::Array {
                                     inner: init_elem,
                                     size: init_size,
+                                    ..
                                 },
                                 Type::Array {
                                     inner: ann_elem,
                                     size: ann_size,
+                                    ..
                                 },
                             ) => {
                                 init_size == ann_size
@@ -1862,11 +2439,15 @@ impl TypeChecker {
                     // This handles cases like `let y = x;` where `x` is moved to `y`
                     self.check_expr_for_moves(init)?;
 
-                    // Lasting borrows from `let r = &x` / `let r = &mut s.field`, etc.
-                    if let Expr::Ref(ref_expr) = init
-                        && let Some((owner, span)) = self.borrow_owner_from_expr(&ref_expr.inner)
-                    {
-                        self.register_borrow(&owner, ref_expr.mutable, span)?;
+                    // Lasting borrows from `let r = &x` / `let r = &mut a.field`.
+                    // A reborrow carries the loan of the reference it reads through.
+                    if let Expr::Ref(ref_expr) = init {
+                        self.finish_ref_loan(
+                            &let_stmt.name,
+                            ref_expr.mutable,
+                            &ref_expr.inner,
+                            true,
+                        )?;
                     }
 
                     // Shared borrow on root owner while `Option<&T>` from get_ref is live.
@@ -1877,6 +2458,11 @@ impl TypeChecker {
                         && call.args.len() == 2
                     {
                         self.register_get_ref_borrow_from_receiver(&call.args[0], let_stmt.span)?;
+                        self.note_borrow_binding(&let_stmt.name);
+                    }
+
+                    if !matches!(init, Expr::Ref(_)) {
+                        self.carry_expr_loans(&let_stmt.name, init, true)?;
                     }
 
                     // New variable starts as Valid (it owns the value from init)
@@ -2015,9 +2601,7 @@ impl TypeChecker {
                 // Then-branch: type-check with its own copy of the environment
                 self.variables = before.clone();
                 self.push_borrow_scope();
-                for inner in &if_stmt.then_block.statements {
-                    self.check_stmt(inner)?;
-                }
+                self.check_stmt_seq(&if_stmt.then_block.statements)?;
                 self.pop_borrow_scope();
                 let then_env = self.variables.clone();
 
@@ -2025,9 +2609,7 @@ impl TypeChecker {
                 let else_env = if let Some(ref else_blk) = if_stmt.else_block {
                     self.variables = before.clone();
                     self.push_borrow_scope();
-                    for inner in &else_blk.statements {
-                        self.check_stmt(inner)?;
-                    }
+                    self.check_stmt_seq(&else_blk.statements)?;
                     self.pop_borrow_scope();
                     self.variables.clone()
                 } else {
@@ -2095,9 +2677,7 @@ impl TypeChecker {
                 self.push_loop_ownership_frame();
                 self.loop_depth += 1;
                 self.push_borrow_scope();
-                for inner in &while_stmt.body.statements {
-                    self.check_stmt(inner)?;
-                }
+                self.check_stmt_seq(&while_stmt.body.statements)?;
                 self.pop_borrow_scope();
                 self.loop_depth -= 1;
                 let body_env = self.variables.clone();
@@ -2121,9 +2701,7 @@ impl TypeChecker {
                 self.push_loop_ownership_frame();
                 self.loop_depth += 1;
                 self.push_borrow_scope();
-                for inner in &loop_stmt.body.statements {
-                    self.check_stmt(inner)?;
-                }
+                self.check_stmt_seq(&loop_stmt.body.statements)?;
                 self.pop_borrow_scope();
                 self.loop_depth -= 1;
                 let body_env = self.variables.clone();
@@ -2649,11 +3227,13 @@ impl TypeChecker {
             let array_elem_coerced = if let Type::Array {
                 inner: value_elem,
                 size: value_size,
+                ..
             } = &resolved_value_ty
             {
                 if let Type::Array {
                     inner: field_elem,
                     size: field_size,
+                    ..
                 } = &expected_field_ty
                 {
                     value_size == field_size && Self::can_coerce_numeric(value_elem, field_elem)
@@ -2982,9 +3562,7 @@ impl TypeChecker {
                 }
             }
             Expr::Ref(ref_expr) => {
-                if let Some((owner, span)) = self.borrow_owner_from_expr(&ref_expr.inner) {
-                    self.check_borrow_allowed(&owner, ref_expr.mutable, span)?;
-                }
+                self.check_ref_place(ref_expr.mutable, &ref_expr.inner)?;
                 let inner_type = self.check_expr_borrow_operand(&ref_expr.inner)?;
 
                 Ok(Type::Ref {
@@ -2994,7 +3572,12 @@ impl TypeChecker {
             }
             Expr::StructLit(lit) => self.check_struct_lit(lit, None),
             Expr::FieldAccess(acc) => {
-                let base_ty = self.check_expr_with_context(&acc.base, borrow_operand)?;
+                let base_ty = self.check_expr_with_context(&acc.base, true)?;
+                if let Some((owner, fields, span)) =
+                    self.place_from_expr(&Expr::FieldAccess(acc.clone()))
+                {
+                    self.check_borrow_allowed(&owner, fields.as_deref(), false, span)?;
+                }
                 match base_ty {
                     Type::Struct(ref name) => {
                         if self.is_type_param(name) {
@@ -3365,10 +3948,7 @@ impl TypeChecker {
                 // and T must be Send. Returns SendResult<T>.
                 let sender_ref_type = self.check_expr(&send_expr.channel)?;
                 let (elem_type, span) = match sender_ref_type {
-                    Type::Ref {
-                        inner,
-                        mutable: false,
-                    } => match *inner {
+                    Type::Ref { inner, .. } => match *inner {
                         Type::Sender { ref elem_type } => ((**elem_type).clone(), send_expr.span),
                         other => {
                             return Err(TypeCheckError::TypeMismatch {
@@ -3456,6 +4036,16 @@ impl TypeChecker {
                 Ok(Type::JoinHandle)
             }
             Expr::EnumLit(enum_lit) => {
+                if self.capabilities.contains_key(&enum_lit.enum_name) {
+                    let call = CallExpr {
+                        id: enum_lit.id,
+                        callee: format!("{}::{}", enum_lit.enum_name, enum_lit.variant),
+                        args: enum_lit.args.clone(),
+                        span: enum_lit.span,
+                        callee_span: enum_lit.variant_span,
+                    };
+                    return self.check_expr(&Expr::Call(call));
+                }
                 // Check if this is actually a qualified function call that was mis-parsed
                 // This happens when mod::func(...) is parsed as EnumLit instead of CallExpr
                 if let Some(module_exports) = self.module_imports.get(&enum_lit.enum_name) {
@@ -3822,6 +4412,15 @@ impl TypeChecker {
                     }
                 };
 
+                if self.is_value_pattern_scrutinee(&scrutinee_ty) {
+                    return self.check_value_pattern_match(
+                        match_expr,
+                        &scrutinee_ty,
+                        match_through_ref,
+                        ref_mutability,
+                    );
+                }
+
                 // Support matching on enums (both non-generic and generic)
                 let (enum_name, enum_decl) = match &scrutinee_ty {
                     Type::Enum(name) => {
@@ -3920,6 +4519,7 @@ impl TypeChecker {
 
                 let before_match = self.variables.clone();
                 let mut fallthrough_envs: Vec<HashMap<String, VariableInfo>> = Vec::new();
+                let _match_siblings = self.enter_match_siblings();
 
                 for arm in &match_expr.arms {
                     self.variables = before_match.clone();
@@ -3932,7 +4532,7 @@ impl TypeChecker {
                     if borrows_vec_for_arm {
                         self.push_borrow_scope();
                         if let Some((ref owner, owner_span)) = get_ref_owner {
-                            self.register_borrow(owner, false, owner_span)?;
+                            self.register_borrow(owner, None, false, owner_span)?;
                         }
                     }
 
@@ -3978,13 +4578,70 @@ impl TypeChecker {
                             covered_variants
                                 .extend(enum_decl.variants.iter().map(|v| v.name.clone()));
                         }
+                        Pattern::At { pattern, .. } => match pattern.as_ref() {
+                            Pattern::Wildcard { .. } | Pattern::Binding { .. } => {
+                                covered_variants
+                                    .extend(enum_decl.variants.iter().map(|v| v.name.clone()));
+                            }
+                            Pattern::Variant { variant, .. } => {
+                                covered_variants.push(variant.clone());
+                            }
+                            _ => {}
+                        },
+                        Pattern::Or { alts, .. } => {
+                            for alt in alts {
+                                if let Pattern::Variant { variant, .. } = alt {
+                                    covered_variants.push(variant.clone());
+                                } else if let Pattern::At { pattern, .. } = alt
+                                    && let Pattern::Variant { variant, .. } = pattern.as_ref()
+                                {
+                                    covered_variants.push(variant.clone());
+                                }
+                            }
+                            let mut expected: Option<Vec<String>> = None;
+                            for alt in alts {
+                                let mut set = std::collections::HashSet::new();
+                                add_pattern_binding_names(alt, &mut set);
+                                let mut got: Vec<String> = set.into_iter().collect();
+                                got.sort();
+                                if let Some(prev) = &expected {
+                                    if prev != &got {
+                                        return Err(TypeCheckError::Message(
+                                            "or-pattern alternatives must bind the same names"
+                                                .to_string(),
+                                        ));
+                                    }
+                                } else {
+                                    expected = Some(got);
+                                }
+                            }
+                        }
+                        Pattern::Lit { .. }
+                        | Pattern::Range { .. }
+                        | Pattern::Struct { .. }
+                        | Pattern::Rest { .. } => {
+                            return Err(TypeCheckError::Message(
+                                "this pattern does not match an enum variant".to_string(),
+                            ));
+                        }
                     }
 
                     // Type-check the arm body once, then read recorded types for
                     // value unification (no second ownership walk).
+                    // Reference payloads carry the scrutinee loan. That loan is
+                    // read before this scope pops, because the binding does not
+                    // outlive the arm.
+                    self.push_borrow_scope();
+                    self.attach_ref_pattern_loans(&arm.pattern, &match_expr.expr);
+                    if borrows_vec_for_arm {
+                        self.attach_latest_loan_to_ref_patterns(&arm.pattern);
+                    }
                     for stmt in &arm.body.statements {
                         self.check_stmt(stmt)?;
                     }
+                    let escaping = self.loans_in_block(&arm.body);
+                    self.keep_arm_result_loans(match_expr.id, &escaping);
+                    self.pop_borrow_scope();
                     match self.infer_block_result_type(&arm.body, arm.span)? {
                         MatchArmValue::Diverges => {}
                         MatchArmValue::Unit => {}
@@ -3998,6 +4655,12 @@ impl TypeChecker {
                         }
                     }
                     if borrows_vec_for_arm {
+                        let escaping = self
+                            .match_result_loans
+                            .get(&match_expr.id)
+                            .cloned()
+                            .unwrap_or_default();
+                        self.promote_current_scope_loans(&escaping);
                         self.pop_borrow_scope();
                     }
                     if block_falls_through(&arm.body) {
@@ -4043,6 +4706,37 @@ impl TypeChecker {
             }
             Expr::Try(try_expr) => self.check_try_expr(try_expr),
             Expr::Call(call_expr) => {
+                if call_expr.callee.ends_with("_Drop_drop")
+                    || call_expr.callee.contains("_Drop_drop_")
+                {
+                    return Err(TypeCheckError::Message(
+                        "drop is called by the compiler when the value is destroyed".to_string(),
+                    ));
+                }
+                if let Some(symbol) = self.capability_call_symbol(call_expr)? {
+                    if !call_expr.id.is_assigned() {
+                        panic!(
+                            "compiler bug: call missing expr id at line {}",
+                            call_expr.span.line
+                        );
+                    }
+                    self.type_info
+                        .call_callees
+                        .insert(call_expr.id, symbol.clone());
+                    if symbol.starts_with("CAP::") {
+                        let saved_vars = self.variables.clone();
+                        let saved_borrows = self.borrow_scopes.clone();
+                        let arg_ty = self.check_expr(&call_expr.args[0])?;
+                        self.variables = saved_vars;
+                        self.borrow_scopes = saved_borrows;
+                        let resolved = self.resolve_type_name(&arg_ty)?;
+                        return self.check_against_capability(&symbol, call_expr, &resolved);
+                    }
+                    let mut owned = call_expr.clone();
+                    owned.callee = symbol;
+                    return self.check_expr(&Expr::Call(owned));
+                }
+
                 // Check if this is a built-in function first
                 if let Some(return_type) = self.check_builtin_call(call_expr)? {
                     if let Some(sig) = Self::builtin_signature(&call_expr.callee) {
@@ -4190,7 +4884,6 @@ impl TypeChecker {
                                         span: arg_expr.span(),
                                     });
                                 }
-                                self.check_expr_for_moves(arg_expr)?;
                             }
                             return Ok(*return_type);
                         }
@@ -4243,12 +4936,17 @@ impl TypeChecker {
                     && !func_decl_params.is_empty()
                 {
                     let saved = self.variables.clone();
-                    let arg0_ty = self.check_expr(&call_expr.args[0])?;
+                    for (arg, param) in call_expr.args.iter().zip(func_decl_params.iter()) {
+                        let arg_ty = self.check_expr(arg)?;
+                        let resolved_arg = self.resolve_type_name(&arg_ty)?;
+                        let param_ty = self.resolve_type_name(&param.ty)?;
+                        generic_substitutions.extend(infer_generic_substitutions(
+                            &param_ty,
+                            &resolved_arg,
+                            &fn_generics,
+                        ));
+                    }
                     self.variables = saved;
-                    let resolved_arg = self.resolve_type_name(&arg0_ty)?;
-                    let param0_ty = self.resolve_type_name(&func_decl_params[0].ty)?;
-                    generic_substitutions =
-                        infer_generic_substitutions(&param0_ty, &resolved_arg, &fn_generics);
                 }
 
                 if !generic_substitutions.is_empty() {
@@ -4423,29 +5121,51 @@ impl TypeChecker {
                     Self::extract_type_name_for_method(&resolved_type)?;
 
                 // Step 4: Construct qualified function name: Type::method
-                let qualified_name = format!("{}::{}", base_type_name, method_call.method);
+                let qualified_name =
+                    self.resolve_method_callee(&base_type_name, &method_call.method)?;
 
                 // Step 5: Determine required receiver type (check built-ins first)
-                let required_receiver_type = match self.get_builtin_method_receiver_type(
-                    &qualified_name,
-                    &resolved_type,
-                    &base_type_name,
-                )? {
-                    Some(ty) => ty,
-                    None => {
-                        // Not a built-in, look up regular function
-                        let func_decl =
-                            self.lookup_method_function(&qualified_name, &base_type_name)?;
-                        if func_decl.params.is_empty() {
-                            return Err(TypeCheckError::Message(format!(
-                                "Method '{}' for type '{}' requires at least one parameter (the receiver)",
-                                method_call.method, base_type_name
-                            )));
+                let required_receiver_type = if qualified_name.starts_with("CAP::") {
+                    self.capability_method_receiver(&qualified_name, &resolved_type)?
+                } else {
+                    match self.get_builtin_method_receiver_type(
+                        &qualified_name,
+                        &resolved_type,
+                        &base_type_name,
+                    )? {
+                        Some(ty) => ty,
+                        None => {
+                            let func_decl =
+                                self.lookup_method_function(&qualified_name, &base_type_name)?;
+                            if func_decl.params.is_empty() {
+                                return Err(TypeCheckError::Message(format!(
+                                    "Method '{}' for type '{}' requires at least one parameter (the receiver)",
+                                    method_call.method, base_type_name
+                                )));
+                            }
+                            let first_param = &func_decl.params[0];
+                            self.resolve_type_name(&first_param.ty)?
                         }
-                        let first_param = &func_decl.params[0];
-                        self.resolve_type_name(&first_param.ty)?
                     }
                 };
+                if !method_call.id.is_assigned() {
+                    panic!(
+                        "compiler bug: method call missing expr id at line {}",
+                        method_call.span.line
+                    );
+                }
+                self.type_info.resolved_methods.insert(
+                    method_call.id,
+                    ResolvedMethod {
+                        callee: qualified_name.clone(),
+                        take_address: matches!(required_receiver_type, Type::Ref { .. })
+                            && !matches!(resolved_type, Type::Ref { .. }),
+                        address_mutable: matches!(
+                            required_receiver_type,
+                            Type::Ref { mutable: true, .. }
+                        ),
+                    },
+                );
 
                 // Step 6: Create receiver argument with appropriate borrowing
                 let receiver_arg = self.create_receiver_argument(
@@ -4470,6 +5190,14 @@ impl TypeChecker {
                 let Expr::Call(desugared_call) = desugared else {
                     unreachable!("desugared method call");
                 };
+
+                if qualified_name.starts_with("CAP::") {
+                    return self.check_against_capability(
+                        &qualified_name,
+                        &desugared_call,
+                        &resolved_type,
+                    );
+                }
 
                 // Step 10: Type-check the desugared call and return its type
                 // Check if this is a built-in function first
@@ -4537,12 +5265,41 @@ impl TypeChecker {
                         )
                     }
                 } else {
-                    // Simple function call - shouldn't happen for methods
-                    return Err(TypeCheckError::Message(format!(
-                        "Method call '{}' must resolve to qualified function name",
-                        method_call.method
-                    )));
+                    let func_decl = self
+                        .functions
+                        .get(&desugared_call.callee)
+                        .cloned()
+                        .ok_or_else(|| {
+                            TypeCheckError::Message(format!(
+                                "Method call '{}' must resolve to qualified function name",
+                                method_call.method
+                            ))
+                        })?;
+                    (func_decl.params, func_decl.return_type, func_decl.generics)
                 };
+
+                let mut generic_substitutions = std::collections::HashMap::new();
+                let fn_generics = TypeParam::names(&fn_type_params);
+                if !fn_generics.is_empty() && !desugared_call.args.is_empty() && !params.is_empty()
+                {
+                    let saved_vars = self.variables.clone();
+                    let saved_borrows = self.borrow_scopes.clone();
+                    let arg0_ty = self.check_expr(&desugared_call.args[0])?;
+                    self.variables = saved_vars;
+                    self.borrow_scopes = saved_borrows;
+                    let resolved_arg = self.resolve_type_name(&arg0_ty)?;
+                    let param0_ty = self.resolve_type_name(&params[0].ty)?;
+                    generic_substitutions =
+                        infer_generic_substitutions(&param0_ty, &resolved_arg, &fn_generics);
+                    if !generic_substitutions.is_empty() {
+                        self.check_instantiation_bounds(
+                            &fn_type_params,
+                            &generic_substitutions,
+                            &format!("fn '{}'", desugared_call.callee),
+                            desugared_call.span,
+                        )?;
+                    }
+                }
 
                 // Check argument count
                 if desugared_call.args.len() != params.len() {
@@ -4555,7 +5312,10 @@ impl TypeChecker {
 
                 // Check argument types
                 for (arg_expr, param) in desugared_call.args.iter().zip(params.iter()) {
-                    let resolved_param_ty = self.resolve_type_name(&param.ty)?;
+                    let resolved_param_ty = substitute_generic_types_impl(
+                        &self.resolve_type_name(&param.ty)?,
+                        &generic_substitutions,
+                    );
                     let arg_ty = self.check_expr_with_expected(arg_expr, &resolved_param_ty)?;
                     let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
 
@@ -4587,7 +5347,13 @@ impl TypeChecker {
                     None,
                 );
 
-                Ok(return_type_opt.unwrap_or(Type::Void))
+                Ok(match return_type_opt {
+                    Some(ret) => substitute_generic_types_impl(
+                        &self.resolve_type_name(&ret)?,
+                        &generic_substitutions,
+                    ),
+                    None => Type::Void,
+                })
             }
             Expr::TupleLit(tuple_lit) => {
                 if tuple_lit.elements.is_empty() {
@@ -4634,6 +5400,7 @@ impl TypeChecker {
                     Ok(Type::Array {
                         inner: Box::new(inferred_elem_ty),
                         size: count,
+                        len_name: None,
                     })
                 } else if arr_lit.elements.is_empty() {
                     // Empty array - can't infer type, require type annotation
@@ -4666,6 +5433,7 @@ impl TypeChecker {
                     Ok(Type::Array {
                         inner: Box::new(first_elem_ty),
                         size: arr_lit.elements.len(),
+                        len_name: None,
                     })
                 }
             }
@@ -4761,6 +5529,17 @@ impl TypeChecker {
                         });
                     }
 
+                    if let Expr::Ref(ref_expr) = assign_expr.value.as_ref() {
+                        self.finish_ref_loan(
+                            &var_expr.name,
+                            ref_expr.mutable,
+                            &ref_expr.inner,
+                            false,
+                        )?;
+                    } else {
+                        self.carry_expr_loans(&var_expr.name, &assign_expr.value, false)?;
+                    }
+
                     Ok(Type::Void)
                 }
                 Expr::Index(index_expr) => {
@@ -4820,16 +5599,26 @@ impl TypeChecker {
                                 .to_string(),
                         ));
                     }
-                    if let Some((owner, owner_span)) = self.borrow_owner_from_expr(&acc.base) {
-                        self.check_owner_not_borrowed(&owner, owner_span)?;
+                    if let Some((owner, fields, owner_span)) =
+                        self.place_from_expr(&assign_expr.target)
+                    {
+                        let mutable_use = fields.is_some();
+                        self.check_borrow_allowed(
+                            &owner,
+                            fields.as_deref(),
+                            mutable_use || fields.is_none(),
+                            owner_span,
+                        )?;
                     }
                     let field_ty = self.check_expr(&Expr::FieldAccess(acc.clone()))?;
                     let resolved_field_ty = self.resolve_type_name(&field_ty)?;
+                    // A non-Copy field read through `&` / `&mut` is a reborrow.
+                    // Assignment replaces the field, so the value must be the owned field type.
                     let assign_expected = match &resolved_field_ty {
                         Type::Ref {
                             inner,
                             mutable: true,
-                        } if Self::is_copy_type(inner) => inner.as_ref().clone(),
+                        } => inner.as_ref().clone(),
                         other => other.clone(),
                     };
                     let value_ty =
@@ -4964,6 +5753,249 @@ impl TypeChecker {
                 Self::int_literal_value(&un.operand).map(|n| n.saturating_neg())
             }
             _ => None,
+        }
+    }
+
+    fn is_value_pattern_scrutinee(&self, ty: &Type) -> bool {
+        self.is_integer_type(ty) || matches!(ty, Type::Bool | Type::String | Type::Struct(_))
+    }
+
+    fn check_value_pattern_match(
+        &mut self,
+        match_expr: &MatchExpr,
+        scrutinee_ty: &Type,
+        through_ref: bool,
+        ref_mutability: bool,
+    ) -> Result<Type, TypeCheckError> {
+        let before_match = self.variables.clone();
+        let mut fallthrough_envs: Vec<HashMap<String, VariableInfo>> = Vec::new();
+        let mut match_value_type: Option<Type> = None;
+        let _match_siblings = self.enter_match_siblings();
+        let mut saw_true = false;
+        let mut saw_false = false;
+        let mut irrefutable = false;
+
+        for arm in &match_expr.arms {
+            self.variables = before_match.clone();
+            self.check_and_bind_value_pattern(
+                &arm.pattern,
+                scrutinee_ty,
+                arm.span,
+                through_ref,
+                ref_mutability,
+            )?;
+            if arm.guard.is_none() && pattern_is_irrefutable(&arm.pattern) {
+                irrefutable = true;
+            }
+            collect_bool_literals(&arm.pattern, &mut saw_true, &mut saw_false);
+            if let Some(ref guard) = arm.guard {
+                let guard_ty = self.check_expr(guard)?;
+                if !types_equal(&guard_ty, &Type::Bool) {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "bool (match guard)".to_string(),
+                        got: type_to_string(&guard_ty),
+                        span: guard.span(),
+                    });
+                }
+            }
+            self.push_borrow_scope();
+            for stmt in &arm.body.statements {
+                self.check_stmt(stmt)?;
+            }
+            let escaping = self.loans_in_block(&arm.body);
+            self.keep_arm_result_loans(match_expr.id, &escaping);
+            self.pop_borrow_scope();
+            match self.infer_block_result_type(&arm.body, arm.span)? {
+                MatchArmValue::Diverges => {}
+                MatchArmValue::Unit => {}
+                MatchArmValue::Value(arm_ty) => {
+                    match_value_type = Some(match match_value_type {
+                        None => arm_ty,
+                        Some(prev) => self.unify_match_arm_types(&prev, &arm_ty, arm.span)?,
+                    });
+                }
+            }
+            if block_falls_through(&arm.body) {
+                fallthrough_envs.push(self.variables.clone());
+            }
+        }
+
+        let mut merged = before_match.clone();
+        if !fallthrough_envs.is_empty() {
+            for (name, prev_info) in before_match.iter() {
+                let mut reach_states: Vec<OwnershipState> = Vec::new();
+                for env in &fallthrough_envs {
+                    reach_states.push(
+                        env.get(name)
+                            .map(|info| info.state)
+                            .unwrap_or(prev_info.state),
+                    );
+                }
+                let merged_state = join_ownership_states(&reach_states, name, match_expr.span)?;
+                if let Some(info) = merged.get_mut(name) {
+                    info.state = merged_state;
+                    info.shared_borrow_count = prev_info.shared_borrow_count;
+                    info.mut_borrow_count = prev_info.mut_borrow_count;
+                }
+            }
+        }
+        self.variables = merged;
+        self.mark_match_scrutinee_moved(&match_expr.expr);
+
+        let exhaustive = irrefutable || matches!(scrutinee_ty, Type::Bool if saw_true && saw_false);
+        if !exhaustive {
+            return Err(TypeCheckError::Message(
+                "match expression is not exhaustive".to_string(),
+            ));
+        }
+        Ok(match_value_type.unwrap_or(Type::Void))
+    }
+
+    fn ref_pattern_ty(&self, ty: &Type, through_ref: bool, mutable: bool) -> Type {
+        if through_ref && !Self::is_copy_type(ty) {
+            Type::Ref {
+                inner: Box::new(ty.clone()),
+                mutable,
+            }
+        } else {
+            ty.clone()
+        }
+    }
+
+    fn check_and_bind_value_pattern(
+        &mut self,
+        pattern: &Pattern,
+        ty: &Type,
+        span: Span,
+        through_ref: bool,
+        ref_mutability: bool,
+    ) -> Result<(), TypeCheckError> {
+        match pattern {
+            Pattern::Wildcard { .. } => Ok(()),
+            Pattern::Binding { name, .. } => {
+                let bound = self.ref_pattern_ty(ty, through_ref, ref_mutability);
+                self.check_no_off_stack_reference(&bound, span)?;
+                self.variables
+                    .insert(name.clone(), Self::new_variable_info(bound, span));
+                Ok(())
+            }
+            Pattern::At { name, pattern, .. } => {
+                let bound = self.ref_pattern_ty(ty, through_ref, ref_mutability);
+                self.check_no_off_stack_reference(&bound, span)?;
+                self.variables
+                    .insert(name.clone(), Self::new_variable_info(bound, span));
+                self.check_and_bind_value_pattern(pattern, ty, span, through_ref, ref_mutability)
+            }
+            Pattern::Lit { lit, .. } => match (lit, ty) {
+                (PatLit::Int(_), t) if self.is_integer_type(t) => Ok(()),
+                (PatLit::Bool(_), Type::Bool) => Ok(()),
+                (PatLit::Str(_), Type::String) => Ok(()),
+                _ => Err(TypeCheckError::TypeMismatch {
+                    expected: type_to_string(ty),
+                    got: "literal pattern".to_string(),
+                    span,
+                }),
+            },
+            Pattern::Range { lo, hi, .. } => {
+                if !self.is_integer_type(ty) {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "integer type".to_string(),
+                        got: type_to_string(ty),
+                        span,
+                    });
+                }
+                if lo > hi {
+                    return Err(TypeCheckError::Message(
+                        "range pattern endpoints are out of order".to_string(),
+                    ));
+                }
+                Ok(())
+            }
+            Pattern::Or { alts, .. } => {
+                let mut expected: Option<Vec<String>> = None;
+                for alt in alts {
+                    self.check_and_bind_value_pattern(alt, ty, span, through_ref, ref_mutability)?;
+                    let mut set = std::collections::HashSet::new();
+                    add_pattern_binding_names(alt, &mut set);
+                    let mut got: Vec<String> = set.into_iter().collect();
+                    got.sort();
+                    if let Some(prev) = &expected {
+                        if prev != &got {
+                            return Err(TypeCheckError::Message(
+                                "or-pattern alternatives must bind the same names".to_string(),
+                            ));
+                        }
+                    } else {
+                        expected = Some(got);
+                    }
+                }
+                Ok(())
+            }
+            Pattern::Struct {
+                name, fields, rest, ..
+            } => {
+                let Type::Struct(struct_name) = ty else {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: format!("struct {name}"),
+                        got: type_to_string(ty),
+                        span,
+                    });
+                };
+                if struct_name != name {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: struct_name.clone(),
+                        got: name.clone(),
+                        span,
+                    });
+                }
+                let decl =
+                    self.structs.get(name).cloned().ok_or_else(|| {
+                        TypeCheckError::Message(format!("unknown struct '{name}'"))
+                    })?;
+                let mut seen = std::collections::HashSet::new();
+                for (field_name, field_pattern) in fields {
+                    if field_name == ".." {
+                        continue;
+                    }
+                    if !seen.insert(field_name.clone()) {
+                        return Err(TypeCheckError::Message(format!(
+                            "field '{field_name}' is bound more than once"
+                        )));
+                    }
+                    let field_ty = decl
+                        .fields
+                        .iter()
+                        .find(|f| f.name == *field_name)
+                        .map(|f| f.ty.clone())
+                        .ok_or_else(|| {
+                            TypeCheckError::Message(format!(
+                                "struct '{name}' has no field '{field_name}'"
+                            ))
+                        })?;
+                    self.reject_drop_partial_move(ty, &field_ty, field_pattern, through_ref)?;
+                    self.check_and_bind_value_pattern(
+                        field_pattern,
+                        &field_ty,
+                        span,
+                        through_ref,
+                        ref_mutability,
+                    )?;
+                }
+                if !rest {
+                    for declared in &decl.fields {
+                        if !seen.contains(&declared.name) {
+                            return Err(TypeCheckError::Message(format!(
+                                "missing field '{}' in pattern; add it or '..'",
+                                declared.name
+                            )));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Pattern::Variant { .. } | Pattern::Rest { .. } => Err(TypeCheckError::Message(
+                "this pattern does not match the scrutinee".to_string(),
+            )),
         }
     }
 
@@ -5430,7 +6462,10 @@ impl TypeChecker {
                 mutable: false,
             } if matches!(**inner, Type::Str)
         ) && Self::can_coerce_to_str_ref(resolved_arg_ty);
-        numeric_coerced || str_coerced || types_equal(resolved_arg_ty, resolved_param_ty)
+        numeric_coerced
+            || str_coerced
+            || types_equal(resolved_arg_ty, resolved_param_ty)
+            || Self::const_len_array_match(resolved_arg_ty, resolved_param_ty)
     }
 
     /// String literal or owned String may be passed where `&str` is expected (ION_SPEC §8.3).
@@ -5443,6 +6478,34 @@ impl TypeChecker {
                     mutable: false,
                 } if matches!(**inner, Type::String | Type::Str)
             )
+    }
+
+    fn const_len_array_match(arg: &Type, param: &Type) -> bool {
+        match (arg, param) {
+            (
+                Type::Ref {
+                    inner: arg_inner,
+                    mutable: arg_mut,
+                },
+                Type::Ref {
+                    inner: param_inner,
+                    mutable: param_mut,
+                },
+            ) if arg_mut == param_mut => Self::const_len_array_match(arg_inner, param_inner),
+            (
+                Type::Array {
+                    inner: arg_inner,
+                    len_name: None,
+                    ..
+                },
+                Type::Array {
+                    inner: param_inner,
+                    len_name: Some(_),
+                    ..
+                },
+            ) => types_equal(arg_inner, param_inner),
+            _ => false,
+        }
     }
 
     /// Check if a numeric type can be coerced to another numeric type
@@ -6131,6 +7194,43 @@ impl TypeChecker {
         Ok(())
     }
 
+    fn attach_ref_pattern_loans(&mut self, pattern: &Pattern, scrutinee: &Expr) {
+        let loans = self.loans_in_expr(scrutinee);
+        if loans.is_empty() {
+            return;
+        }
+        let mut names = HashSet::new();
+        add_pattern_binding_names(pattern, &mut names);
+        for name in names {
+            if !self.var_is_ref(&name) {
+                continue;
+            }
+            for idx in &loans {
+                self.add_loan_in_scope(&name, *idx);
+            }
+        }
+    }
+
+    fn attach_latest_loan_to_ref_patterns(&mut self, pattern: &Pattern) {
+        let Some(idx) = self.live_borrows.len().checked_sub(1) else {
+            return;
+        };
+        if self
+            .live_borrows
+            .get(idx)
+            .is_some_and(|borrow| borrow.released)
+        {
+            return;
+        }
+        let mut names = HashSet::new();
+        add_pattern_binding_names(pattern, &mut names);
+        for name in names {
+            if self.var_is_ref(&name) {
+                self.add_loan_in_scope(&name, idx);
+            }
+        }
+    }
+
     /// Add pattern bindings to the variable scope
     fn add_pattern_bindings(
         &mut self,
@@ -6184,7 +7284,20 @@ impl TypeChecker {
                     // Handle struct variants with named fields
                     if let Some(named_fields_patterns) = named_fields {
                         if let Some(variant_named_fields) = &variant_decl.named_fields {
+                            let has_rest = named_fields_patterns.iter().any(|(n, _)| n == "..");
+                            for (declared, _) in variant_named_fields {
+                                if !named_fields_patterns.iter().any(|(n, _)| n == declared)
+                                    && !has_rest
+                                {
+                                    return Err(TypeCheckError::Message(format!(
+                                        "missing field '{declared}' in pattern; add it or '..'"
+                                    )));
+                                }
+                            }
                             for (field_name, field_pattern) in named_fields_patterns {
+                                if field_name == ".." {
+                                    continue;
+                                }
                                 // Find the field type in the variant declaration
                                 if let Some((_, field_ty)) = variant_named_fields
                                     .iter()
@@ -6194,6 +7307,12 @@ impl TypeChecker {
                                     let concrete_field_ty =
                                         substitute_generic_types_impl(field_ty, &substitutions);
                                     let binding_ty = wrap_ref_binding(concrete_field_ty.clone());
+                                    self.reject_drop_partial_move(
+                                        expr_ty,
+                                        &concrete_field_ty,
+                                        field_pattern,
+                                        match_through_ref,
+                                    )?;
 
                                     match field_pattern {
                                         Pattern::Binding { name, .. } => {
@@ -6214,6 +7333,17 @@ impl TypeChecker {
                                         Pattern::Wildcard { .. } => {
                                             // Wildcard - no binding to add
                                         }
+                                        Pattern::At { name, .. } => {
+                                            self.variables.insert(
+                                                name.clone(),
+                                                Self::new_variable_info(binding_ty, *span),
+                                            );
+                                        }
+                                        Pattern::Lit { .. }
+                                        | Pattern::Range { .. }
+                                        | Pattern::Or { .. }
+                                        | Pattern::Struct { .. }
+                                        | Pattern::Rest { .. } => {}
                                     }
                                 } else {
                                     return Err(TypeCheckError::Message(format!(
@@ -6238,6 +7368,12 @@ impl TypeChecker {
                                 let concrete_payload_ty =
                                     substitute_generic_types_impl(payload_ty, &substitutions);
                                 let binding_ty = wrap_ref_binding(concrete_payload_ty.clone());
+                                self.reject_drop_partial_move(
+                                    expr_ty,
+                                    &concrete_payload_ty,
+                                    sub_pattern,
+                                    match_through_ref,
+                                )?;
 
                                 match sub_pattern {
                                     Pattern::Binding { name, .. } => {
@@ -6258,6 +7394,17 @@ impl TypeChecker {
                                     Pattern::Wildcard { .. } => {
                                         // Wildcard - no binding to add
                                     }
+                                    Pattern::At { name, .. } => {
+                                        self.variables.insert(
+                                            name.clone(),
+                                            Self::new_variable_info(binding_ty, *span),
+                                        );
+                                    }
+                                    Pattern::Lit { .. }
+                                    | Pattern::Range { .. }
+                                    | Pattern::Or { .. }
+                                    | Pattern::Struct { .. }
+                                    | Pattern::Rest { .. } => {}
                                 }
                             }
                         }
@@ -6277,7 +7424,75 @@ impl TypeChecker {
                 // Wildcard - no bindings to add
                 Ok(())
             }
+            Pattern::At {
+                name,
+                pattern,
+                span,
+            } => {
+                self.variables.insert(
+                    name.clone(),
+                    Self::new_variable_info(expr_ty.clone(), *span),
+                );
+                self.add_pattern_bindings(
+                    pattern,
+                    enum_decl,
+                    expr_ty,
+                    match_through_ref,
+                    ref_mutability,
+                    expr,
+                )
+            }
+            Pattern::Or { alts, .. } => {
+                if let Some(alt) = alts.first() {
+                    self.add_pattern_bindings(
+                        alt,
+                        enum_decl,
+                        expr_ty,
+                        match_through_ref,
+                        ref_mutability,
+                        expr,
+                    )?;
+                }
+                Ok(())
+            }
+            Pattern::Lit { .. } | Pattern::Range { .. } | Pattern::Rest { .. } => Ok(()),
+            Pattern::Struct { .. } => Err(TypeCheckError::Message(
+                "struct patterns are not enum variant patterns".to_string(),
+            )),
         }
+    }
+}
+
+fn pattern_is_irrefutable(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Binding { .. } | Pattern::Wildcard { .. } => true,
+        Pattern::At { pattern, .. } => pattern_is_irrefutable(pattern),
+        Pattern::Or { alts, .. } => alts.iter().any(pattern_is_irrefutable),
+        Pattern::Struct { fields, .. } => fields.iter().all(|(_, p)| pattern_is_irrefutable(p)),
+        Pattern::Lit { .. }
+        | Pattern::Range { .. }
+        | Pattern::Variant { .. }
+        | Pattern::Rest { .. } => false,
+    }
+}
+
+fn collect_bool_literals(pattern: &Pattern, saw_true: &mut bool, saw_false: &mut bool) {
+    match pattern {
+        Pattern::Lit {
+            lit: PatLit::Bool(true),
+            ..
+        } => *saw_true = true,
+        Pattern::Lit {
+            lit: PatLit::Bool(false),
+            ..
+        } => *saw_false = true,
+        Pattern::Or { alts, .. } => {
+            for alt in alts {
+                collect_bool_literals(alt, saw_true, saw_false);
+            }
+        }
+        Pattern::At { pattern, .. } => collect_bool_literals(pattern, saw_true, saw_false),
+        _ => {}
     }
 }
 
@@ -6299,6 +7514,12 @@ fn pattern_fully_covers_ctor(pattern: &Pattern) -> bool {
                     .all(|p| matches!(p, Pattern::Binding { .. } | Pattern::Wildcard { .. }))
             }
         }
+        Pattern::At { pattern, .. } => pattern_fully_covers_ctor(pattern),
+        Pattern::Or { alts, .. } => alts.iter().any(pattern_fully_covers_ctor),
+        Pattern::Lit { .. }
+        | Pattern::Range { .. }
+        | Pattern::Struct { .. }
+        | Pattern::Rest { .. } => false,
     }
 }
 
@@ -6472,9 +7693,14 @@ fn substitute_generic_types_impl(
         Type::Receiver { elem_type } => Type::Receiver {
             elem_type: Box::new(substitute_generic_types_impl(elem_type, substitutions)),
         },
-        Type::Array { inner, size } => Type::Array {
+        Type::Array {
+            inner,
+            size,
+            len_name,
+        } => Type::Array {
             inner: Box::new(substitute_generic_types_impl(inner, substitutions)),
             size: *size,
+            len_name: len_name.clone(),
         },
         Type::Slice { inner } => Type::Slice {
             inner: Box::new(substitute_generic_types_impl(inner, substitutions)),
@@ -6538,6 +7764,21 @@ fn add_pattern_binding_names(pattern: &Pattern, locals: &mut std::collections::H
             }
         }
         Pattern::Wildcard { .. } => {}
+        Pattern::At { name, pattern, .. } => {
+            locals.insert(name.clone());
+            add_pattern_binding_names(pattern, locals);
+        }
+        Pattern::Or { alts, .. } => {
+            if let Some(alt) = alts.first() {
+                add_pattern_binding_names(alt, locals);
+            }
+        }
+        Pattern::Struct { fields, .. } => {
+            for (_, field_pattern) in fields {
+                add_pattern_binding_names(field_pattern, locals);
+            }
+        }
+        Pattern::Lit { .. } | Pattern::Range { .. } | Pattern::Rest { .. } => {}
     }
 }
 

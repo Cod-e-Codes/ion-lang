@@ -1,0 +1,29 @@
+import "stdlib/string.ion" as string;
+
+fn main() -> int {
+    let s: String = " hi ";
+    let trimmed: String = string::trim_ascii(&s);
+    if String::len(&trimmed) != 2 {
+        return 1;
+    }
+    let needle: String = "hi";
+    if !string::contains(&s, &needle) {
+        return 2;
+    }
+    let prefix: String = " h";
+    if !string::starts_with(&s, &prefix) {
+        return 3;
+    }
+    let suffix: String = "i ";
+    if !string::ends_with(&s, &suffix) {
+        return 4;
+    }
+    match string::split_once(&s, 32) {
+        Option::Some(parts) => {
+            return String::len(&parts.tail);
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

@@ -1,0 +1,13 @@
+enum State {
+    Ready;
+    Done;
+}
+
+fn main() -> int {
+    let s: State = State::Done;
+    match s {
+        p @ State::Done | State::Ready => {
+            return 0;
+        }
+    };
+}

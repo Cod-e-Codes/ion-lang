@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Language**: struct-variant patterns allow field pun (`{ state, code }`) and `..`. Tuple patterns allow one `..` rest. Match accepts literal, inclusive range, or, struct, and `@` patterns. A refutable pattern in `let` is a compile error.
+- **Language**: `const` items, `const fn`, `const` parameters, and `const_assert`. Array lengths accept a const item or const parameter.
+- **Language**: disjoint field borrows (`s.x` and `s.y`). A lasting borrow stays live until the last use of every binding that holds it, including copies. A nested block does not end an outer loan. Index paths still borrow the whole owner. Nested field paths conflict on a shared prefix.
+- **Stdlib**: `option`, `result` helpers, `string`, `hash`, `map`, `math`, `path`, `env`, and `time`. Import each module explicitly. `Hash` is a capability; integer primitives and `String` hash without a user impl. `HashMap` keys are `Hash + Eq`. The table doubles when full slots plus tombstones reach half the capacity.
+- **Language**: `impl Drop` runs once when an owned value is destroyed, before field and resource drops. A `Drop` type cannot be partially moved, including through a `match` pattern, and user code cannot call `drop` itself.
+- **Language**: `capability` and `impl` declare methods on a struct or enum. `Copy`, `Eq`, and `Send` stay structural and cannot be implemented by user code. `value.method()` uses the unique impl. Two capabilities with the same method name require `Capability::method(value)`. Bounds accept a capability name and are checked at monomorphization.
+- **Compiler**: method calls and expression types are resolved once in the type checker and copied onto IR. Codegen no longer reclassifies receivers or falls back to `int` when a checked type is missing.
+- **Fix**: a struct pattern moves a field that needs drop out of the scrutinee and drops that binding inside the arm. A `match` expression stores the arm result and drops the scrutinee inside the statement expression. Generic calls on pattern bindings are monomorphized from the field type. A string literal pattern compares bytes with `memcmp` and does not allocate. Generic instantiation that is still open after eight rounds is a compiler panic.
+- **Fix**: a field reborrow, a tuple, a `match` result, and an assignment carry the same lasting loan as the reference they came from. `match` on `&Struct` or `&mut Struct` reborrows fields and does not move or drop them.
+- **Fix**: an index reborrow and a reference stored in an enum keep that loan. A `match` on the enum binds the reference payload as a pointer.
+- **Fix**: a struct literal that stores a reference keeps that loan on the struct. A field that is already a reference is passed as that pointer.
+- **Fix**: a reference created inside a struct, enum, tuple, or `match` result keeps that loan while the value that holds the pointer is live.
+- **Fix**: a `match` arm that stores a fresh reference in a local and then yields that local keeps the loan on the match result.
+- **Fix**: a loop break or continue label is an empty statement, so a declaration after `break` is valid C. Clang rejects a label placed directly on a declaration.
+- **Docs**: in-range shift results wrap modulo `2^width` (`4660u16 << 4` is `9024`). Integer `as` keeps the low bits of the destination width (`0x12ff as u8` is `0xff`).
+- **Docs**: a named pattern field may omit `: pattern`. `Event::Set { state, code }` binds `state` and `code`. An explicit pattern on another field is kept.
+- **Docs**: README lists capabilities, Drop, const, the newer match patterns, lasting borrows, and stdlib `option`, `string`, `hash`, `map`, `math`, `path`, `env`, and `time`. The changelog link describes versioned release notes.
+- **Tests**: `test_capability_show.ion` (exit 42), `test_capability_generic_impl.ion` (exit 7), and the `test_capability_*_error.ion` negatives.
+- **Tests**: `test_array_indexing.ion` assigns through an index (exit 200). `test_while_basic.ion` assigns in the loop (exit 2). `test_bool_literal.ion` uses `!`. `test_bitwise_ops.ion` uses hex literals, asserts shift wrap, and asserts integer narrowing.
+
 ## 0.2.2 - 2026-09-19
 
 - **Language**: postfix `?` on owned `Option<T>` and `Result<T, E>` is match-plus-return sugar (same `E`; no `From`). Illegal on `ReadResult` / `SetResult` / channel result enums, `&Option` / `&Result`, and inside `spawn`. This impacts Result/Option early-return that previously needed an explicit match.

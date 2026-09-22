@@ -1,0 +1,28 @@
+capability Show {
+    fn show(self: &Self) -> int;
+}
+
+struct Point {
+    x: int;
+    y: int;
+}
+
+impl Show for Point {
+    fn show(self: &Point) -> int {
+        return self.x + self.y;
+    }
+}
+
+fn paint<T: Show>(value: &T) -> int {
+    return value.show();
+}
+
+fn main() -> int {
+    let p: Point = Point { x: 20, y: 22 };
+    let from_method: int = paint(&p);
+    let from_path: int = Show::show(&p);
+    if from_method != from_path {
+        return 1;
+    }
+    return from_method;
+}

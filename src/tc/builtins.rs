@@ -9,6 +9,18 @@ impl TypeChecker {
     ) -> Result<Option<Type>, TypeCheckError> {
         let callee = &call_expr.callee;
 
+        if crate::integer_limits::is_builtin_hash_callee(callee) {
+            if call_expr.args.len() != 1 {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "1 argument".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let _arg_ty = self.check_expr(&call_expr.args[0])?;
+            return Ok(Some(Type::Int));
+        }
+
         // Box::new<T>(value: T) -> Box<T>
         if callee.starts_with("Box::new") {
             if call_expr.args.len() != 1 {
@@ -944,7 +956,7 @@ impl TypeChecker {
         span: Span,
     ) -> Result<(), TypeCheckError> {
         if let Some((owner, owner_span)) = self.vec_owner_from_get_ref_receiver(receiver) {
-            self.register_borrow(&owner, false, owner_span)?;
+            self.register_borrow(&owner, None, false, owner_span)?;
         } else {
             let _ = self.check_expr(receiver)?;
             return Err(TypeCheckError::TypeMismatch {

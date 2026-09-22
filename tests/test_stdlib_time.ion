@@ -1,0 +1,9 @@
+import "stdlib/time.ion" as time;
+
+fn main() -> int {
+    let t: int = time::millis();
+    if t < 0 {
+        return 0;
+    }
+    return 1;
+}

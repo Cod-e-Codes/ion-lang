@@ -1,0 +1,15 @@
+struct Guard {
+    msg: String;
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+    }
+}
+
+fn main() -> int {
+    let g: Guard = Guard { msg: String::from("ok") };
+    match g {
+        Guard { msg: m } => { return String::len(&m); }
+    }
+}

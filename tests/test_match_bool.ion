@@ -1,0 +1,11 @@
+fn main() -> int {
+    let b: bool = false;
+    match b {
+        true => {
+            return 1;
+        }
+        false => {
+            return 5;
+        }
+    };
+}

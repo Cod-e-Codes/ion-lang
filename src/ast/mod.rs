@@ -21,7 +21,10 @@ pub struct Program {
     pub structs: Vec<StructDecl>,
     pub enums: Vec<EnumDecl>,
     pub type_aliases: Vec<TypeAliasDecl>,
+    pub capabilities: Vec<CapabilityDecl>,
+    pub impls: Vec<ImplDecl>,
     pub functions: Vec<FnDecl>,
+    pub consts: Vec<ConstDecl>,
     pub extern_blocks: Vec<ExternBlock>,
 }
 
@@ -53,6 +56,8 @@ pub struct ExternFnDecl {
 pub struct TypeParam {
     pub name: String,
     pub bounds: Vec<String>,
+    /// Set for `const N: int`. Empty bounds. Not a type parameter.
+    pub const_ty: Option<Type>,
 }
 
 impl TypeParam {
@@ -60,6 +65,7 @@ impl TypeParam {
         TypeParam {
             name: name.to_string(),
             bounds: Vec::new(),
+            const_ty: None,
         }
     }
 
@@ -76,7 +82,9 @@ impl TypeParam {
                 params
                     .iter()
                     .map(|p| {
-                        if p.bounds.is_empty() {
+                        if p.const_ty.is_some() {
+                            format!("const {}: int", p.name)
+                        } else if p.bounds.is_empty() {
                             p.name.clone()
                         } else {
                             format!("{}: {}", p.name, p.bounds.join(" + "))
@@ -98,6 +106,15 @@ pub struct FnDecl {
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
     pub body: Block,
+    pub const_fn: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConstDecl {
+    pub name: String,
+    pub ty: Type,
+    pub init: Expr,
     pub span: Span,
 }
 
@@ -128,6 +145,34 @@ pub struct TypeAliasDecl {
     pub name: String,
     pub generics: Vec<TypeParam>,
     pub target: Type,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct CapabilityMethod {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Option<Type>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct CapabilityDecl {
+    pub doc: Option<String>,
+    pub pub_: bool,
+    pub name: String,
+    pub methods: Vec<CapabilityMethod>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImplDecl {
+    pub capability: String,
+    pub generics: Vec<TypeParam>,
+    /// Nominal struct or enum name the impl is for.
+    pub type_name: String,
+    pub target: Type,
+    pub methods: Vec<FnDecl>,
     pub span: Span,
 }
 
@@ -204,6 +249,8 @@ pub enum Type {
     Array {
         inner: Box<Type>,
         size: usize,
+        /// Const item or const parameter that supplies `size` until it is resolved.
+        len_name: Option<String>,
     },
     Slice {
         inner: Box<Type>,
@@ -431,6 +478,70 @@ impl Expr {
 }
 
 /// Assign unique `ExprId`s in `program`, starting at `*next_id` (must be >= 1).
+pub fn substitute_self_type(ty: &Type, target: &Type) -> Type {
+    match ty {
+        Type::Struct(name) if name == "Self" => target.clone(),
+        Type::Ref { inner, mutable } => Type::Ref {
+            inner: Box::new(substitute_self_type(inner, target)),
+            mutable: *mutable,
+        },
+        Type::RawPtr { inner } => Type::RawPtr {
+            inner: Box::new(substitute_self_type(inner, target)),
+        },
+        Type::Box { inner } => Type::Box {
+            inner: Box::new(substitute_self_type(inner, target)),
+        },
+        Type::Vec { elem_type } => Type::Vec {
+            elem_type: Box::new(substitute_self_type(elem_type, target)),
+        },
+        Type::Array {
+            inner,
+            size,
+            len_name,
+        } => Type::Array {
+            inner: Box::new(substitute_self_type(inner, target)),
+            size: *size,
+            len_name: len_name.clone(),
+        },
+        Type::Slice { inner } => Type::Slice {
+            inner: Box::new(substitute_self_type(inner, target)),
+        },
+        Type::Generic { name, params } => Type::Generic {
+            name: name.clone(),
+            params: params
+                .iter()
+                .map(|p| substitute_self_type(p, target))
+                .collect(),
+        },
+        Type::Tuple { elements } => Type::Tuple {
+            elements: elements
+                .iter()
+                .map(|p| substitute_self_type(p, target))
+                .collect(),
+        },
+        Type::Fn {
+            params,
+            return_type,
+        } => Type::Fn {
+            params: params
+                .iter()
+                .map(|p| substitute_self_type(p, target))
+                .collect(),
+            return_type: Box::new(substitute_self_type(return_type, target)),
+        },
+        Type::Channel { elem_type } => Type::Channel {
+            elem_type: Box::new(substitute_self_type(elem_type, target)),
+        },
+        Type::Sender { elem_type } => Type::Sender {
+            elem_type: Box::new(substitute_self_type(elem_type, target)),
+        },
+        Type::Receiver { elem_type } => Type::Receiver {
+            elem_type: Box::new(substitute_self_type(elem_type, target)),
+        },
+        other => other.clone(),
+    }
+}
+
 pub fn number_program(program: &mut Program, next_id: &mut u32) {
     for function in &mut program.functions {
         number_block(&mut function.body, next_id);
@@ -734,6 +845,13 @@ pub struct TryExpr {
 }
 
 #[derive(Debug, Clone)]
+pub enum PatLit {
+    Int(i64),
+    Bool(bool),
+    Str(String),
+}
+
+#[derive(Debug, Clone)]
 pub enum Pattern {
     Variant {
         enum_name: String,
@@ -749,6 +867,35 @@ pub enum Pattern {
         name: String,
         span: Span,
     },
+    Lit {
+        lit: PatLit,
+        span: Span,
+    },
+    /// Inclusive integer range. Endpoints are const values.
+    Range {
+        lo: i64,
+        hi: i64,
+        span: Span,
+    },
+    Or {
+        alts: Vec<Pattern>,
+        span: Span,
+    },
+    Struct {
+        name: String,
+        fields: Vec<(String, Pattern)>,
+        rest: bool,
+        span: Span,
+    },
+    At {
+        name: String,
+        pattern: Box<Pattern>,
+        span: Span,
+    },
+    /// Tuple pattern rest: `let (a, .., b) = t`.
+    Rest {
+        span: Span,
+    },
 }
 
 impl Pattern {
@@ -757,6 +904,12 @@ impl Pattern {
             Pattern::Variant { span, .. } => *span,
             Pattern::Wildcard { span } => *span,
             Pattern::Binding { span, .. } => *span,
+            Pattern::Lit { span, .. }
+            | Pattern::Range { span, .. }
+            | Pattern::Or { span, .. }
+            | Pattern::Struct { span, .. }
+            | Pattern::At { span, .. }
+            | Pattern::Rest { span } => *span,
         }
     }
 }

@@ -1,0 +1,27 @@
+enum State {
+    Ready;
+    Done;
+}
+
+enum Event {
+    Set { state: State, code: int };
+}
+
+fn main() -> int {
+    let event: Event = Event::Set { state: State::Done, code: 42 };
+    match event {
+        Event::Set { state, code } => {
+            if code != 42 {
+                return 1;
+            }
+            match state {
+                State::Done => {
+                    return 0;
+                }
+                State::Ready => {
+                    return 2;
+                }
+            };
+        }
+    };
+}

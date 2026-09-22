@@ -29,7 +29,7 @@ fn mangle_type_component(ty: &Type) -> String {
         Type::Struct(name) | Type::Enum(name) => name.clone(),
         Type::Vec { elem_type } => format!("Vec_{}", mangle_type_component(elem_type)),
         Type::Box { inner } => format!("Box_{}", mangle_type_component(inner)),
-        Type::Array { inner, size } => array_type_name(inner, *size),
+        Type::Array { inner, size, .. } => array_type_name(inner, *size),
         Type::Generic { name, params } if name == "Vec" && params.len() == 1 => {
             format!("Vec_{}", mangle_type_component(&params[0]))
         }
@@ -118,7 +118,7 @@ pub(crate) fn format_ret_val_decl(decl: &RetValDecl) -> String {
 /// Type-associated builtins (`Box::new`, `Vec::len`, etc.) keep their existing mangling path.
 pub(crate) fn mangle_module_callee(callee: &str) -> Option<String> {
     if callee.starts_with("METHOD::") {
-        return None;
+        panic!("compiler bug: unresolved method callee {callee}");
     }
     let parts: Vec<&str> = callee.split("::").collect();
     if parts.len() != 2 {
@@ -176,9 +176,14 @@ pub(crate) fn substitute_type_params(
         Type::Channel { elem_type } => Type::Channel {
             elem_type: Box::new(substitute_type_params(elem_type, substitutions)),
         },
-        Type::Array { inner, size } => Type::Array {
+        Type::Array {
+            inner,
+            size,
+            len_name,
+        } => Type::Array {
             inner: Box::new(substitute_type_params(inner, substitutions)),
             size: *size,
+            len_name: len_name.clone(),
         },
         Type::Slice { inner } => Type::Slice {
             inner: Box::new(substitute_type_params(inner, substitutions)),
@@ -286,9 +291,14 @@ pub(crate) fn resolve_type_alias(ty: &Type, type_aliases: &HashMap<String, TypeA
         Type::Channel { elem_type } => Type::Channel {
             elem_type: Box::new(resolve_type_alias(elem_type, type_aliases)),
         },
-        Type::Array { inner, size } => Type::Array {
+        Type::Array {
+            inner,
+            size,
+            len_name,
+        } => Type::Array {
             inner: Box::new(resolve_type_alias(inner, type_aliases)),
             size: *size,
+            len_name: len_name.clone(),
         },
         Type::Slice { inner } => Type::Slice {
             inner: Box::new(resolve_type_alias(inner, type_aliases)),
@@ -401,7 +411,7 @@ pub(crate) fn type_to_c_impl(ty: &Type) -> String {
         }
         Type::String => "ion_string_t*".to_string(),
         Type::Str => "char".to_string(),
-        Type::Array { inner, size } => {
+        Type::Array { inner, size, .. } => {
             // Named typedef so the array can appear as a C type specifier
             // (`Box<[T; N]>` -> `arr_T_N*`, nested arrays, `sizeof`).
             array_type_name(inner, *size)
@@ -431,7 +441,7 @@ pub(crate) fn type_to_c_impl(ty: &Type) -> String {
 // In src/cgen/mod.rs, near your existing type helper functions
 pub(crate) fn type_to_c_return_type(ty: &Type) -> String {
     match ty {
-        Type::Array { inner, size: _ } => {
+        Type::Array { inner, size: _, .. } => {
             // CRITICAL FIX: Array return types in Ion must become pointers in C.
             format!("{}*", type_to_c_impl(inner))
         }

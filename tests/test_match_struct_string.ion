@@ -1,0 +1,13 @@
+struct Pair {
+    name: String;
+    n: int;
+}
+
+fn main() -> int {
+    let p: Pair = Pair { name: String::from("ok"), n: 3 };
+    match p {
+        Pair { name: s, n } => {
+            return String::len(&s) + n;
+        }
+    };
+}

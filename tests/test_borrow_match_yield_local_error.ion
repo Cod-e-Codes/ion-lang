@@ -1,0 +1,25 @@
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn touch(p: &mut int) -> int {
+    return 1;
+}
+
+fn main() -> int {
+    let mut s: Point = Point { x: 4, y: 5 };
+    let c: (&mut int, int) = match true {
+        true => {
+            let t: (&mut int, int) = (&mut s.x, 1);
+            t;
+        }
+        _ => {
+            let t: (&mut int, int) = (&mut s.x, 1);
+            t;
+        }
+    };
+    let b: &mut int = &mut s.x;
+    let n: int = touch(c.0);
+    return n + c.1;
+}

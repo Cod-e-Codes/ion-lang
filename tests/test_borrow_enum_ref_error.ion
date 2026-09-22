@@ -1,0 +1,12 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut s: int = 1;
+    let a: &mut int = &mut s;
+    let o: Option<&mut int> = Option::Some(a);
+    let b: &mut int = &mut s;
+    return 0;
+}

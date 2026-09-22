@@ -98,8 +98,12 @@ fn main() {
     checker.set_module_exports(module_exports);
 
     // Type check merged program (main + imported modules)
-    let merged_program = compiler.merge_modules(&ast, input_path);
-    let (result, errors) = checker.check_program_collecting(&merged_program);
+    let mut merged_program = compiler.merge_modules(&ast, input_path);
+    if let Err(err) = const_eval::prepare(&mut merged_program) {
+        eprintln!("Error: {err}");
+        process::exit(1);
+    }
+    let (mut result, errors) = checker.check_program_collecting(&merged_program);
     if !errors.is_empty() {
         eprintln!("{}", tc::format_type_errors(&errors));
         process::exit(1);
@@ -245,7 +249,15 @@ fn main() {
         );
     } else {
         // Single-file mode: merge all modules and generate single .c file
-        let merged_program = compiler.merge_modules(&ast, input_path);
+        let mut merged_program = compiler.merge_modules(&ast, input_path);
+        if let Err(err) = const_eval::prepare(&mut merged_program) {
+            eprintln!("Error: {err}");
+            process::exit(1);
+        }
+        if let Err(err) = const_eval::instantiate(&mut merged_program, &mut result.type_info) {
+            eprintln!("Error: {err}");
+            process::exit(1);
+        }
 
         // Build IR from merged program
         let ir = ir::IRBuilder::build(&merged_program, &result.type_info);

@@ -1,0 +1,73 @@
+import "stdlib/map.ion" as map;
+import "stdlib/hash.ion" as hash;
+
+struct Key {
+    n: int;
+}
+
+impl Hash for Key {
+    fn hash(self: &Key) -> int {
+        return self.n;
+    }
+}
+
+struct Val {
+    n: int;
+}
+
+fn ignore(v: &int) -> int {
+    return 0;
+}
+
+fn touch(v: &Val) -> int {
+    return v.n;
+}
+
+fn main() -> int {
+    let mut keys: HashMap<Key, int> = map::new();
+    map::insert(&mut keys, Key { n: 4 }, 7);
+    match map::remove(&mut keys, Key { n: 4 }) {
+        Option::Some(v) => {
+            if v != 7 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    }
+
+    let mut values: HashMap<int, Val> = map::new();
+    map::insert(&mut values, 1, Val { n: 9 });
+    map::for_each(&mut values, touch);
+    match map::remove(&mut values, 1) {
+        Option::Some(v) => {
+            if v.n != 9 {
+                return 5;
+            }
+        }
+        Option::None => {
+            return 6;
+        }
+    }
+
+    let mut m: HashMap<int, int> = map::new();
+    let mut i: int = 1;
+    while i <= 20 {
+        map::insert(&mut m, i, i * 10);
+        i = i + 1;
+    }
+    map::insert(&mut m, 3, 33);
+    map::for_each(&mut m, ignore);
+    if map::len(&m) != 20 {
+        return 1;
+    }
+    match map::remove(&mut m, 17) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 4;
+        }
+    }
+}

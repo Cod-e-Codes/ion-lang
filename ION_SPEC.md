@@ -104,7 +104,7 @@ Examples: `main`, `Packet`, `_tmp1`, `read_file`.
 
 The following keywords are reserved and cannot be used as identifiers:
 
-`fn`, `let`, `mut`, `struct`, `enum`, `type`, `if`, `else`, `while`, `for`, `loop`, `match`, `select`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `send`, `recv`, `true`, `false`, `import`, `as`, `pub`, `extern`, `unsafe`.
+`fn`, `let`, `mut`, `struct`, `enum`, `type`, `capability`, `impl`, `if`, `else`, `while`, `for`, `loop`, `match`, `select`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `send`, `recv`, `true`, `false`, `import`, `as`, `pub`, `extern`, `unsafe`.
 
 Built-in type names `Box`, `Vec`, `String`, `Slice`, and `File` are tokenized as keywords for generic syntax (`Box<T>`, etc.) and builtin method qualification (`Slice::len`, `File::open`); they are not reserved as identifiers elsewhere.
 
@@ -189,8 +189,8 @@ Ion uses the following operators:
 - Logical: `&&`, `||`, `!`
 - Bitwise: `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
 
-Integer `+`, `-`, and `*` wrap in two's complement on every integer type. Generated C uses a same-width unsigned operation, then casts back for signed types (the meaning does not depend on `-fwrapv`). `/` and `%` panic if the divisor is `0`, and panic on signed `MIN / -1` and `MIN % -1`. Shifts panic if the right operand is greater than or equal to the bit width of the left operand. The right operand stays unsigned. Signed `>>` is arithmetic (sign-extending), implemented explicitly in generated C.
-- Assignment: `=`, `+=` (compound assignment desugars to `x = x + e` for supported `+` types). Assignment targets may be locals, index expressions, or field paths on owned structs or `&mut Struct` receivers (for example `vm.ip += 1`).
+Integer `+`, `-`, and `*` wrap in two's complement on every integer type. Generated C uses a same-width unsigned operation, then casts back for signed types (the meaning does not depend on `-fwrapv`). `/` and `%` panic if the divisor is `0`, and panic on signed `MIN / -1` and `MIN % -1`. Shifts panic if the right operand is greater than or equal to the bit width of the left operand. The right operand stays unsigned. An in-range shift result wraps modulo `2^width` of the left operand (`4660u16 << 4` is `9024`). `<<` and unsigned `>>` use that same unsigned operation. Signed `>>` is arithmetic (sign-extending), implemented explicitly in generated C.
+- Assignment: `=`, `+=` (compound assignment desugars to `x = x + e` for supported `+` types). Assignment targets may be locals, index expressions, or field paths on owned structs or `&mut Struct` receivers (for example `vm.ip += 1`). Replacing a field stores the owned field type. Reading a non-Copy field through `&` or `&mut` is still a borrow of that field.
 - Type casting: `as` keyword for explicit type conversions
 - Field access: `.`
 - Postfix try: `?` on owned `Option<T>` and `Result<T, E>` (see Section 8.1)
@@ -270,6 +270,8 @@ import_decl      = "import" , string_lit , [ "as" , identifier ] , ";" ;
 top_decl         = struct_decl
                  | enum_decl
                  | type_alias
+                 | capability_decl
+                 | impl_decl
                  | fn_decl ;
 ```
 
@@ -291,12 +293,17 @@ named_field      = identifier , ":" , type_expr ;
 
 type_alias       = "type" , identifier , "=" , type_expr , ";" ;
 
+capability_decl  = "capability" , identifier , "{" , { capability_method } , "}" ;
+capability_method = "fn" , identifier , "(" , params? , ")" , return_type? , ";" ;
+
+impl_decl        = "impl" , type_params? , identifier , "for" , type_expr , "{" , { fn_decl } , "}" ;
+
 fn_decl          = "fn" , identifier , type_params? , "(" , params? , ")" ,
                    return_type? , block ;
 
 type_params      = "<" , type_param , { "," , type_param } , ">" ;
 type_param       = identifier , [ ":" , trait_bound , { "+" , trait_bound } ] ;
-trait_bound      = identifier ;  (* built-in: Copy, Eq, Send *)
+trait_bound      = identifier ;  (* Copy, Eq, Send, or a capability name *)
 
 params           = param , { "," , param } ;
 param            = identifier , ":" , type_expr ;
@@ -488,8 +495,10 @@ enum_pat         = identifier , "::" , identifier ,
                    [ "(" , pattern_list? , ")" | "{" , named_pattern_fields? , "}" ] ;
 pattern_list     = pattern , { "," , pattern } ;
 named_pattern_fields = named_pattern_field , { "," , named_pattern_field } ;
-named_pattern_field = identifier , ":" , pattern ;
+named_pattern_field = identifier , [ ":" , pattern ] ;
 ```
+
+A named pattern field may omit `: pattern`. The field name is then a binding of that name: `Event::Set { state, code }` is `Event::Set { state: state, code: code }`. An explicit pattern is kept: `Event::Set { state: State::Done, code }` puns only `code`. Struct patterns use the same field form (`Point { x, y }`).
 
 #### 3.6 Nested constructors
 
@@ -533,7 +542,7 @@ Fixed-size arrays `[T; N]` have the following safety properties:
   - If `i < 0` or `i >= N`, the program panics with an error message via `ion_panic()`
   - The panic prints "Array index out of bounds" to stderr and aborts the program
   - Bounds checking can be disabled in `unsafe` blocks for performance-critical code
-- **Compile-time size**: Array size `N` must be a compile-time constant
+- **Compile-time size**: Array size `N` is an integer literal, a `const` item, or a `const` parameter.
 - **Stack allocation**: Arrays are allocated on the stack by default
 - **Index type**: The index expression may be any integer type (`int`, `i32`, `u32`, etc.).
 - **C lowering**: `[T; N]` lowers to a named C array typedef (`typedef int arr_int_2[2];`, nested `typedef arr_int_2 arr_arr_int_2_3[3];`) so nested arrays and `Box<[T; N]>` / `Vec<[T; N]>` are valid C type specifiers. Indexing stays `a[i]`. Functions still cannot return a C array type; array returns decay to a pointer to the first element.
@@ -697,22 +706,24 @@ The inference engine is intentionally limited:
 - No higher-rank polymorphism.
 - Generic enum variants with no payload (`Option::None`) infer type arguments only from an adjacent expected type (a `let` annotation, a struct field, a function parameter / call argument including built-in value parameters such as `send` and `Box::new`, a return type, an assignment target, or an element of an array or tuple literal including `[value; N]` repeat arrays and enum variant payloads). They do not take `T` from a later statement; without that context the compiler requires an annotation.
 - Generic enum constructor payloads are checked against the expected generic instantiation when one is known. Integer literals are `int`, not placeholders for a type parameter `T`: `let x: Option<bool> = Option::Some(1)` and `let x: Option<String> = Option::Some(1)` are type errors.
-- Generic type parameters may declare optional **trait bounds** (`Copy`, `Eq`, `Send`). Bounds are checked at monomorphization: each concrete instantiation must satisfy every bound on the corresponding parameter. There are no user-defined traits; bounds name structural capabilities checked by the compiler (see Section 4.8).
+- Generic type parameters may declare optional bounds (`Copy`, `Eq`, `Send`, or a capability name). Bounds are checked at monomorphization: each concrete instantiation must satisfy every bound on the corresponding parameter. `Copy`, `Eq`, and `Send` are structural (see Section 4.8). Other bounds name capabilities declared in the program.
 - Structural `Send` still applies per instantiation even without an explicit bound: for a generic type `Wrapper<T>`, each monomorphized `Wrapper<U>` is `Send` if and only if all of its fields (with `T` replaced by `U`) are `Send`. An unbounded function parameter `T` is not itself `Send`; see Sections 4.8 and 7.3.
 
 #### 4.5 Type Casting and Array Assignment
 
-- **Type casting**: `expr as Type` performs explicit numeric conversions (e.g., `f64 as int`).
+- **Type casting**: `expr as Type` performs explicit numeric conversions (e.g., `f64 as int`). Integer `as` keeps the low bits of the destination width (`0x12ff as u8` is `0xff`).
 - **Array element assignment**: `arr[i] = value` mutates a mutable array element. Subject to bounds checking unless inside `unsafe`.
 - **Array initialization**: `[value; count]` fills an array with `count` copies of `value`, where `count` is a compile-time constant.
 
 #### 4.6 Method Call Syntax
 
-`expr.method(args)` is syntactic sugar for `Type::method(expr, args)`, where `Type` is the concrete type of `expr`.
+`expr.method(args)` is syntactic sugar for a call of `method` on the concrete type of `expr`.
 
 - The compiler infers `&T` or `&mut T` for the receiver based on the function signature.
 - Generic methods use existing monomorphization; type arguments may be inferred from the first argument.
 - Qualified calls (`Vec::push(&mut vec, 10)`) remain valid.
+- A capability method (Section 4.8) is chosen when exactly one visible impl for that type provides `method`. Two capabilities with the same method name require the qualified form `Show::show(value)`.
+- Inside a generic function, `value.method()` on a type parameter uses the capability named in that parameter's bounds. The call is monomorphized to the impl for the concrete type.
 
 #### 4.7 Control Flow Extensions
 
@@ -723,18 +734,39 @@ The inference engine is intentionally limited:
 - Both `break` and `continue` are compile errors outside of a loop body.
 - Owned values and `defer`s in scopes exited by `break` or `continue` are cleaned up as specified in Section 5.5.
 - **Match guards**: `pattern if expr => { ... }` where `expr` must be `bool`.
+- **Struct-variant field pun**: `Event::Set { state, code }` is `Event::Set { state: state, code: code }`. `Event::Set { code, .. }` ignores the other fields. A named-field pattern must list every field or include `..`.
+- **Literal patterns**: `bool`, integer types, and string literals. Inclusive integer ranges are `lo..hi` with integer literal endpoints. `lo` greater than `hi` is a compile error.
+- **Or-patterns**: `A | B`. Every alternative binds the same names.
+- **Struct patterns**: `Point { x, y }` and `Point { x, .. }`. A bare field name is punning. `@` binds the scrutinee and the inner pattern: `q @ Point { x: 1, y }`.
+- **Tuple rest**: `let (a, .., b) = t` binds `a` to the first element and `b` to the last. `..` appears once. A refutable pattern in `let` is a compile error.
+- **Non-enum match**: `match` on an integer, `bool`, `String`, or struct tests arms in order. `bool` is exhaustive when `true` and `false` are covered. Other non-enum matches are exhaustive when an arm is irrefutable (`_`, a binding, or a struct pattern whose fields are irrefutable) and has no guard. Matching `&T` or `&mut T` reborrows the place: copy fields bind as `T`, and other fields bind as `&T` or `&mut T`. The arm does not move or drop the referent. Enum match stays one `switch` on the variant tag.
 - **Struct-style enum variants**: `enum E { Ok { value: int }; }` with matching literals and patterns.
 
-#### 4.8 Trait Bounds on Generics
+#### 4.8 Capabilities and Bounds
 
-Generic functions, structs, enums, and type aliases may declare bounds on type parameters:
+A **capability** is a named set of function signatures. `Self` in those signatures is the implementing type.
 
 ```ion
-fn send_value<T: Send>(value: T) { ... }
-struct Pair<T: Copy + Eq> { first: T; second: T; }
+capability Show {
+    fn show(self: &Self) -> int;
+}
+
+impl Show for Point {
+    fn show(self: &Point) -> int { return self.x; }
+}
+
+fn paint<T: Show>(value: &T) -> int { return value.show(); }
 ```
 
-Syntax: `identifier : Bound [ + Bound ... ]` after each type parameter name. Bounds are **built-in identifiers** only; there is no `trait` declaration syntax.
+Rules:
+
+- One impl per type per capability, in the same module as that struct or enum. No blanket impls, no capability inheritance, and no `dyn`.
+- `Copy`, `Eq`, and `Send` are structural compiler capabilities. User code cannot declare or impl those names.
+- A generic impl monomorphizes to ordinary functions, the same path as a generic function.
+- `value.show()` resolves to the impl when exactly one visible capability supplies `show`. Otherwise the call is `Show::show(value)`.
+- Bounds use the existing `T: Foo + Bar` syntax. A concrete type satisfies a user capability when an impl of that capability exists for it. A type parameter satisfies it when its bounds include it. Instantiation checks declared bounds.
+
+`Copy`, `Eq`, and `Send` stay structural:
 
 | Bound | Meaning (structural) |
 |-------|----------------------|
@@ -745,6 +777,14 @@ Syntax: `identifier : Bound [ + Bound ... ]` after each type parameter name. Bou
 A type parameter is `Send` only when it has a `Send` bound in the current scope (`T: Send`). Unbounded `T` is not `Send`. `channel<T>()` and `spawn` capture use that predicate: `fn wrap<T>(v: T) { channel<T>(); }` is a type error; `fn wrap<T: Send>(v: T) { channel<T>(); }` is allowed. Instantiation still checks declared bounds, so `wrap(&x)` is `TraitBoundNotSatisfied` when `wrap` requires `T: Send`. Names that are neither a declared `struct`/`enum` nor a type parameter are not `Send`.
 
 At each monomorphization site (generic call, struct or enum construction, type-alias substitution), the compiler substitutes concrete types for parameters and rejects any instantiation where a concrete type does not satisfy a declared bound. Unknown bound names are rejected at the declaration site.
+
+#### 4.9 Const
+
+`const NAME: T = expr;` defines a const item. `const fn` is a function the compiler can evaluate. Both are limited to integers, bools, const calls, and `if` on those values. A failing evaluation is a compile error.
+
+`const_assert(expr);` fails compilation when `expr` is not `true`.
+
+`fn pad<const N: int>(buf: &mut [u8; N])` is a const parameter. A call instantiates `N` from the argument's array length. `[T; N]` accepts that parameter or a const item.
 
 ### 5. Ownership and Borrowing
 
@@ -827,11 +867,11 @@ The following borrowing rules apply:
   - Any number of `&T` borrows, and **no** `&mut T` borrows, or
   - Exactly one `&mut T` borrow, and **no** `&T` borrows.
 - Borrows are restricted to the lexical scope of the function in which they are created (see 5.4).
-- While any lasting borrow of a variable is active, that variable cannot be used directly: no reads, assignment, or moves. This applies to copy types (e.g. `int`) as well as move-only types. Use the reference binding instead; `&mut` and `&` both enforce this exclusivity on the owner for the borrow's lifetime.
+- While a lasting borrow of the whole owner is active, that variable cannot be used directly: no reads, assignment, or moves. This applies to copy types (e.g. `int`) as well as move-only types. A lasting borrow stays live until the last use of every binding that holds it. A copy (`let c = a`), a field or index reborrow (`let d = &mut a.x`, `let d = &mut a[i]`), a tuple or `match` result that yields the reference, an assignment (`c = a`), an enum value (`Option::Some(a)`), and a struct literal (`Hold { v: a }`) are carriers of that same loan. Creating the reference inside that value is the same loan (`Hold { v: &mut s }`, `Option::Some(&mut s)`, `(&mut s.x, 1)`, or a `match` arm that yields `&mut s.x`). The loan is live everywhere the value that holds the pointer is live. A `match` arm that stores that reference in a local and then yields the local keeps the loan on the match result. An enum, struct, or array that holds the reference keeps the loan until that binding leaves scope. A nested block does not end an outer loan while any of those bindings is used again later in the outer block. A use inside a loop covers the whole loop. Ephemeral borrows in call arguments stay on that call. A `match` arm that binds a reference payload binds the pointer. It does not copy or drop the referent. A field whose type is already a reference is that pointer. Passing it to a function does not take its address again.
 
 **Field and subpath borrows**
 
-Lasting borrows through fields or indexing (e.g. `let r = &mut s.x`, `let r = &arr[i]`) register a borrow on the **root owner binding** (`s`, `arr`), not on a separate field slot. Ion does not support Rust-style disjoint field borrows: at most one `&mut` path into an owner at a time, and while the owner is borrowed no direct use of the owner (including other field paths or whole-owner `&mut s`) is allowed. Multiple shared `&` paths into the same owner remain allowed (`let a = &s.x; let b = &s.y`). Ephemeral `&` / `&mut` in call arguments are checked for aliasing at the use site but do not register lasting borrow counts.
+`s.x` and `s.y` are different places, so `let a = &mut s.x; let b = &mut s.y` is allowed while both borrows are live. Nested paths conflict when they share a field prefix: `s.a.b` conflicts with `s.a.c` and with `s.a`. Index and slice paths borrow the whole owner. A borrow of the whole owner conflicts with every path into that owner. Multiple shared `&` paths remain allowed. Ephemeral `&` / `&mut` in call arguments are checked at the call and do not register a lasting borrow.
 
 #### 5.4 No-Escape Rule (Formal)
 
@@ -910,6 +950,8 @@ When a binding goes out of scope, its remaining owned value is dropped exactly o
 
 Drop order:
 
+- A user `impl Drop` runs once, then fields, payloads, and elements drop in the order below. The `drop` body may read and mutate `self` through `&mut`. It must not move fields out. Builtin `File`, `Vec`, `String`, `Box`, and channel drops stay in the compiler and run as part of that later field drop. `ion_panic` still aborts with no drops.
+- A type with a `Drop` impl cannot be partially moved. That includes moving a non-Copy field out through a `match` pattern. A wildcard or `..` leaves the field to be dropped with the value. Ending a value early is a nested block. There is no second manual `drop` call.
 - Locals in one drop scope: reverse declaration order.
 - Struct fields: declaration order.
 - Enum variant payloads: declaration order of the active variant's fields or positional payloads.
@@ -973,7 +1015,8 @@ In particular:
 - `break` and `continue` drop owned values and run defers in the scopes they exit, through and including the loop body (Section 5.5). For `for`, the iteration step runs after continue cleanup.
 - `spawn` thread entry functions use the same scope-exit machinery; captures are dropped when the thread body finishes.
 - `spawn`ed threads manage their own stacks independently.
-- `ion_panic` prints a message and `abort()`s. Drops do not run. Allocation failure, `Vec`/`String` grow failure, `spawn` failure, and channel create failure panic this way instead of returning NULL or ignoring a status code.
+- `ion_panic` prints a message and `abort()`s. Drops do not run. Allocation failure, `Vec`/`String` grow failure, `spawn` failure, and channel create failure panic this way instead of returning NULL or ignoring a status code. `panic::abort` passes `String` data through `ion_abort_bytes`, which calls `ion_panic`.
+- Replacing a field (`s.f = new`) drops the previous field value, then stores `new`. The right-hand side is evaluated first.
 
 #### 6.3 Aliasing and Safety
 
@@ -1153,11 +1196,29 @@ let x: T = match expr {
 
 `?` is postfix, same tier as `.field`, `[index]`, and call. `Option?` is only legal in a function or fn literal whose return type is `Option<_>`. `Result?` is only legal when the return type is `Result<_, E>` with the same `E`. Mixing `Option` and `Result` is a type error. `?` is a compile error inside `spawn` bodies (spawn lowers to a different C function). Propagating `Option<&T>` still hits `ReferenceEscape` on return.
 
+`stdlib/option.ion` and `stdlib/result.ion` add capture-free helpers. Import them explicitly (`import "stdlib/option.ion" as option`). `Option` in `option.ion` is the same enum shape programs already declare; do not declare it again in a file that imports `option.ion` or a module that imports it (`string.ion`, `map.ion`).
+
+```ion
+pub fn map<T, U>(value: Option<T>, f: fn(T) -> U) -> Option<U>;
+pub fn and_then<T, U>(value: Option<T>, f: fn(T) -> Option<U>) -> Option<U>;
+pub fn unwrap_or<T>(value: Option<T>, fallback: T) -> T;
+pub fn expect<T>(value: Option<T>, message: String) -> T;
+
+pub fn map<T, U, E>(value: Result<T, E>, f: fn(T) -> U) -> Result<U, E>;
+pub fn and_then<T, U, E>(value: Result<T, E>, f: fn(T) -> Result<U, E>) -> Result<U, E>;
+pub fn unwrap_or<T, E>(value: Result<T, E>, fallback: T) -> T;
+pub fn expect<T, E>(value: Result<T, E>, message: String) -> T;
+```
+
+`map` and `and_then` call `f` and move `T` into it. `unwrap_or` returns the success payload or `fallback`. `expect` returns the success payload. On `None` or `Err` it calls `panic::abort`, which calls `ion_abort_bytes` and does not return. `ion_abort_bytes` calls `ion_panic`. `panic.ion` is imported by `option.ion` and `result.ion`.
+
+Call them as `option::map` and `result::map`. There is no prelude.
+
 #### 8.2 `Vec<T>`
 
 `Vec<T>` is a growable, heap-allocated sequence of `T`.
 
-Essential API (implemented; pseudocode notation: Ion has no `impl` blocks; these are compiler builtins):
+Essential API (compiler builtins; method calls desugar to the qualified forms below):
 
 ```ion
 // Vec::new() -> Vec<T>
@@ -1187,7 +1248,7 @@ For cross-function or long-lived access, Ion still favors an **index/handle styl
 
 `String` is a growable, heap-allocated UTF-8 string.
 
-Essential API (implemented; pseudocode notation: Ion has no `impl` blocks; these are compiler builtins):
+Essential API (compiler builtins; method calls desugar to the qualified forms below):
 
 ```ion
 // String::new() -> String
@@ -1323,6 +1384,99 @@ All I/O functions wrap POSIX calls in safe Ion code. Import with `import "stdlib
 
 `String` exposes `.data` (`*u8`) and `.len` (`int`) fields for low-level access when needed.
 
+#### 8.8 String helpers
+
+`stdlib/string.ion` imports `option.ion`. These functions read a `String` by byte index and keep the well-formed UTF-8 invariant. `slice`, `trim_ascii`, and `split_once` build a new `String` with `String::from_utf8`.
+
+```ion
+pub fn slice(s: &String, start: int, end: int) -> String;
+pub fn contains(s: &String, needle: &String) -> bool;
+pub fn starts_with(s: &String, prefix: &String) -> bool;
+pub fn ends_with(s: &String, suffix: &String) -> bool;
+pub fn trim_ascii(s: &String) -> String;
+pub struct Split { head: String; tail: String; }
+pub fn split_once(s: &String, sep: u8) -> Option<Split>;
+```
+
+`contains`, `starts_with`, and `ends_with` compare bytes. An empty needle makes `contains` return true. `trim_ascii` drops leading and trailing ASCII space, tab, CR, and LF (`32`, `9`, `13`, `10`). `split_once` splits on the first `sep` byte and returns `None` when it is absent. `slice` returns an empty `String` when the range is empty or `from_utf8` rejects the bytes.
+
+#### 8.9 `Hash`
+
+`stdlib/hash.ion` declares:
+
+```ion
+capability Hash {
+    fn hash(self: &Self) -> int;
+}
+```
+
+Integer primitives and `String` satisfy `Hash` without a user impl. `value.hash()` on those types calls the runtime mixers `ion_hash_int`, `ion_hash_i8`, `ion_hash_i16`, `ion_hash_i32`, `ion_hash_i64`, `ion_hash_u8`, `ion_hash_u16`, `ion_hash_u32`, `ion_hash_u64`, `ion_hash_uint`, and `ion_hash_string`. A user type impls `Hash` in the same module as the type. `Copy`, `Eq`, and `Send` stay structural and are not impls of this capability.
+
+#### 8.10 `HashMap<K, V>`
+
+`stdlib/map.ion` is an open-addressed table. Import `stdlib/map.ion`. It imports `option.ion` and `hash.ion`.
+
+```ion
+pub struct HashMap<K, V> {
+    slots: Vec<Slot<K, V>>;
+    len: int;
+    used: int;
+    cap: int;
+}
+
+pub fn new<K, V>() -> HashMap<K, V>;
+pub fn insert<K: Hash + Eq, V>(map: &mut HashMap<K, V>, key: K, value: V);
+pub fn remove<K: Hash + Eq, V>(map: &mut HashMap<K, V>, key: K) -> Option<V>;
+pub fn len<K, V>(map: &HashMap<K, V>) -> int;
+pub fn for_each<K, V>(map: &mut HashMap<K, V>, f: fn(&V) -> int);
+```
+
+`new` allocates 16 empty slots. `len` is the number of full slots. `used` counts full slots and tombstones. `insert` doubles the table when `used * 2 >= cap`, rehashes live keys into the new vector, and drops the previous slot vector. Tombstones are not copied. A matching key is replaced and the previous `V` is dropped. `remove` returns the owned `V` and leaves a tombstone so later probes still see keys past the hole. `for_each` moves each slot out, calls `f` with `&V`, and writes the slot back. That borrow does not escape the call. Keys are `Hash + Eq`. They do not have to be `Copy`: `==` reads both keys, and `hash` borrows. User structs are not `Copy`. Integer keys and `String` use the compiler `Hash` impl. A field of `&mut HashMap` is already `&mut Vec`, so slot access passes `map.slots` to `Vec::get` and `Vec::set`. Occupied slots are dropped with the map because the slot vector owns them. `HashMap<K, V>` is `Send` when `K` and `V` are `Send`.
+
+#### 8.11 Math, path, env, and time
+
+Import each module explicitly.
+
+`stdlib/math.ion`:
+
+```ion
+pub fn abs(x: int) -> int;
+pub fn min(a: int, b: int) -> int;
+pub fn max(a: int, b: int) -> int;
+pub fn clamp(x: int, lo: int, hi: int) -> int;
+pub enum MathError { DivByZero; }
+pub fn checked_div(a: int, b: int) -> Result<int, MathError>;
+```
+
+`checked_div` returns `Err(MathError::DivByZero)` when `b` is 0. Otherwise it returns `a / b`.
+
+`stdlib/path.ion` treats `/` and `\` as separators and returns owned `String` values:
+
+```ion
+pub fn file_name(path: &String) -> String;
+pub fn parent(path: &String) -> String;
+pub fn join(dir: &String, name: &String) -> String;
+```
+
+`file_name` is the suffix after the last separator, or the whole path when there is none. `parent` is the prefix before that separator, or an empty `String` when there is none. A leading separator is kept as a one-byte parent. `join` inserts `/` when `dir` does not already end in a separator.
+
+`stdlib/env.ion`:
+
+```ion
+pub enum EnvError { Missing; NotAscii; }
+pub fn get(name: String) -> Result<String, EnvError>;
+```
+
+`get` copies the process environment value into a new `String`. `Missing` means the name is unset. `NotAscii` means a copied byte is outside `0..=127`. Values longer than 255 bytes are truncated.
+
+`stdlib/time.ion`:
+
+```ion
+pub fn millis() -> int;
+```
+
+`millis` is milliseconds since the Unix epoch, masked so the `int` is non-negative.
+
 ### 9. Examples and Edge Cases
 
 These examples illustrate core semantics (moves, borrows, channels). **Copy-paste idioms** (index/handle search, Vec put-back, concurrency patterns) live in [`.cursor/skills/writing-ion-code/references/verified-patterns.md`](.cursor/skills/writing-ion-code/references/verified-patterns.md), checked against `tests/` and `examples/`.
@@ -1431,7 +1585,7 @@ and [docs/ABI.md](docs/ABI.md). Features listed below are either intentionally
 constrained in the beta subset or unstable until a later release documents a
 stronger contract.
 
-- Trait bounds are limited to built-in `Copy`, `Eq`, and `Send` (no user-defined traits)
+- No trait objects, blanket impls, or capability inheritance. `Copy`, `Eq`, and `Send` stay structural and cannot be implemented by user code. Other bounds name a `capability` declared in the program (Section 4.8).
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - `if`/`else` merge: ownership after an `if` is merged from branches that can fall through to the following code. A move in a branch that always `return`s, `break`s, or `continue`s does not block use after the `if`. If two fall-through paths disagree (one moved, one valid), it is still an error.
 - Match arms that fall through join ownership the same way. Nested unstructured leftovers (for example a `let` whose initializer is a fully diverging match) stay AST-structured analysis without a CFG rewrite.
@@ -1440,14 +1594,14 @@ stronger contract.
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (signature hover only)
 - LSP go-to-definition for type names in type annotations (no source spans on `Type` AST nodes)
 - Function types: capture-free fn literals implemented; no capturing closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
-- Tooling: IR lowering uses types computed by the type checker (`TypeInfo`). Missing a type after a successful check is a compiler bug, not a language fallback to `int`.
+- Tooling: IR lowering copies types and resolved method callees from the type checker (`TypeInfo`). Codegen reads those fields. It does not re-infer expression types or reclassify method receivers. A missing type, a missing resolved method, or a `METHOD::` callee after a successful check is a compiler bug, not a fallback to `int`.
 
 ### 11. Future Work (Non-Normative)
 
 The following features are **not planned** for the current compiler:
 
 - Asynchronous/await syntax and futures.
-- Complex trait or typeclass systems.
+- Trait objects, blanket impls, and capability inheritance.
 - Macros and compile-time metaprogramming.
 - Advanced iterator pipelines and zero-cost abstractions beyond the basics.
 - Capturing closures (fn literals that move owned environment from outer scopes).

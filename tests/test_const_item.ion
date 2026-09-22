@@ -1,0 +1,11 @@
+const LIMIT: int = 4;
+
+const fn twice(n: int) -> int {
+    return n + n;
+}
+
+fn main() -> int {
+    let buf: [int; LIMIT] = [0, 0, 0, 0];
+    const_assert(twice(2) == 4);
+    return buf[0] + LIMIT;
+}

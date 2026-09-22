@@ -1,0 +1,23 @@
+import "stdlib/hash.ion" as hash;
+
+fn main() -> int {
+    let a: int = 5;
+    let b: int = 5;
+    let c: int = 9;
+    if a.hash() != b.hash() {
+        return 1;
+    }
+    if a.hash() == c.hash() {
+        return 2;
+    }
+    let s: String = "ab";
+    let t: String = "ab";
+    let u: String = "cd";
+    if s.hash() != t.hash() {
+        return 3;
+    }
+    if s.hash() == u.hash() {
+        return 4;
+    }
+    return 0;
+}

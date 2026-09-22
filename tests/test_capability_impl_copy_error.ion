@@ -1,0 +1,13 @@
+struct Point {
+    x: int;
+}
+
+impl Copy for Point {
+    fn show(self: &Point) -> int {
+        return self.x;
+    }
+}
+
+fn main() -> int {
+    return 0;
+}

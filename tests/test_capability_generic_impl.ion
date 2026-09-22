@@ -1,0 +1,18 @@
+capability Show {
+    fn show(self: &Self) -> int;
+}
+
+struct Wrap<T> {
+    value: T;
+}
+
+impl<T> Show for Wrap<T> {
+    fn show(self: &Wrap<T>) -> int {
+        return 7;
+    }
+}
+
+fn main() -> int {
+    let w: Wrap<int> = Wrap { value: 1 };
+    return w.show();
+}

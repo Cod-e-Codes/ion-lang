@@ -11,7 +11,9 @@ impl TypeChecker {
     ) -> Result<(), TypeCheckError> {
         for param in params {
             for bound in &param.bounds {
-                if !KNOWN_TRAIT_BOUNDS.contains(&bound.as_str()) {
+                if !KNOWN_TRAIT_BOUNDS.contains(&bound.as_str())
+                    && !self.capabilities.contains_key(bound)
+                {
                     return Err(TypeCheckError::UnknownTraitBound {
                         bound: bound.clone(),
                         span,
@@ -33,9 +35,6 @@ impl TypeChecker {
             if let Some(concrete) = substitutions.get(&param.name) {
                 let resolved = self.resolve_type_name(concrete)?;
                 for bound in &param.bounds {
-                    if !KNOWN_TRAIT_BOUNDS.contains(&bound.as_str()) {
-                        continue;
-                    }
                     if !self.satisfies_bound(&resolved, bound) {
                         return Err(TypeCheckError::TraitBoundNotSatisfied {
                             type_name: type_to_string(&resolved),
@@ -51,12 +50,57 @@ impl TypeChecker {
     }
 
     pub(crate) fn satisfies_bound(&self, ty: &Type, bound: &str) -> bool {
+        let param_name = match ty {
+            Type::Struct(name) | Type::Enum(name) => Some(name.as_str()),
+            Type::Generic { name, params } if params.is_empty() => Some(name.as_str()),
+            _ => None,
+        };
+        if let Some(name) = param_name
+            && let Some(param) = self.lookup_type_param(name)
+            && param.bounds.iter().any(|b| b == bound)
+        {
+            return true;
+        }
         match bound {
             "Copy" => Self::is_copy_type(ty),
             "Send" => self.is_send(ty),
             "Eq" => self.is_eq_type(ty),
-            _ => false,
+            _ => self.satisfies_capability(ty, bound),
         }
+    }
+
+    fn satisfies_capability(&self, ty: &Type, capability: &str) -> bool {
+        if capability == "Hash"
+            && crate::integer_limits::builtin_hash_type_name(ty)
+                .is_some_and(|name| crate::integer_limits::builtin_hash_symbol(name).is_some())
+        {
+            return true;
+        }
+        if !self.capabilities.contains_key(capability) {
+            return false;
+        }
+        let owned = match ty {
+            Type::Ref { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        let (base, params) = match owned {
+            Type::Struct(name) | Type::Enum(name) => (name.as_str(), Vec::new()),
+            Type::Generic { name, params } => (name.as_str(), params.clone()),
+            _ => return false,
+        };
+        self.impls.iter().any(|imp| {
+            if imp.capability != capability || imp.type_name != base {
+                return false;
+            }
+            match &imp.target {
+                Type::Struct(name) | Type::Enum(name) => name == base && params.is_empty(),
+                Type::Generic {
+                    name,
+                    params: impl_params,
+                } => name == base && impl_params.len() == params.len(),
+                _ => false,
+            }
+        })
     }
 
     /// Types that support `==` and `!=` with correct semantics.

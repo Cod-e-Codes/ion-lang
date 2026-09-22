@@ -1,0 +1,38 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+struct Guard {
+    tx: Sender<int>;
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+        send(self.tx, 42);
+    }
+}
+
+struct Holder {
+    g: Guard;
+}
+
+fn main() -> int {
+    let (tx1, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let (tx2, _rx2): (Sender<int>, Receiver<int>) = channel<int>();
+    let mut h: Holder = Holder { g: Guard { tx: tx1 } };
+    h.g = Guard { tx: tx2 };
+    match recv(&mut rx) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}

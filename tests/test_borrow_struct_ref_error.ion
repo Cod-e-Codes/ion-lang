@@ -1,0 +1,16 @@
+struct Hold<T> {
+    v: T;
+}
+
+fn touch(p: &mut int) -> int {
+    return 1;
+}
+
+fn main() -> int {
+    let mut s: int = 1;
+    let a: &mut int = &mut s;
+    let h: Hold<&mut int> = Hold { v: a };
+    let c: &mut int = h.v;
+    let b: &mut int = &mut s;
+    return touch(c);
+}

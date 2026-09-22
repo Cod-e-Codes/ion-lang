@@ -15,12 +15,14 @@ Ion is a systems programming language with:
 Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 
 - **Ownership**: move by default; single owner per value; use-after-move is a compile error
-- **Borrowing**: `&T` and `&mut T` are stack-local; references cannot escape the function (no return, no struct fields, no channels, no `spawn`)
+- **Borrowing**: `&T` and `&mut T` are stack-local. A field declared as a reference is rejected, and references cannot be returned, sent on a channel, or passed to `spawn`. Disjoint fields (`s.x` and `s.y`) may be borrowed together. A lasting borrow stays live until the last use of every binding that holds it.
 - **Types**: primitives, structs, enums (tuple and struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String` (well-formed UTF-8; `push_byte` is ASCII-only)
-- **Control flow**: `if`/`while` (bool conditions), `loop { }`, `break`/`continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` with guards, postfix `?` on owned `Option`/`Result`, `defer`
+- **Control flow**: `if`/`while` (bool conditions), `loop { }`, `break`/`continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` (guards, literals, ranges, or-patterns, struct patterns, `@`, field pun, one tuple `..`), postfix `?` on owned `Option`/`Result`, `defer`
+- **Capabilities**: `capability` and `impl` add methods on a struct or enum. `Copy`, `Eq`, and `Send` stay structural. `impl Drop` runs once before field and resource drops.
+- **Const**: `const` items, `const fn`, `const` parameters, and `const_assert`
 - **Concurrency**: `channel<T>()` / `channel<T>(cap)` returns `(Sender<T>, Receiver<T>)`; `clone_sender(&tx)`; `send(&tx, v) -> SendResult<T>` and `recv(&mut rx) -> Option<T>`; `spawn { ... }` with structural `Send`
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`
-- **Stdlib**: `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, `stdlib/result.ion`, and `stdlib/handle.ion`
+- **Stdlib**: `stdlib/option.ion`, `stdlib/result.ion`, `stdlib/string.ion`, `stdlib/hash.ion`, `stdlib/map.ion`, `stdlib/math.ion`, `stdlib/path.ion`, `stdlib/env.ion`, `stdlib/time.ion`, `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, and `stdlib/handle.ion`
 
 Known limitations: [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
 
@@ -32,7 +34,7 @@ Known limitations: [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations)
 | [docs/BETA.md](docs/BETA.md) | Beta subset, compatibility policy, and platform support |
 | [docs/ABI.md](docs/ABI.md) | Runtime ABI notes for generated C and stdlib types |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, test, lint, and PR expectations |
-| [CHANGELOG.md](CHANGELOG.md) | Release notes by month |
+| [CHANGELOG.md](CHANGELOG.md) | Versioned release notes |
 | [tests/README.md](tests/README.md) | Integration test catalog |
 | [examples/](examples/) | Runnable example programs |
 

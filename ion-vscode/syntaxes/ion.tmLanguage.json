@@ -35,7 +35,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.ion",
-                    "match": "\\b(fn|let|mut|struct|enum|type|if|else|while|for|loop|match|select|return|break|continue|defer|spawn|unsafe|pub|extern|as|in|send|recv)\\b"
+                    "match": "\\b(fn|let|mut|struct|enum|type|capability|impl|const|if|else|while|for|loop|match|select|return|break|continue|defer|spawn|unsafe|pub|extern|as|in|send|recv)\\b"
                 }
             ]
         },

@@ -38,6 +38,9 @@ pub enum TokenKind {
     String,
     Slice,
     File,
+    Capability,
+    Impl,
+    Const,
     Pub,
     Import,
     Extern,
@@ -68,6 +71,7 @@ pub enum TokenKind {
     ShiftLeft,    // <<
     ShiftRight,   // >>
     Not,          // !
+    At,           // @
     Less,         // <
     Greater,      // >
     LessEqual,    // <=
@@ -182,12 +186,15 @@ impl Lexer {
                         TokenKind::Ellipsis
                     } else if let Some(next_char) = self.peek_next() {
                         // `.5` at expression start is a float; `expr.0` is field access.
-                        if next_char.is_ascii_digit()
-                            && tokens
-                                .last()
-                                .map(|t: &Token| can_have_field_access(&t.kind))
-                                .unwrap_or(false)
-                        {
+                        // `1..10` is Dot, Dot, Integer. The second dot is not a float.
+                        let previous_is_dot = tokens
+                            .last()
+                            .is_some_and(|t: &Token| matches!(t.kind, TokenKind::Dot));
+                        let previous_is_field = tokens
+                            .last()
+                            .map(|t: &Token| can_have_field_access(&t.kind))
+                            .unwrap_or(false);
+                        if next_char.is_ascii_digit() && (previous_is_dot || previous_is_field) {
                             self.advance();
                             TokenKind::Dot
                         } else if next_char.is_ascii_digit() {
@@ -245,6 +252,10 @@ impl Lexer {
                 Some('?') => {
                     self.advance();
                     TokenKind::Question
+                }
+                Some('@') => {
+                    self.advance();
+                    TokenKind::At
                 }
                 Some('&') => {
                     self.advance();
@@ -449,6 +460,10 @@ impl Lexer {
             } else if c == '.' {
                 // `expr.0.1` is nested tuple indexing, not float `0.1`.
                 if matches!(prev, Some(TokenKind::Dot)) {
+                    break;
+                }
+                // `1..10` is an inclusive range, not a float.
+                if self.peek_next() == Some('.') {
                     break;
                 }
                 // Decimal point
@@ -776,6 +791,9 @@ impl Lexer {
             "extern" => TokenKind::Extern,
             "unsafe" => TokenKind::Unsafe,
             "type" => TokenKind::Type,
+            "capability" => TokenKind::Capability,
+            "impl" => TokenKind::Impl,
+            "const" => TokenKind::Const,
             "as" => TokenKind::As,
             "true" => TokenKind::True,
             "false" => TokenKind::False,

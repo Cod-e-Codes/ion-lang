@@ -346,7 +346,7 @@ fn read_len(v: &Vec<int>) -> int {
 }
 ```
 
-While `&mut s` is active, do not move or assign `s` or other fields of the same root owner.
+`let a = &mut s.x; let b = &mut s.y` is allowed. `s.a.b` conflicts with `s.a.c` and with `s.a`. A lasting borrow stays live until the last use of every binding that holds it. A copy, field or index reborrow, tuple, `match` result, assignment, enum value, or struct literal that stores the reference carries that loan. A reference created inside that value (`Hold { v: &mut s }`, `Option::Some(&mut s)`, `(&mut s.x, 1)`, or a `match` arm that yields `&mut s.x`) is the same loan. A `match` arm that stores the reference in a local and then yields the local keeps that loan on the match result. An enum, struct, or array that holds it keeps the loan until that binding leaves scope. A nested block does not end an outer loan. Indexing still borrows the whole owner. Match on `&Struct` or `&mut Struct` reborrows fields. Copy fields bind as the value. Other fields bind as `&T` or `&mut T`. The arm does not move or drop the referent. A reference stored in an enum or struct binds as that reference. A field that is already a reference is passed as that pointer.
 
 ## defer
 

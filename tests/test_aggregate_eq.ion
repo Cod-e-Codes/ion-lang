@@ -1,0 +1,40 @@
+struct Pair {
+    a: int;
+    b: int;
+}
+
+enum Flag {
+    Off;
+    On(int);
+}
+
+fn main() -> int {
+    let same: Pair = Pair { a: 1, b: 2 };
+    let also: Pair = Pair { a: 1, b: 2 };
+    let other: Pair = Pair { a: 1, b: 3 };
+    if !(same == also) {
+        return 1;
+    }
+    if same == other {
+        return 2;
+    }
+    let on: Flag = Flag::On(4);
+    let on_again: Flag = Flag::On(4);
+    let off: Flag = Flag::Off;
+    if !(on == on_again) {
+        return 3;
+    }
+    if on == off {
+        return 4;
+    }
+    let xs: [int; 2] = [1, 2];
+    let ys: [int; 2] = [1, 2];
+    let zs: [int; 2] = [1, 9];
+    if !(xs == ys) {
+        return 5;
+    }
+    if xs == zs {
+        return 6;
+    }
+    return 0;
+}

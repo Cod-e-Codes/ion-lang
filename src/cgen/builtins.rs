@@ -32,17 +32,14 @@ impl Codegen {
         }
         if callee == "try_send" && args.len() == 2 {
             let sender_addr = self.sender_addr_code(&args[0]);
-            let value_type = return_type
-                .and_then(|t| match t {
-                    Type::Generic { name, params }
-                        if name == "TrySendResult" && params.len() == 1 =>
-                    {
-                        Some(params[0].clone())
-                    }
-                    _ => None,
-                })
-                .or_else(|| self.infer_irexpr_type(&args[1]))
-                .unwrap_or(Type::Int);
+            let value_type = match return_type {
+                Some(Type::Generic { name, params })
+                    if name == "TrySendResult" && params.len() == 1 =>
+                {
+                    params[0].clone()
+                }
+                _ => panic!("compiler bug: try_send missing TrySendResult type"),
+            };
             let val_tmp = format!("_try_send_val_{}", self.temp_var_counter);
             self.temp_var_counter += 1;
             let st_tmp = format!("_try_send_st_{}", self.temp_var_counter);
@@ -165,11 +162,9 @@ impl Codegen {
         // Box::unwrap<T>(box: Box<T>) -> T
         // Copy T out, then free the box allocation without dropping T.
         if callee == "Box::unwrap" && args.len() == 1 {
-            let inferred_inner = self.infer_irexpr_type(&args[0]).and_then(|ty| match ty {
-                Type::Box { inner } => Some(*inner),
-                _ => None,
-            });
-            let inner_type = return_type.cloned().or(inferred_inner).unwrap_or(Type::Int);
+            let inner_type = return_type
+                .cloned()
+                .unwrap_or_else(|| panic!("compiler bug: Box::unwrap missing return type"));
             let inner_c_type = self.type_to_c(&inner_type);
             let mut arg_code = String::new();
             let old_output = std::mem::replace(&mut self.output, arg_code);
@@ -647,16 +642,7 @@ impl Codegen {
             self.generate_expr(&args[0]);
             arg_code = std::mem::replace(&mut self.output, old_output);
 
-            let arg_ty = self.infer_irexpr_type(&args[0]).or_else(|| {
-                if let IREexpr::Var(name) = &args[0] {
-                    self.current_function_params
-                        .get(name)
-                        .cloned()
-                        .or_else(|| self.lookup_binding_type(name))
-                } else {
-                    None
-                }
-            });
+            let arg_ty = self.stored_expr_type(&args[0]);
 
             // If it's a string literal, use ion_string_from_literal
             // &str (char*) uses strlen; &String clones the owned buffer.

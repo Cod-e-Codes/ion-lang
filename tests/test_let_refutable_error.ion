@@ -1,0 +1,5 @@
+fn main() -> int {
+    let t: (int, int) = (1, 2);
+    let (a, 1) = t;
+    return a;
+}
