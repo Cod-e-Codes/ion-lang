@@ -158,12 +158,16 @@ test_box_unwrap_struct_let.ion	cgen			ion_box_free(_box)
 test_box_unwrap_same_scope.ion	run	3			
 test_box_unwrap_same_scope.ion	cgen			ion_box_free(_box)	ion_box_free(boxed)
 test_vec_new.ion	run	0			
-test_vec_push_pop.ion	run	0			
-test_vec_get_set.ion	run	0			
+test_vec_push_pop.ion	run	0
+test_vec_push_pop.ion	cgen			_ion_pop.tag = 0	ion_vec_pop|ion_option_from_raw|memset			
+test_vec_get_set.ion	run	0
+test_vec_get_set.ion	cgen			_ion_get.tag = 0	ion_vec_get|ion_option_from_raw|memset			
 test_vec_capacity.ion	run	0			
 test_vec_i32.ion	run	0			
 test_vec_struct.ion	run	2
 test_vec_get_struct.ion	run	0
+test_vec_get_struct.ion	cgen			_ion_get.tag = 0	ion_vec_get|ion_option_from_raw
+test_vec_get_struct.ion	cgen			memset(&(((Todo*)_ion_v->data)[_ion_i])
 test_vec_get_multi_option.ion	run	0
 test_vec_get_multi_option.ion	cgen			Option_Customer
 test_vec_get_multi_option.ion	cgen			Option_String

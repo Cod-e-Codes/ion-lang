@@ -225,13 +225,13 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_box_ops.ion` - Box operations (new, unwrap); cgen asserts `ion_box_free(_box)` and no `ion_box_free(boxed)`
 - `test_vec_basic.ion` - Vec<T> dynamic arrays
 - `test_vec_new.ion` - Vec::new() function
-- `test_vec_push_pop.ion` - Vec push and pop operations
-- `test_vec_get_set.ion` - Vec get and set operations
+- `test_vec_push_pop.ion` - Vec push and pop operations; cgen asserts a stack `Option` (`_ion_pop.tag = 0`) and no `ion_vec_pop` or slot `memset`
+- `test_vec_get_set.ion` - Vec get and set operations; cgen asserts a stack `Option` (`_ion_get.tag = 0`) and no `ion_vec_get` or slot `memset` for `Vec<int>`
 - `test_vec_set_string.ion` - `Vec::set` of `String` drops the previous element (exit 0); Linux CI leak-sanitizer
 - `test_vec_capacity.ion` - Vec capacity management
 - `test_vec_i32.ion` - `Vec<i32>` with annotated `Vec::new`, `i32` indices
 - `test_vec_struct.ion` - `Vec` with struct elements, annotated `Vec::new`, and `for` iteration
-- `test_vec_get_struct.ion` - `Vec::get` with struct elements containing `String`
+- `test_vec_get_struct.ion` - `Vec::get` with struct elements containing `String`; cgen asserts `_ion_get.tag = 0`, a hollow `memset`, and no `ion_vec_get`
 - `test_vec_get_multi_option.ion` - `match Vec::get` picks `Option<T>` per vector element type
 - `test_vec_get_putback.ion` - put-back scan after `Vec::get` move-out preserves vector length
 - `test_vec_get_putback_named.ion` - put-back via `let row` then `Vec::set(..., row)` as the last match-arm statement

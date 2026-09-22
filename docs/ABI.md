@@ -58,23 +58,27 @@ Stable beta expectations:
 - `Vec::get` of a dropping `T` copies the element into `Option<T>` and hollows the slot. `Vec::set` of a dropping `T` drops the previous element before overwrite. Generated C wraps the runtime status in conventional `SetResult` (`Ok` / `OutOfBounds`).
 - Bounds-sensitive operations either return `Option<T>` where documented or
   trigger the runtime panic path for checked indexing.
-- `Vec::get` / `Vec::pop` return heap `Option` blobs from the runtime; generated
-  C unpacks them with `ion_option_from_raw` into monomorphized `Option_T` stack
-  values (tag plus payload at `data.variant_0.arg0`). `match` on `Vec::get` /
-  `Vec::pop` resolves `Option<T>` from the call's return type or the vector
-  argument's element type (not the first `Vec` in the program).
-- `Vec::get_ref` returns a **stack-local** `Option<&T>`: codegen fills tag and a
-  pointer into the vector buffer (or `None` when out of bounds). No runtime heap
-  `Option` and no `ion_option_from_raw`. Monomorphized names use the `ref_`
+- `Vec::get` and `Vec::pop` are statement expressions in generated C. They write a
+  stack `Option_T` (tag plus payload at `data.variant_0.arg0`). Copy `get` loads
+  the slot and leaves it in place. Dropping `get` loads the slot, then zero-fills
+  it. `pop` decrements `len` and loads the vacated slot. Out of bounds and empty
+  set the `None` tag and do not read a payload. Array elements are copied with
+  `memcpy` because a C array typedef cannot be assigned. `match` resolves
+  `Option<T>` from the call's return type or the vector argument's element type
+  (not the first `Vec` in the program).
+- `Vec::get_ref` returns a stack-local `Option<&T>`: codegen fills tag and a
+  pointer into the vector buffer (or `None` when out of bounds). It does not move
+  or hollow the slot. Monomorphized names use the `ref_`
   prefix (for example `Option_ref_int`, `Option_ref_Product`). Match arms on
   `Option::Some(x)` bind drop-owning `T` as `T*`; copy types bind by value from
   `*arg0`. Scope cleanup must not drop nested owned fields through the binding.
 - Monomorphized container typedefs use Ion type names (`Vec_String`,
   `Option_Customer`), not C runtime typedefs (`ion_string_t`, etc.).
 - `&mut Vec<T>` parameters codegen as `Vec_T**`; builtins dereference once when
-  passing the receiver to `ion_vec_push`, `ion_vec_get`, and related helpers.
-  `Vec::get_ref` uses the same `ion_vec_t*` receiver but does not call
-  `ion_vec_get`; it bounds-checks and takes the address of the slot in generated C.
+  passing the receiver to `ion_vec_push` and related helpers.
+  `Vec::get`, `Vec::pop`, and `Vec::get_ref` use the same `ion_vec_t*` receiver
+  and bounds-check in generated C. `get` and `pop` move the element into a stack
+  `Option`. `get_ref` takes the address of the slot.
 - Non-copy fields through `&Struct` / `&mut Struct` are already `&Field` in Ion.
   When such a field is passed to a user parameter of type `&T` / `&mut T`, codegen
   emits `&(base->field)` so the C argument is `T**` (matching the parameter), not

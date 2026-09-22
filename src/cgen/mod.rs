@@ -1585,58 +1585,6 @@ impl Codegen {
             .unwrap_or_else(|| "int".to_string())
     }
 
-    pub(crate) fn write_option_from_runtime_raw_assign(
-        &mut self,
-        mono_name: &str,
-        elem_c_type: &str,
-        dest_var: &str,
-        raw_expr: &IREexpr,
-    ) {
-        self.write("{ void* _ion_raw = ");
-        self.generate_expr(raw_expr);
-        self.writeln(";");
-        self.write_indent();
-        self.writeln(&format!(
-            "ion_option_from_raw(&{dest_var}, _ion_raw, sizeof({elem_c_type}), offsetof({mono_name}, data.variant_0.arg0)); }}"
-        ));
-        self.mark_moves_in_expr(raw_expr);
-    }
-
-    pub(crate) fn write_option_from_runtime_raw(
-        &mut self,
-        mono_name: &str,
-        elem_c_type: &str,
-        dest_var: &str,
-        raw_expr: &IREexpr,
-    ) {
-        self.write(&format!("{mono_name} {dest_var};\n"));
-        self.write_indent();
-        self.write("{ void* _ion_raw = ");
-        self.generate_expr(raw_expr);
-        self.writeln(";");
-        self.write_indent();
-        self.writeln(&format!(
-            "ion_option_from_raw(&{dest_var}, _ion_raw, sizeof({elem_c_type}), offsetof({mono_name}, data.variant_0.arg0)); }}"
-        ));
-        self.mark_moves_in_expr(raw_expr);
-    }
-
-    pub(crate) fn write_option_from_runtime_raw_stmt_expr(
-        &mut self,
-        mono_name: &str,
-        elem_c_type: &str,
-        raw_expr: &IREexpr,
-    ) {
-        self.write("({ ");
-        self.write(&format!("{mono_name} _ion_opt; "));
-        self.write("void* _ion_raw = ");
-        self.generate_expr(raw_expr);
-        self.write(&format!(
-            "; ion_option_from_raw(&_ion_opt, _ion_raw, sizeof({elem_c_type}), offsetof({mono_name}, data.variant_0.arg0)); _ion_opt; }})"
-        ));
-        self.mark_moves_in_expr(raw_expr);
-    }
-
     fn field_access_c_path(&self, expr: &IREexpr) -> Option<String> {
         match expr {
             IREexpr::Var(name) => Some(name.clone()),
@@ -2343,20 +2291,6 @@ impl Codegen {
                             scrutinee_type.as_ref(),
                         );
                     }
-                } else if let Some(Type::Generic { name, params }) = return_ty.as_ref()
-                    && name == "Option"
-                    && params.len() == 1
-                    && let IREexpr::Call { callee, .. } = value
-                    && (callee == "Vec::pop" || callee == "Vec::get")
-                {
-                    let mono_name = mangle_type_name("Option", params);
-                    let elem_c_type = self.type_to_c(&params[0]);
-                    self.write_option_from_runtime_raw_assign(
-                        &mono_name,
-                        &elem_c_type,
-                        "ret_val",
-                        value,
-                    );
                 } else {
                     self.write("ret_val = ");
 
@@ -3203,34 +3137,8 @@ impl Codegen {
                         } else {
                             self.generate_expr_with_type(init, Some(&let_stmt.ty));
                         }
-                    } else if let Type::Generic { name, params } = &let_stmt.ty {
-                        // Special handling for Option<T> from Vec::get/Vec::pop
-                        // These return void* that need to be cast to Option<T>*
-                        if name == "Option" && params.len() == 1 {
-                            if let IREexpr::Call { callee, .. } = init {
-                                let needs_cast = callee == "Vec::pop"
-                                    || callee == "Vec::get"
-                                    || callee.starts_with("ion_vec_pop")
-                                    || callee.starts_with("ion_vec_get");
-
-                                if needs_cast {
-                                    let mono_name = mangle_type_name("Option", params);
-                                    let elem_c_type = self.type_to_c(&params[0]);
-                                    self.write_option_from_runtime_raw_stmt_expr(
-                                        &mono_name,
-                                        &elem_c_type,
-                                        init,
-                                    );
-                                } else {
-                                    self.generate_expr_with_type(init, Some(&let_stmt.ty));
-                                }
-                            } else {
-                                self.generate_expr_with_type(init, Some(&let_stmt.ty));
-                            }
-                        } else {
-                            // Pass type context so enum/struct literals can use monomorphized names
-                            self.generate_expr_with_type(init, Some(&let_stmt.ty));
-                        }
+                    } else if matches!(&let_stmt.ty, Type::Generic { .. }) {
+                        self.generate_expr_with_type(init, Some(&let_stmt.ty));
                     } else if matches!(let_stmt.ty, Type::Int) {
                         // Special handling: if declared type is Int but init is a variable,
                         // it might actually be a Vec pointer (type inference limitation).
@@ -5023,29 +4931,7 @@ impl Codegen {
         self.match_counter += 1;
 
         self.write_indent();
-        // Vec::pop / Vec::get return heap Option as void*.
-        let needs_cast = if let IREexpr::Call { callee, .. } = expr {
-            callee == "Vec::pop"
-                || callee == "Vec::get"
-                || callee.starts_with("ion_vec_pop")
-                || callee.starts_with("ion_vec_get")
-        } else {
-            false
-        };
-
-        if needs_cast {
-            let elem_c_type = if type_params.is_empty() {
-                panic!("compiler bug: Vec::pop/get match missing element type")
-            } else {
-                self.type_to_c(&type_params[0])
-            };
-            self.write_option_from_runtime_raw(
-                &monomorphized_enum_name,
-                &elem_c_type,
-                &match_var_name,
-                expr,
-            );
-        } else if self.match_scrutinee_needs_deref(expr, scrutinee_type) {
+        if self.match_scrutinee_needs_deref(expr, scrutinee_type) {
             self.write(&format!(
                 "{} {} = *",
                 monomorphized_enum_name, match_var_name

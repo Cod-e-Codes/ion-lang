@@ -256,35 +256,6 @@ ion_vec_t *ion_vec_with_capacity(size_t elem_size, int capacity);
 int ion_vec_push(ion_vec_t *vec, const void *value, size_t elem_size);
 
 /**
- * Pops a value from the end of the vector.
- * Returns an Option<T> enum: Some(T) if successful, None if empty.
- * The caller must handle the Option enum.
- *
- * @param vec Vector to pop from
- * @param elem_size Size of each element in bytes
- * @return Pointer to Option enum (caller must free), or NULL on error
- */
-void *ion_vec_pop(ion_vec_t *vec, size_t elem_size);
-
-/**
- * Gets a value from the vector at the given index.
- * Returns an Option<T> enum: Some(T) if index is valid, None if out of bounds.
- *
- * @param vec Vector to get from
- * @param index Index to get
- * @param elem_size Size of each element in bytes
- * @return Pointer to Option enum (caller must free), or NULL on error
- */
-void *ion_vec_get(const ion_vec_t *vec, int index, size_t elem_size);
-
-/**
- * Unpack a heap Option from ion_vec_get/ion_vec_pop into a stack-local monomorphized
- * Option (tag + payload). Frees raw.
- */
-void ion_option_from_raw(void *dest, void *raw, size_t elem_size,
-                         size_t payload_offset);
-
-/**
  * Sets a value in the vector at the given index.
  *
  * @param vec Vector to set in

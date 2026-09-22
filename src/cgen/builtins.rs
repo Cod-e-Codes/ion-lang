@@ -2,6 +2,53 @@ use super::*;
 use crate::cgen::types::mangle_type_name;
 
 impl Codegen {
+    fn owned_option_c_name(&self, return_type: Option<&Type>, elem_ty: Option<&Type>) -> String {
+        if let Some(Type::Generic { name, params }) = return_type
+            && name == "Option"
+            && params.len() == 1
+        {
+            return mangle_type_name("Option", params);
+        }
+        if let Some(elem) = elem_ty {
+            return mangle_type_name("Option", std::slice::from_ref(elem));
+        }
+        "Option_int".to_string()
+    }
+
+    /// Move one vector slot into an owned `Option` payload. Arrays are copied with
+    /// `memcpy` because a C array typedef cannot be assigned. `hollow` zero-fills
+    /// the slot after a dropping `Vec::get`.
+    fn append_vec_payload_move(
+        code: &mut String,
+        dest_field: &str,
+        elem_c_type: &str,
+        slot: &str,
+        is_array: bool,
+        hollow: bool,
+    ) {
+        if is_array {
+            code.push_str("memcpy(&");
+            code.push_str(dest_field);
+            code.push_str(", &(");
+            code.push_str(slot);
+            code.push_str("), sizeof(");
+            code.push_str(elem_c_type);
+            code.push_str(")); ");
+        } else {
+            code.push_str(dest_field);
+            code.push_str(" = ");
+            code.push_str(slot);
+            code.push_str("; ");
+        }
+        if hollow {
+            code.push_str("memset(&(");
+            code.push_str(slot);
+            code.push_str("), 0, sizeof(");
+            code.push_str(elem_c_type);
+            code.push_str(")); ");
+        }
+    }
+
     /// Generate code for built-in function calls.
     /// Returns Some(code) if it's a built-in, None otherwise.
     pub(crate) fn generate_builtin_call(
@@ -342,26 +389,42 @@ impl Codegen {
         }
 
         // Vec::pop<T>(vec: &mut Vec<T>) -> Option<T>
+        // Stack Option. Shrinking len moves the last slot out; it is not hollowed.
         if callee == "Vec::pop" && args.len() == 1 {
-            let mut code = String::new();
             let mut vec_code = String::new();
             let old_output = std::mem::replace(&mut self.output, vec_code);
             self.generate_expr(&args[0]);
             vec_code = std::mem::replace(&mut self.output, old_output);
             let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
 
+            let elem_ty = self.vec_elem_type_from_arg(&args[0]);
             let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
-            code.push_str("ion_vec_pop((ion_vec_t*)(");
+            let option_name = self.owned_option_c_name(return_type, elem_ty.as_ref());
+            let is_array = matches!(elem_ty, Some(Type::Array { .. }));
+            let slot = format!("(({elem_c_type}*)_ion_v->data)[_ion_v->len]");
+
+            let mut code = String::new();
+            code.push_str("({ ");
+            code.push_str(&option_name);
+            code.push_str(" _ion_pop; ion_vec_t* _ion_v = (ion_vec_t*)(");
             code.push_str(&deref_vec);
-            code.push_str("), sizeof(");
-            code.push_str(&elem_c_type);
-            code.push_str("))");
+            code.push_str("); if (_ion_v && _ion_v->len > 0) { _ion_v->len--; _ion_pop.tag = 0; ");
+            Self::append_vec_payload_move(
+                &mut code,
+                "_ion_pop.data.variant_0.arg0",
+                &elem_c_type,
+                &slot,
+                is_array,
+                false,
+            );
+            code.push_str("} else { _ion_pop.tag = 1; } _ion_pop; })");
             return Some(code);
         }
 
         // Vec::get<T>(vec: &Vec<T>, index: int) -> Option<T>
+        // Stack Option. Dropping T is hollowed after the move so a later vec drop
+        // does not free the same value again. Copy T stays in the slot.
         if callee == "Vec::get" && args.len() == 2 {
-            let mut code = String::new();
             let mut vec_code = String::new();
             let old_output = std::mem::replace(&mut self.output, vec_code);
             self.generate_expr(&args[0]);
@@ -372,60 +435,33 @@ impl Codegen {
             self.generate_expr(&args[1]);
             index_code = std::mem::replace(&mut self.output, old_output);
 
+            let elem_ty = self.vec_elem_type_from_arg(&args[0]);
             let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
             let deref_vec = self.vec_ion_ptr_expr(&args[0], &vec_code);
-            let elem_ty = self.vec_elem_type_from_arg(&args[0]);
+            let option_name = self.owned_option_c_name(return_type, elem_ty.as_ref());
             let hollow = elem_ty.as_ref().is_some_and(|t| self.type_needs_drop(t));
-            if hollow {
-                let n = self.temp_var_counter;
-                self.temp_var_counter += 1;
-                let gv = format!("_ion_gv{n}");
-                let gi = format!("_ion_gi{n}");
-                let gr = format!("_ion_gr{n}");
-                code.push_str("({ ion_vec_t* ");
-                code.push_str(&gv);
-                code.push_str(" = (ion_vec_t*)(");
-                code.push_str(&deref_vec);
-                code.push_str("); int ");
-                code.push_str(&gi);
-                code.push_str(" = ");
-                code.push_str(&index_code);
-                code.push_str("; void* ");
-                code.push_str(&gr);
-                code.push_str(" = ion_vec_get(");
-                code.push_str(&gv);
-                code.push_str(", ");
-                code.push_str(&gi);
-                code.push_str(", sizeof(");
-                code.push_str(&elem_c_type);
-                code.push_str(")); if (");
-                code.push_str(&gr);
-                code.push_str(" && *(int*)");
-                code.push_str(&gr);
-                code.push_str(" == 0 && ");
-                code.push_str(&gv);
-                code.push_str(" && ");
-                code.push_str(&gv);
-                code.push_str("->data) { memset((char*)");
-                code.push_str(&gv);
-                code.push_str("->data + (size_t)");
-                code.push_str(&gi);
-                code.push_str(" * sizeof(");
-                code.push_str(&elem_c_type);
-                code.push_str("), 0, sizeof(");
-                code.push_str(&elem_c_type);
-                code.push_str(")); } ");
-                code.push_str(&gr);
-                code.push_str("; })");
-            } else {
-                code.push_str("ion_vec_get((ion_vec_t*)(");
-                code.push_str(&deref_vec);
-                code.push_str("), ");
-                code.push_str(&index_code);
-                code.push_str(", sizeof(");
-                code.push_str(&elem_c_type);
-                code.push_str("))");
-            }
+            let is_array = matches!(elem_ty, Some(Type::Array { .. }));
+            let slot = format!("(({elem_c_type}*)_ion_v->data)[_ion_i]");
+
+            let mut code = String::new();
+            code.push_str("({ ");
+            code.push_str(&option_name);
+            code.push_str(" _ion_get; ion_vec_t* _ion_v = (ion_vec_t*)(");
+            code.push_str(&deref_vec);
+            code.push_str("); int _ion_i = ");
+            code.push_str(&index_code);
+            code.push_str(
+                "; if (_ion_v && _ion_i >= 0 && (size_t)_ion_i < _ion_v->len) { _ion_get.tag = 0; ",
+            );
+            Self::append_vec_payload_move(
+                &mut code,
+                "_ion_get.data.variant_0.arg0",
+                &elem_c_type,
+                &slot,
+                is_array,
+                hollow,
+            );
+            code.push_str("} else { _ion_get.tag = 1; } _ion_get; })");
             return Some(code);
         }
 

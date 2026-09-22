@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Codegen**: `Vec::get` and `Vec::pop` build a stack `Option<T>` in generated C. A dropping `get` still zero-fills the slot after the move. This impacts the C for those calls: they no longer allocate an `Option` in the runtime.
+
 ## 0.3.0 - 2026-09-21
 
 - **Language**: struct-variant patterns allow field pun (`{ state, code }`) and `..`. Tuple patterns allow one `..` rest. Match accepts literal, inclusive range, or, struct, and `@` patterns. A refutable pattern in `let` is a compile error. This impacts `match` and `let` that previously only had bindings, wildcards, and enum constructors.
