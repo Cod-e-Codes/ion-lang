@@ -257,7 +257,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_vec_search_index_ok.ion` - `find_index` returns `int`; caller uses `Vec::get` (exit 84)
 - `test_vec_push_mut_param.ion` - `Vec::push` through `&mut Vec<T>` parameter
 - `test_vec_push_nested_call.ion` - `Vec::push` with nested call expression value
-- `test_vec_push_struct_var.ion` - `Vec::push` with a struct variable (address-of lvalue)
+- `test_vec_push_struct_var.ion` - `Vec::push` with a struct variable; cgen asserts `ion_vec_reserve_one`, a typed store of the variable, and no `ion_vec_push`
 - `test_struct_field_move_vec.ion` - move a `Vec` out of a struct field without double-free
 - `test_tuple_vec_int.ion` - tuple `(Vec<T>, int)` mangling, return, and `t.f0` drop; Linux CI leak-sanitizer
 - `test_tuple_vec_int_epilogue.ion` - tuple return with loop body before epilogue `return`

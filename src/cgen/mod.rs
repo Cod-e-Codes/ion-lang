@@ -8189,8 +8189,12 @@ fn main() -> int {
         let mut cg = Codegen::new();
         let c = cg.generate(&ir, "test.ion");
         assert!(
-            c.contains("ion_vec_push((ion_vec_t*)(items), &item, sizeof(Item))"),
-            "expected address of struct variable in:\n{c}"
+            c.contains("({ ion_vec_t* _ion_v = (ion_vec_t*)(items); Item _ion_push_val = item; if (!_ion_v || (_ion_v->len >= _ion_v->capacity && ion_vec_reserve_one(_ion_v) != 0)) ion_panic(\"Vec::push failed\"); ((Item*)_ion_v->data)[_ion_v->len] = _ion_push_val; (void)(_ion_v->len++); })"),
+            "expected reserve and a typed store of item in:\n{c}"
+        );
+        assert!(
+            !c.contains("ion_vec_push"),
+            "push must not call ion_vec_push in:\n{c}"
         );
     }
 

@@ -7,7 +7,9 @@
 #include <time.h>
 #ifdef _WIN32
 #include <winsock2.h>
+#ifdef _MSC_VER
 #pragma comment(lib, "ws2_32.lib")
+#endif
 #endif
 
 #if defined(_WIN32) && !defined(CLOCK_REALTIME)
@@ -78,29 +80,6 @@ ion_vec_t *ion_vec_with_capacity(size_t elem_size, int capacity) {
   }
 
   return vec;
-}
-
-int ion_vec_push(ion_vec_t *vec, const void *value, size_t elem_size) {
-  if (!vec || !value)
-    return -1;
-  if (elem_size != vec->elem_size)
-    return -1;
-
-  // Grow if needed
-  if (vec->len >= vec->capacity) {
-    size_t new_capacity = vec->capacity == 0 ? 4 : vec->capacity * 2;
-    void *new_data = realloc(vec->data, elem_size * new_capacity);
-    if (!new_data)
-      return -1;
-    vec->data = new_data;
-    vec->capacity = new_capacity;
-  }
-
-  // Copy value to end
-  memcpy((char *)vec->data + (vec->len * elem_size), value, elem_size);
-  vec->len++;
-
-  return 0;
 }
 
 int ion_vec_set(ion_vec_t *vec, int index, const void *value,

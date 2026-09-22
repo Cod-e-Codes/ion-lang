@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -246,14 +247,27 @@ ion_vec_t *ion_vec_new(size_t elem_size);
 ion_vec_t *ion_vec_with_capacity(size_t elem_size, int capacity);
 
 /**
- * Pushes a value onto the end of the vector.
- * The value is copied into the vector.
+ * Grows a vector by one element when len >= capacity.
+ * Empty capacity becomes 4, then doubles. Allocation uses vec->elem_size.
  *
- * @param vec Vector to push to
- * @param value Pointer to value to copy (must be elem_size bytes)
- * @return 0 on success, non-zero on failure
+ * @param vec Vector to grow
+ * @return 0 on success, -1 if vec is NULL or allocation fails
  */
-int ion_vec_push(ion_vec_t *vec, const void *value, size_t elem_size);
+static inline int ion_vec_reserve_one(ion_vec_t *vec) {
+  size_t new_capacity;
+  void *new_data;
+  if (!vec)
+    return -1;
+  if (vec->len < vec->capacity)
+    return 0;
+  new_capacity = vec->capacity == 0 ? 4 : vec->capacity * 2;
+  new_data = realloc(vec->data, vec->elem_size * new_capacity);
+  if (!new_data)
+    return -1;
+  vec->data = new_data;
+  vec->capacity = new_capacity;
+  return 0;
+}
 
 /**
  * Sets a value in the vector at the given index.

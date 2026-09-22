@@ -74,11 +74,12 @@ Stable beta expectations:
   `*arg0`. Scope cleanup must not drop nested owned fields through the binding.
 - Monomorphized container typedefs use Ion type names (`Vec_String`,
   `Option_Customer`), not C runtime typedefs (`ion_string_t`, etc.).
-- `&mut Vec<T>` parameters codegen as `Vec_T**`; builtins dereference once when
-  passing the receiver to `ion_vec_push` and related helpers.
-  `Vec::get`, `Vec::pop`, and `Vec::get_ref` use the same `ion_vec_t*` receiver
-  and bounds-check in generated C. `get` and `pop` move the element into a stack
-  `Option`. `get_ref` takes the address of the slot.
+- `&mut Vec<T>` parameters codegen as `Vec_T**`; builtins dereference once.
+  `Vec::push` calls `ion_vec_reserve_one` when `len >= capacity` and writes the
+  element in the statement expression. `Vec::get`, `Vec::pop`, and `Vec::get_ref`
+  use the same `ion_vec_t*` receiver and bounds-check in generated C. `get` and
+  `pop` move the element into a stack `Option`. `get_ref` takes the address of
+  the slot.
 - Non-copy fields through `&Struct` / `&mut Struct` are already `&Field` in Ion.
   When such a field is passed to a user parameter of type `&T` / `&mut T`, codegen
   emits `&(base->field)` so the C argument is `T**` (matching the parameter), not

@@ -322,7 +322,6 @@ impl Codegen {
 
         // Vec::push<T>(vec: &mut Vec<T>, value: T)
         if callee == "Vec::push" && args.len() == 2 {
-            let mut code = String::new();
             let mut vec_code = String::new();
             let old_output = std::mem::replace(&mut self.output, vec_code);
             self.generate_expr(&args[0]);
@@ -336,55 +335,39 @@ impl Codegen {
             value_code = std::mem::replace(&mut self.output, old_output);
 
             let elem_c_type = self.resolve_vec_elem_c_type(&args[0], return_type);
-
-            let value_is_lvalue = matches!(
-                args[1],
-                IREexpr::StructLit { .. }
-                    | IREexpr::EnumLit { .. }
-                    | IREexpr::Var(_)
-                    | IREexpr::FieldAccess { .. }
-            );
             let elem_is_array = matches!(elem_ty, Some(Type::Array { .. }));
-            let mut push_call = String::new();
-            if value_is_lvalue {
-                push_call.push_str("ion_vec_push((ion_vec_t*)(");
-                push_call.push_str(&deref_vec);
-                push_call.push_str("), &");
-                push_call.push_str(&value_code);
-                push_call.push_str(", sizeof(");
-                push_call.push_str(&elem_c_type);
-                push_call.push_str("))");
-                code = wrap_status_panic(&push_call, "Vec::push failed");
-            } else if elem_is_array {
-                push_call.push_str("ion_vec_push((ion_vec_t*)(");
-                push_call.push_str(&deref_vec);
-                push_call.push_str("), ");
-                push_call.push_str(&compound_literal_addr(&elem_c_type, &value_code));
-                push_call.push_str(", sizeof(");
-                push_call.push_str(&elem_c_type);
-                push_call.push_str("))");
-                code = wrap_status_panic(&push_call, "Vec::push failed");
-            } else if matches!(args[1], IREexpr::Call { .. }) {
-                code.push_str("({ ");
+            let slot = format!("(({elem_c_type}*)_ion_v->data)[_ion_v->len]");
+
+            let mut code = String::new();
+            code.push_str("({ ion_vec_t* _ion_v = (ion_vec_t*)(");
+            code.push_str(&deref_vec);
+            code.push_str("); ");
+            code.push_str(&elem_c_type);
+            if elem_is_array {
+                code.push_str(" _ion_push_val; memcpy(&_ion_push_val, ");
+                code.push_str(&compound_literal_addr(&elem_c_type, &value_code));
+                code.push_str(", sizeof(");
                 code.push_str(&elem_c_type);
+                code.push_str(")); ");
+            } else {
                 code.push_str(" _ion_push_val = ");
                 code.push_str(&value_code);
-                code.push_str("; if (ion_vec_push((ion_vec_t*)(");
-                code.push_str(&deref_vec);
+                code.push_str("; ");
+            }
+            code.push_str(
+                "if (!_ion_v || (_ion_v->len >= _ion_v->capacity && ion_vec_reserve_one(_ion_v) != 0)) ion_panic(\"Vec::push failed\"); ",
+            );
+            if elem_is_array {
+                code.push_str("memcpy(&(");
+                code.push_str(&slot);
                 code.push_str("), &_ion_push_val, sizeof(");
                 code.push_str(&elem_c_type);
-                code.push_str(")) != 0) ion_panic(\"Vec::push failed\"); })");
+                code.push_str(")); ");
             } else {
-                push_call.push_str("ion_vec_push((ion_vec_t*)(");
-                push_call.push_str(&deref_vec);
-                push_call.push_str("), &(");
-                push_call.push_str(&format!("({}){{", elem_c_type));
-                push_call.push_str(&value_code);
-                push_call.push_str("}), sizeof(");
-                push_call.push_str(&elem_c_type);
-                push_call.push_str("))");
-                code = wrap_status_panic(&push_call, "Vec::push failed");
+                code.push_str(&slot);
+                code.push_str(" = _ion_push_val; ");
             }
+            code.push_str("(void)(_ion_v->len++); })");
             return Some(code);
         }
 
@@ -1091,7 +1074,7 @@ fn wrap_string_ptr(expr: &str, msg: &str) -> String {
     format!("({{ ion_string_t* _p = ({expr}); if (!_p) ion_panic(\"{msg}\"); _p; }})")
 }
 
-/// Address of a value for memcpy / `ion_vec_push`. Brace lists become typed compound literals.
+/// Address of a value for memcpy. Brace lists become typed compound literals.
 fn compound_literal_addr(c_ty: &str, value_code: &str) -> String {
     let trimmed = value_code.trim_start();
     if trimmed.starts_with('{') {

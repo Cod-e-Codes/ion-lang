@@ -109,9 +109,6 @@ echo "Generated $OUT_ION ($STRUCT_COUNT structs, $SPAWN_COUNT spawn sends)"
 
 CFLAGS="${CFLAGS:--Wall -Wextra -Werror}"
 RUNTIME_CFLAGS="$CFLAGS"
-case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*) RUNTIME_CFLAGS="${CFLAGS} -Wno-error=unknown-pragmas" ;;
-esac
 RUNTIME_OBJ="${RUNTIME_OBJ:-$SCRIPT_DIR/.large_codegen_runtime.o}"
 
 "$CC" $RUNTIME_CFLAGS -c "$ROOT/runtime/ion_runtime.c" -I"$ROOT" -I"$ROOT/runtime" -o "$RUNTIME_OBJ"
