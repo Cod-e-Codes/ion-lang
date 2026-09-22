@@ -1,0 +1,10 @@
+extern "C" {
+    fn ion_abort_bytes(message: *u8);
+}
+
+pub fn abort(message: String) {
+    unsafe {
+        ion_abort_bytes(message.data);
+    }
+    loop { }
+}

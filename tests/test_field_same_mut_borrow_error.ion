@@ -1,0 +1,15 @@
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn touch(p: &mut int, q: &mut int) -> int {
+    return 0;
+}
+
+fn main() -> int {
+    let mut s: Point = Point { x: 1, y: 2 };
+    let a: &mut int = &mut s.x;
+    let b: &mut int = &mut s.x;
+    return touch(a, b);
+}

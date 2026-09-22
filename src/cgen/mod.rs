@@ -9,8 +9,8 @@ use self::types::{
 };
 
 use crate::ast::{
-    BinOp, EnumDecl, EnumVariant, ExternBlock, Program, Span, StructDecl, Type, TypeAliasDecl,
-    TypeParam, UnOp,
+    BinOp, EnumDecl, EnumVariant, ExternBlock, PatLit, Program, Span, StructDecl, Type,
+    TypeAliasDecl, TypeParam, UnOp,
 };
 use crate::ir::*;
 use crate::tc::TypeInfo;
@@ -867,7 +867,7 @@ impl Codegen {
                 for field in &s.fields {
                     self.write_indent();
                     let field_decl = match &field.ty {
-                        Type::Array { inner, size } => {
+                        Type::Array { inner, size, .. } => {
                             let base_type = self.type_to_c(inner);
                             format!("{} {}[{}]", base_type, field.name, size)
                         }
@@ -1025,7 +1025,7 @@ impl Codegen {
                         }
                         // Special handling for array types: C syntax is "int arr[3]" not "int[3] arr"
                         match &param.ty {
-                            Type::Array { inner, size } => {
+                            Type::Array { inner, size, .. } => {
                                 let base_type = self.type_to_c(inner);
                                 self.write(&format!("{} {}[{}]", base_type, param.name, size));
                             }
@@ -1140,7 +1140,7 @@ impl Codegen {
                     self.write_indent();
                     // Handle arrays specially: in struct fields, arrays must be declared as "type name[size];"
                     let field_decl = match &field.ty {
-                        Type::Array { inner, size } => {
+                        Type::Array { inner, size, .. } => {
                             let base_type = type_to_c_impl(inner);
                             format!("{} {}[{}]", base_type, field.name, size)
                         }
@@ -1182,7 +1182,7 @@ impl Codegen {
                         }
                         // Special handling for array types: C syntax is "int arr[3]" not "int[3] arr"
                         match &param.ty {
-                            Type::Array { inner, size } => {
+                            Type::Array { inner, size, .. } => {
                                 let base_type = type_to_c_impl(inner);
                                 self.write(&format!("{} {}[{}]", base_type, param.name, size));
                             }
@@ -1312,59 +1312,103 @@ impl Codegen {
             .or_else(|| self.current_function_params.get(name).cloned())
     }
 
-    fn infer_irexpr_type(&self, expr: &IREexpr) -> Option<Type> {
+    fn index_element_type(ty: &Type) -> Option<Type> {
+        match ty {
+            Type::Array { inner, .. } | Type::Slice { inner } => Some((**inner).clone()),
+            Type::Vec { elem_type } => Some((**elem_type).clone()),
+            Type::String => Some(Type::U8),
+            Type::Ref { inner, .. } => Self::index_element_type(inner),
+            _ => None,
+        }
+    }
+
+    /// Type stored on the IR node by lowering from `TypeInfo`. Does not walk struct fields or guess callees.
+    fn stored_expr_type(&self, expr: &IREexpr) -> Option<Type> {
         match expr {
             IREexpr::Var(name) => self.lookup_var_type(name),
             IREexpr::StringLit(_) => Some(Type::String),
-            IREexpr::FieldAccess { base, field, .. } => {
-                let base_ty = if let IREexpr::Var(name) = base.as_ref() {
-                    self.lookup_var_type(name)?
-                } else {
-                    self.infer_irexpr_type(base)?
-                };
-                let field_ty = {
-                    let struct_ty = match &base_ty {
-                        Type::Ref { inner, .. } => inner.as_ref(),
-                        other => other,
-                    };
-                    if let Type::Tuple { elements } = struct_ty {
-                        let idx = field
-                            .strip_prefix('f')
-                            .and_then(|s| s.parse::<usize>().ok())?;
-                        elements.get(idx)?.clone()
-                    } else {
-                        let (decl, substitutions) = self.struct_decl_for_type(struct_ty)?;
-                        let field_decl = decl.fields.iter().find(|f| f.name == *field)?;
-                        Self::substitute_field_types(&field_decl.ty, &substitutions)
-                    }
-                };
-                match base_ty {
-                    Type::Ref { mutable, .. } if self.type_needs_drop(&field_ty) => {
-                        Some(Type::Ref {
-                            inner: Box::new(field_ty),
-                            mutable,
-                        })
-                    }
-                    _ => Some(field_ty),
-                }
+            IREexpr::BoolLiteral(_) => Some(Type::Bool),
+            IREexpr::Lit(_) => Some(Type::Int),
+            IREexpr::FloatLiteral(_) => Some(Type::F64),
+            IREexpr::IntLimit { ty, .. } => Some(ty.clone()),
+            IREexpr::FieldAccess { ty, .. } => Some(ty.clone()),
+            IREexpr::AddressOf { ty, .. } => Some(ty.clone()),
+            IREexpr::BinOp { result_type, .. } | IREexpr::UnOp { result_type, .. } => {
+                Some(result_type.clone())
             }
-            IREexpr::AddressOf { inner, mutable } => {
-                self.infer_irexpr_type(inner).map(|inner_ty| Type::Ref {
-                    inner: Box::new(inner_ty),
-                    mutable: *mutable,
-                })
-            }
-            IREexpr::Call { callee, .. } => match callee.as_str() {
-                "String::new" | "String::from" => Some(Type::String),
-                "join" => Some(Type::Void),
-                _ => None,
-            },
+            IREexpr::Call { return_type, .. } => return_type.clone(),
             IREexpr::TupleLit { elem_types, .. } => Some(Type::Tuple {
                 elements: elem_types.clone(),
             }),
             IREexpr::Spawn { .. } => Some(Type::JoinHandle),
-            _ => None,
+            IREexpr::Cast { target_type, .. } => Some(target_type.clone()),
+            IREexpr::Index { target_type, .. } => target_type.as_ref().and_then(|ty| {
+                let resolved = resolve_type_alias(ty, &self.type_aliases);
+                Self::index_element_type(&resolved)
+            }),
+            IREexpr::EnumLit { ty, .. } => Some(ty.clone()),
+            IREexpr::Send { .. } | IREexpr::Recv { .. } | IREexpr::StructLit { .. } => None,
+            IREexpr::Match { result_type, .. } => Some(result_type.clone()),
+            IREexpr::ArrayLiteral { .. }
+            | IREexpr::Assign { .. }
+            | IREexpr::AssignIndex { .. }
+            | IREexpr::AssignField { .. }
+            | IREexpr::FnLiteral(_) => None,
         }
+    }
+
+    /// The struct or tuple member is stored as a reference, so the C field is already that pointer.
+    fn field_member_is_reference(&self, expr: &IREexpr) -> bool {
+        let IREexpr::FieldAccess { base, field, .. } = expr else {
+            return false;
+        };
+        let Some(base_ty) = self.stored_expr_type(base) else {
+            return false;
+        };
+        let base_ty = match resolve_type_alias(&base_ty, &self.type_aliases) {
+            Type::Ref { inner, .. } => resolve_type_alias(inner.as_ref(), &self.type_aliases),
+            other => other,
+        };
+        let field_ty = match &base_ty {
+            Type::Struct(name) | Type::Generic { name, .. } => {
+                let Some(decl) = self.struct_map.get(name) else {
+                    return false;
+                };
+                let params = match &base_ty {
+                    Type::Generic { params, .. } => params.clone(),
+                    _ => Vec::new(),
+                };
+                let substitutions = decl
+                    .generics
+                    .iter()
+                    .zip(params.iter())
+                    .map(|(param, ty)| (param.name.clone(), ty))
+                    .collect::<HashMap<_, _>>();
+                let Some(field_decl) = decl.fields.iter().find(|f| f.name == *field) else {
+                    return false;
+                };
+                substitute_type_params(&field_decl.ty, &substitutions)
+            }
+            Type::Tuple { elements } => {
+                let index = field
+                    .strip_prefix('f')
+                    .unwrap_or(field)
+                    .parse::<usize>()
+                    .ok();
+                let Some(index) = index else {
+                    return false;
+                };
+                let Some(elem) = elements.get(index) else {
+                    return false;
+                };
+                elem.clone()
+            }
+            _ => return false,
+        };
+        matches!(
+            resolve_type_alias(&field_ty, &self.type_aliases),
+            Type::Ref { .. }
+        )
     }
 
     fn binding_is_ref_param(&self, name: &str, pointee: fn(&Type) -> bool) -> bool {
@@ -1439,19 +1483,14 @@ impl Codegen {
     }
 
     pub(crate) fn vec_elem_type_from_arg(&self, arg: &IREexpr) -> Option<Type> {
-        let inner_ty = match arg {
-            IREexpr::AddressOf { inner, .. } => self.infer_irexpr_type(inner)?,
-            _ => self.infer_irexpr_type(arg)?,
-        };
-        ref_to_vec_elem(&inner_ty).cloned()
+        let ty = self.stored_expr_type(arg)?;
+        ref_to_vec_elem(&ty).cloned()
     }
 
     pub(crate) fn slice_elem_type_from_arg(&self, arg: &IREexpr) -> Option<Type> {
-        let ty = match arg {
-            IREexpr::AddressOf { inner, .. } => self.infer_irexpr_type(inner)?,
-            _ => self.infer_irexpr_type(arg)?,
-        };
-        match ty {
+        let ty = self.stored_expr_type(arg)?;
+        let resolved = resolve_type_alias(&ty, &self.type_aliases);
+        match resolved {
             Type::Slice { inner } => Some(*inner),
             Type::Array { inner, .. } => Some(*inner),
             Type::Ref { inner, .. } => match *inner {
@@ -1476,6 +1515,7 @@ impl Codegen {
         let Type::Array {
             inner: array_elem,
             size,
+            ..
         } = var_ty
         else {
             return None;
@@ -1604,6 +1644,7 @@ impl Codegen {
                 base,
                 field,
                 is_pointer,
+                ..
             } => {
                 let base_path = self.field_access_c_path(base)?;
                 Some(if *is_pointer {
@@ -1624,7 +1665,7 @@ impl Codegen {
         let Some(path) = self.field_access_c_path(expr) else {
             return;
         };
-        let Some(ty) = self.infer_irexpr_type(expr) else {
+        let Some(ty) = self.stored_expr_type(expr) else {
             return;
         };
         if !self.needs_drop(&ty) {
@@ -1650,7 +1691,7 @@ impl Codegen {
     }
 
     fn is_string_compare_operand(&self, expr: &IREexpr) -> bool {
-        match self.infer_irexpr_type(expr) {
+        match self.stored_expr_type(expr) {
             Some(Type::String) => true,
             Some(Type::Ref { inner, .. }) => matches!(*inner, Type::String),
             _ => false,
@@ -1662,7 +1703,7 @@ impl Codegen {
             self.write_ion_string_from_literal(value);
             return;
         }
-        let needs_deref = match self.infer_irexpr_type(expr) {
+        let needs_deref = match self.stored_expr_type(expr) {
             Some(Type::Ref { inner, .. }) => matches!(*inner, Type::String),
             _ => false,
         };
@@ -1677,7 +1718,7 @@ impl Codegen {
 
     fn emit_binop_operand(&mut self, expr: &IREexpr) {
         let needs_deref = self
-            .infer_irexpr_type(expr)
+            .stored_expr_type(expr)
             .is_some_and(|ty| matches!(ty, Type::Ref { inner, .. } if matches!(*inner, Type::Int | Type::Bool | Type::F32 | Type::F64 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::UInt)));
         if needs_deref {
             self.write("(*");
@@ -1711,11 +1752,15 @@ impl Codegen {
             return;
         }
         if matches!(op, BinOp::Eq | BinOp::Ne)
-            && let Some(left_ty) = self.infer_irexpr_type(left)
+            && let Some(left_ty) = self.stored_expr_type(left)
         {
             let resolved = resolve_type_alias(&left_ty, &self.type_aliases);
             if let Type::Tuple { elements } = resolved {
                 self.generate_tuple_equality(op, left, right, &elements, extra_parens);
+                return;
+            }
+            if self.needs_structural_eq(&resolved) {
+                self.generate_structural_equality(op, left, right, &resolved, extra_parens);
                 return;
             }
         }
@@ -1896,13 +1941,159 @@ impl Codegen {
         }
     }
 
+    fn needs_structural_eq(&self, ty: &Type) -> bool {
+        let resolved = resolve_type_alias(ty, &self.type_aliases);
+        matches!(resolved, Type::Array { .. })
+            || self.struct_decl_for_type(&resolved).is_some()
+            || self.enum_decl_for_type(&resolved).is_some()
+    }
+
+    fn generate_structural_equality(
+        &mut self,
+        op: BinOp,
+        left: &IREexpr,
+        right: &IREexpr,
+        ty: &Type,
+        extra_parens: bool,
+    ) {
+        let _ = extra_parens;
+        let left_code = self.capture_binop_operand(left);
+        let right_code = self.capture_binop_operand(right);
+        self.write("({ ");
+        let cmp = if matches!(ty, Type::Array { .. }) {
+            self.value_eq_c_expr(&left_code, &right_code, ty)
+        } else {
+            let n = self.temp_var_counter;
+            self.temp_var_counter += 1;
+            let lt = format!("_ion_el{n}");
+            let rt = format!("_ion_er{n}");
+            let c_ty = self.type_to_c(ty);
+            self.write(&format!(
+                "{c_ty} {lt} = {left_code}; {c_ty} {rt} = {right_code}; "
+            ));
+            self.value_eq_c_expr(&lt, &rt, ty)
+        };
+        if matches!(op, BinOp::Ne) {
+            self.write(&format!("!({cmp}); }})"));
+        } else {
+            self.write(&format!("{cmp}; }})"));
+        }
+    }
+
     fn value_eq_c_expr(&self, left: &str, right: &str, ty: &Type) -> String {
         let resolved = resolve_type_alias(ty, &self.type_aliases);
         match resolved {
             Type::String | Type::Str => format!("ion_string_equals({left}, {right})"),
             Type::Tuple { elements } => self.tuple_eq_c_expr(left, right, &elements),
+            Type::Array { inner, size, .. } => self.array_eq_c_expr(left, right, &inner, size),
+            other if self.struct_decl_for_type(&other).is_some() => {
+                self.struct_eq_c_expr(left, right, &other)
+            }
+            other if self.enum_decl_for_type(&other).is_some() => {
+                self.enum_eq_c_expr(left, right, &other)
+            }
             _ => format!("(({left}) == ({right}))"),
         }
+    }
+
+    fn array_eq_c_expr(&self, left: &str, right: &str, elem: &Type, size: usize) -> String {
+        if size == 0 {
+            return "1".to_string();
+        }
+        let parts: Vec<String> = (0..size)
+            .map(|i| {
+                self.value_eq_c_expr(&format!("({left})[{i}]"), &format!("({right})[{i}]"), elem)
+            })
+            .collect();
+        format!("({})", parts.join(" && "))
+    }
+
+    fn struct_eq_c_expr(&self, left: &str, right: &str, ty: &Type) -> String {
+        let Some((decl, subs)) = self.struct_decl_for_type(ty) else {
+            return format!("(({left}) == ({right}))");
+        };
+        let fields: Vec<(String, Type)> = decl
+            .fields
+            .iter()
+            .map(|field| {
+                (
+                    field.name.clone(),
+                    Self::substitute_field_types(&field.ty, &subs),
+                )
+            })
+            .collect();
+        if fields.is_empty() {
+            return "1".to_string();
+        }
+        let parts: Vec<String> = fields
+            .iter()
+            .map(|(name, field_ty)| {
+                self.value_eq_c_expr(
+                    &format!("{left}.{name}"),
+                    &format!("{right}.{name}"),
+                    field_ty,
+                )
+            })
+            .collect();
+        format!("({})", parts.join(" && "))
+    }
+
+    fn enum_eq_c_expr(&self, left: &str, right: &str, ty: &Type) -> String {
+        let Some((decl, subs)) = self.enum_decl_for_type(ty) else {
+            return format!("(({left}) == ({right}))");
+        };
+        let arms: Vec<(usize, Vec<(String, Type)>)> = decl
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(index, variant)| {
+                let fields = if let Some(named) = &variant.named_fields {
+                    named
+                        .iter()
+                        .map(|(name, field_ty)| {
+                            (name.clone(), Self::substitute_field_types(field_ty, &subs))
+                        })
+                        .collect()
+                } else {
+                    variant
+                        .payload_types
+                        .iter()
+                        .enumerate()
+                        .map(|(arg_index, field_ty)| {
+                            (
+                                format!("arg{arg_index}"),
+                                Self::substitute_field_types(field_ty, &subs),
+                            )
+                        })
+                        .collect()
+                };
+                (index, fields)
+            })
+            .collect();
+        let checks: Vec<String> = arms
+            .iter()
+            .filter(|(_, fields)| !fields.is_empty())
+            .map(|(index, fields)| {
+                let body = fields
+                    .iter()
+                    .map(|(name, field_ty)| {
+                        self.value_eq_c_expr(
+                            &format!("{left}.data.variant_{index}.{name}"),
+                            &format!("{right}.data.variant_{index}.{name}"),
+                            field_ty,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" && ");
+                format!("({left}.tag != {index} || ({body}))")
+            })
+            .collect();
+        let payload = if checks.is_empty() {
+            "1".to_string()
+        } else {
+            checks.join(" && ")
+        };
+        format!("(({left}.tag == {right}.tag) && ({payload}))")
     }
 
     fn slice_struct_name_for_elem(&self, elem_ty: &Type) -> String {
@@ -1932,6 +2123,7 @@ impl Codegen {
         let IREexpr::AddressOf {
             inner,
             mutable: init_mut,
+            ..
         } = init
         else {
             return None;
@@ -1947,6 +2139,7 @@ impl Codegen {
         let Type::Array {
             inner: array_elem,
             size,
+            ..
         } = var_ty
         else {
             return None;
@@ -2112,7 +2305,7 @@ impl Codegen {
 
             if is_array_return {
                 if let Some(ret_ty) = self.current_return_type.clone()
-                    && let Type::Array { inner, size } = &ret_ty
+                    && let Type::Array { inner, size, .. } = &ret_ty
                 {
                     let base_type = self.type_to_c(inner);
                     self.writeln(&format!("static {} _ret_array[{}] = ", base_type, size));
@@ -2130,6 +2323,7 @@ impl Codegen {
                     enum_type,
                     arms,
                     scrutinee_type,
+                    ..
                 } = value
                 {
                     if let Some(ref ty) = return_ty {
@@ -2216,7 +2410,7 @@ impl Codegen {
         params
             .iter()
             .map(|param| match &param.ty {
-                Type::Array { inner, size } => {
+                Type::Array { inner, size, .. } => {
                     format!("{} {}[{}]", self.type_to_c(inner), param.name, size)
                 }
                 Type::Fn { .. } => fn_type_to_c_decl(&param.ty, &param.name),
@@ -2348,7 +2542,7 @@ impl Codegen {
                     self.fn_literal_forward_decls.push_str(", ");
                 }
                 match &param.ty {
-                    Type::Array { inner, size } => {
+                    Type::Array { inner, size, .. } => {
                         let base_type = self.type_to_c(inner);
                         self.fn_literal_forward_decls
                             .push_str(&format!("{} {}[{}]", base_type, param.name, size));
@@ -2380,7 +2574,7 @@ impl Codegen {
                     def.push_str(", ");
                 }
                 match &param.ty {
-                    Type::Array { inner, size } => {
+                    Type::Array { inner, size, .. } => {
                         let base_type = self.type_to_c(inner);
                         def.push_str(&format!("{} {}[{}]", base_type, param.name, size));
                     }
@@ -2923,7 +3117,7 @@ impl Codegen {
                 } else {
                     // Special handling for array types: C syntax is "int arr[3]" not "int[3] arr"
                     match &let_stmt.ty {
-                        Type::Array { inner, size } => {
+                        Type::Array { inner, size, .. } => {
                             let base_type = self.type_to_c(inner);
                             self.write(&format!("{} {}[{}]", base_type, let_stmt.name, size));
                         }
@@ -2984,6 +3178,7 @@ impl Codegen {
                         enum_type,
                         arms,
                         scrutinee_type,
+                        ..
                     } = init
                     {
                         self.writeln(";");
@@ -3015,8 +3210,6 @@ impl Codegen {
                             if let IREexpr::Call { callee, .. } = init {
                                 let needs_cast = callee == "Vec::pop"
                                     || callee == "Vec::get"
-                                    || callee == "METHOD::pop"
-                                    || callee == "METHOD::get"
                                     || callee.starts_with("ion_vec_pop")
                                     || callee.starts_with("ion_vec_get");
 
@@ -3084,6 +3277,7 @@ impl Codegen {
                         enum_type,
                         arms,
                         scrutinee_type,
+                        ..
                     } => {
                         self.generate_match_block(
                             match_expr,
@@ -3137,18 +3331,14 @@ impl Codegen {
                         ..
                     } if callee == "try_send" && args.len() == 2 => {
                         let sender_addr = self.sender_addr_code(&args[0]);
-                        let value_type = return_type
-                            .as_ref()
-                            .and_then(|t| match t {
-                                Type::Generic { name, params }
-                                    if name == "TrySendResult" && params.len() == 1 =>
-                                {
-                                    Some(params[0].clone())
-                                }
-                                _ => None,
-                            })
-                            .or_else(|| self.infer_irexpr_type(&args[1]))
-                            .unwrap_or(Type::Int);
+                        let value_type = match return_type.as_ref() {
+                            Some(Type::Generic { name, params })
+                                if name == "TrySendResult" && params.len() == 1 =>
+                            {
+                                params[0].clone()
+                            }
+                            _ => panic!("compiler bug: try_send missing TrySendResult type"),
+                        };
                         let val_tmp = format!("_try_send_val_{}", self.temp_var_counter);
                         self.temp_var_counter += 1;
                         let st_tmp = format!("_try_send_st_{}", self.temp_var_counter);
@@ -3183,6 +3373,33 @@ impl Codegen {
                         self.write("(void)(");
                         self.generate_expr(expr);
                         self.writeln(");");
+                        self.mark_moves_in_expr(expr);
+                        self.flush_pending_field_nulls();
+                    }
+                    IREexpr::AssignField {
+                        target,
+                        value,
+                        field_ty,
+                    } => {
+                        if self.type_needs_drop(field_ty) {
+                            let path = self.capture_expr_code(target);
+                            let tmp = format!("_ion_set_{}", self.temp_var_counter);
+                            self.temp_var_counter += 1;
+                            let c_ty = self.type_to_c(field_ty);
+                            self.write_indent();
+                            self.write(&format!("{c_ty} {tmp} = "));
+                            self.generate_expr_with_type(value, Some(field_ty));
+                            self.writeln(";");
+                            self.emit_drop_at_path(&path, field_ty);
+                            self.write_indent();
+                            self.writeln(&format!("{path} = {tmp};"));
+                        } else {
+                            self.write_indent();
+                            self.generate_expr(target);
+                            self.write(" = ");
+                            self.generate_expr_with_type(value, Some(field_ty));
+                            self.writeln(";");
+                        }
                         self.mark_moves_in_expr(expr);
                         self.flush_pending_field_nulls();
                     }
@@ -3335,7 +3552,9 @@ impl Codegen {
                     self.write(name);
                 }
             }
-            IREexpr::AddressOf { inner, mutable: _ } => {
+            IREexpr::AddressOf {
+                inner, mutable: _, ..
+            } => {
                 // Generate address-of: &x
                 self.write("&");
                 self.generate_expr(inner);
@@ -3488,6 +3707,7 @@ impl Codegen {
                 base,
                 field,
                 is_pointer,
+                ..
             } => {
                 // Special handling for String literal field access
                 if let IREexpr::Var(ref var_name) = **base {
@@ -3556,22 +3776,17 @@ impl Codegen {
                     let use_arrow = match base.as_ref() {
                         IREexpr::FieldAccess { .. } => false,
                         _ => {
-                            if let Some(ty) = self.infer_irexpr_type(base) {
-                                matches!(
-                                    ty,
-                                    Type::Ref {
-                                        inner,
-                                        ..
-                                    } if matches!(
+                            let ty = self.stored_expr_type(base).unwrap_or_else(|| {
+                                panic!("compiler bug: field access base missing checked type")
+                            });
+                            matches!(
+                                ty,
+                                Type::Ref { inner, .. }
+                                    if matches!(
                                         *inner,
-                                        Type::Struct(_)
-                                            | Type::Generic { .. }
-                                            | Type::Tuple { .. }
+                                        Type::Struct(_) | Type::Generic { .. } | Type::Tuple { .. }
                                     )
-                                )
-                            } else {
-                                *is_pointer
-                            }
+                            )
                         }
                     };
                     self.generate_expr(base);
@@ -3619,10 +3834,29 @@ impl Codegen {
                 enum_type,
                 arms,
                 scrutinee_type,
+                result_type,
             } => {
                 self.write("({ ");
-                self.generate_match_block(expr, enum_type, arms, None, scrutinee_type.as_ref());
-                self.write(" 0 })");
+                self.scope_begin(&[]);
+                if !matches!(result_type, Type::Void) {
+                    let result_name = format!("_ion_match_res_{}", self.temp_var_counter);
+                    self.temp_var_counter += 1;
+                    self.write_indent();
+                    self.writeln(&format!("{} {result_name};", self.type_to_c(result_type)));
+                    self.generate_match_block(
+                        expr,
+                        enum_type,
+                        arms,
+                        Some((&result_name, result_type)),
+                        scrutinee_type.as_ref(),
+                    );
+                    self.scope_emit_exit();
+                    self.write(&format!("{result_name}; }})"));
+                } else {
+                    self.generate_match_block(expr, enum_type, arms, None, scrutinee_type.as_ref());
+                    self.scope_emit_exit();
+                    self.write("0; })");
+                }
             }
             IREexpr::Call {
                 callee,
@@ -3630,12 +3864,7 @@ impl Codegen {
                 return_type,
                 tuple_destructure_index: _,
             } => {
-                // Resolve METHOD:: prefix for method calls
-                let resolved_callee = if callee.starts_with("METHOD::") {
-                    self.resolve_method_call(callee, args)
-                } else {
-                    callee.clone()
-                };
+                let resolved_callee = callee.clone();
 
                 // Handle special built-in functions
                 let builtin_return_type = match resolved_callee.as_str() {
@@ -3685,6 +3914,7 @@ impl Codegen {
                             && let IREexpr::AddressOf {
                                 inner,
                                 mutable: arg_mutable,
+                                ..
                             } = arg
                         {
                             // Only dereference if parameter is &int (immutable) and argument is also &int (immutable)
@@ -3713,9 +3943,12 @@ impl Codegen {
                         // Non-copy field through &Struct / &mut Struct is already &Field in
                         // Ion (ION_SPEC §5.3). C still loads the field (c->data as Vec*), so
                         // take its address when the callee expects &T / &mut T (Vec**).
+                        // A field whose own type is a reference is already that pointer
+                        // (`h.v` is `int*`). Another `&` would be `int**`.
                         if matches!(param_ty, Some(Type::Ref { .. }))
                             && matches!(arg, IREexpr::FieldAccess { .. })
-                            && matches!(self.infer_irexpr_type(arg), Some(Type::Ref { .. }))
+                            && matches!(self.stored_expr_type(arg), Some(Type::Ref { .. }))
+                            && !self.field_member_is_reference(arg)
                         {
                             self.write("&(");
                             self.generate_expr(arg);
@@ -3896,22 +4129,14 @@ impl Codegen {
                 value,
                 target_type,
             } => {
-                let elem_ty = match self.infer_irexpr_type(target) {
-                    Some(Type::Array { inner, .. }) => Some(*inner),
-                    Some(Type::Ref { inner, .. }) => match *inner {
-                        Type::Array { inner, .. } => Some(*inner),
-                        Type::Slice { inner } => Some(*inner),
-                        Type::String => Some(Type::U8),
-                        _ => None,
-                    },
-                    Some(Type::Slice { inner }) => Some(*inner),
-                    Some(Type::String) => Some(Type::U8),
-                    _ => None,
-                };
-                let resolved_target = target_type
-                    .clone()
-                    .or_else(|| self.infer_irexpr_type(target));
-                let bounds_check = self.bounds_check_for_target_type(resolved_target.as_ref());
+                let resolved_target = target_type.clone().unwrap_or_else(|| {
+                    panic!("compiler bug: index assignment missing checked target type")
+                });
+                let elem_ty = Self::index_element_type(&resolve_type_alias(
+                    &resolved_target,
+                    &self.type_aliases,
+                ));
+                let bounds_check = self.bounds_check_for_target_type(Some(&resolved_target));
                 let mut value_code = String::new();
                 let old = std::mem::replace(&mut self.output, value_code);
                 self.generate_expr_with_type(value, elem_ty.as_ref());
@@ -3982,11 +4207,14 @@ impl Codegen {
                     }
                 }
             }
-            IREexpr::AssignField { target, value } => {
+            IREexpr::AssignField {
+                target,
+                value,
+                field_ty,
+            } => {
                 self.generate_expr(target);
                 self.write(" = ");
-                let field_ty = self.infer_irexpr_type(target);
-                self.generate_expr_with_type(value, field_ty.as_ref());
+                self.generate_expr_with_type(value, Some(field_ty));
             }
             IREexpr::FnLiteral(lit) => {
                 self.generate_fn_literal(lit);
@@ -4330,7 +4558,7 @@ impl Codegen {
                                 self.type_to_c(&param.ty)
                             }
                         }
-                        Type::Array { inner, size } => {
+                        Type::Array { inner, size, .. } => {
                             let base_type = self.type_to_c(inner);
                             format!("{} {}[{}]", base_type, param.name, size)
                         }
@@ -4338,7 +4566,7 @@ impl Codegen {
                     };
                     // Special handling for array types: C syntax is "int arr[3]" not "int[3] arr"
                     match &param.ty {
-                        Type::Array { inner, size } => {
+                        Type::Array { inner, size, .. } => {
                             let base_type = self.type_to_c(inner);
                             self.write(&format!("{} {}[{}]", base_type, param.name, size));
                         }
@@ -4363,104 +4591,6 @@ impl Codegen {
         self.writeln("");
     }
 
-    /// Resolve METHOD:: prefix to actual qualified method name
-    /// This infers the type from common patterns (Vec, String, Slice, etc.)
-    fn resolve_method_call(&self, callee: &str, args: &[IREexpr]) -> String {
-        if !callee.starts_with("METHOD::") {
-            return callee.to_string();
-        }
-
-        let method_name = callee.strip_prefix("METHOD::").unwrap_or(callee);
-        let vec_methods = [
-            "push",
-            "pop",
-            "len",
-            "capacity",
-            "get",
-            "get_ref",
-            "set",
-            "with_capacity",
-        ];
-        let string_methods = ["push_str", "push_byte", "len", "get"];
-
-        if let Some(receiver) = args.first() {
-            let receiver_ty = match receiver {
-                IREexpr::Var(name) => self.lookup_var_type(name),
-                IREexpr::AddressOf { inner, .. } => match inner.as_ref() {
-                    IREexpr::Var(name) => self.lookup_var_type(name),
-                    _ => None,
-                },
-                IREexpr::Call {
-                    callee: inner_callee,
-                    ..
-                } => {
-                    if inner_callee == "Vec::new" && vec_methods.contains(&method_name) {
-                        return format!("Vec::{method_name}");
-                    }
-                    if inner_callee == "String::new" && string_methods.contains(&method_name) {
-                        return format!("String::{method_name}");
-                    }
-                    None
-                }
-                _ => None,
-            };
-            let receiver_is_string = match receiver_ty.as_ref() {
-                Some(Type::String) => true,
-                Some(Type::Ref { inner, .. }) => matches!(**inner, Type::String),
-                _ => false,
-            };
-            let receiver_is_slice = match receiver_ty.as_ref() {
-                Some(Type::Slice { .. } | Type::Array { .. }) => true,
-                Some(Type::Ref { inner, .. }) => {
-                    matches!(**inner, Type::Slice { .. } | Type::Array { .. })
-                }
-                _ => false,
-            };
-            let receiver_is_arena = match receiver_ty.as_ref() {
-                Some(Type::Generic { name, .. }) if name == "Arena" => true,
-                Some(Type::Struct(name)) if name == "Arena" => true,
-                Some(Type::Ref { inner, .. }) => match inner.as_ref() {
-                    Type::Generic { name, .. } if name == "Arena" => true,
-                    Type::Struct(name) if name == "Arena" => true,
-                    _ => false,
-                },
-                _ => false,
-            };
-            let receiver_is_file = match receiver_ty.as_ref() {
-                Some(Type::File) => true,
-                Some(Type::Ref { inner, .. }) => matches!(**inner, Type::File),
-                _ => false,
-            };
-            if (method_name == "get_ref" || method_name == "len") && receiver_is_slice {
-                return format!("Slice::{method_name}");
-            }
-            if method_name == "get_ref" && receiver_is_arena {
-                return "Arena::get_ref".to_string();
-            }
-            if matches!(method_name, "read" | "write" | "close") && receiver_is_file {
-                return format!("File::{method_name}");
-            }
-            if string_methods.contains(&method_name) && receiver_is_string {
-                return format!("String::{method_name}");
-            }
-            if vec_methods.contains(&method_name)
-                && !receiver_is_string
-                && !receiver_is_slice
-                && !receiver_is_arena
-            {
-                return format!("Vec::{method_name}");
-            }
-        }
-
-        if vec_methods.contains(&method_name) {
-            format!("Vec::{method_name}")
-        } else if string_methods.contains(&method_name) {
-            format!("String::{method_name}")
-        } else {
-            callee.to_string()
-        }
-    }
-
     /// Find the monomorphized enum name and type parameters for a given base enum name
     fn find_enum_instantiation(
         &self,
@@ -4475,13 +4605,10 @@ impl Codegen {
         {
             (mono_name, params)
         } else if let Some(decl) = enum_decl {
-            // If not found in instantiations but enum is generic, compute it
             if !decl.generics.is_empty() {
-                // This shouldn't happen in well-typed code, but fallback to base name
-                (enum_type.to_string(), Vec::new())
-            } else {
-                (enum_type.to_string(), Vec::new())
+                panic!("compiler bug: generic enum '{enum_type}' match missing instantiation")
             }
+            (enum_type.to_string(), Vec::new())
         } else {
             (enum_type.to_string(), Vec::new())
         }
@@ -4501,14 +4628,6 @@ impl Codegen {
         {
             return (mangle_type_name(name, params), params.clone());
         }
-        if let Some(inferred) = self.infer_irexpr_type(scrutinee)
-            && let Type::Generic { name, params } = &inferred
-            && name == enum_type
-            && !params.is_empty()
-        {
-            return (mangle_type_name(name, params), params.clone());
-        }
-
         if let IREexpr::Call {
             callee,
             args,
@@ -4516,10 +4635,7 @@ impl Codegen {
             ..
         } = scrutinee
         {
-            let is_vec_pop_or_get = callee == "Vec::pop"
-                || callee == "Vec::get"
-                || callee == "METHOD::pop"
-                || callee == "METHOD::get";
+            let is_vec_pop_or_get = callee == "Vec::pop" || callee == "Vec::get";
 
             if is_vec_pop_or_get
                 || callee == "Vec::get_ref"
@@ -4588,6 +4704,276 @@ impl Codegen {
         self.find_enum_instantiation(enum_type, enum_decl)
     }
 
+    fn is_value_scrutinee(ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Int
+                | Type::Bool
+                | Type::String
+                | Type::Struct(_)
+                | Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+                | Type::UInt
+        )
+    }
+
+    fn value_pattern_condition(&self, pattern: &IRPattern, var: &str) -> Option<String> {
+        match pattern {
+            IRPattern::Lit { lit } => Some(match lit {
+                PatLit::Int(n) => format!("{var} == {n}"),
+                PatLit::Bool(true) => var.to_string(),
+                PatLit::Bool(false) => format!("!{var}"),
+                PatLit::Str(text) => {
+                    let escaped = Self::escape_c_string_literal_content(text);
+                    let len = text.len();
+                    if len == 0 {
+                        format!("({var} && {var}->len == 0)")
+                    } else {
+                        format!(
+                            "({var} && {var}->len == {len} && memcmp({var}->data, \"{escaped}\", {len}) == 0)"
+                        )
+                    }
+                }
+            }),
+            IRPattern::Range { lo, hi } => Some(format!("{var} >= {lo} && {var} <= {hi}")),
+            IRPattern::Struct { fields, .. } => {
+                let parts: Vec<String> = fields
+                    .iter()
+                    .filter_map(|(field, pat)| {
+                        self.value_pattern_condition(pat, &format!("{var}.{field}"))
+                    })
+                    .collect();
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join(" && "))
+                }
+            }
+            IRPattern::At { pattern, .. } => self.value_pattern_condition(pattern, var),
+            IRPattern::Or { alts } => {
+                let parts: Vec<String> = alts
+                    .iter()
+                    .filter_map(|alt| self.value_pattern_condition(alt, var))
+                    .collect();
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(format!("({})", parts.join(" || ")))
+                }
+            }
+            IRPattern::Binding { .. }
+            | IRPattern::Wildcard
+            | IRPattern::Rest
+            | IRPattern::Variant { .. } => None,
+        }
+    }
+
+    fn emit_value_pattern_bindings(
+        &mut self,
+        pattern: &IRPattern,
+        ty: &Type,
+        src: &str,
+        through_ref: bool,
+    ) {
+        match pattern {
+            IRPattern::Binding { name } => {
+                self.emit_pattern_binding(ty, name, src, through_ref);
+            }
+            IRPattern::At { name, pattern } => {
+                self.emit_pattern_binding(ty, name, src, through_ref);
+                let next = if through_ref {
+                    format!("(*{name})")
+                } else {
+                    name.clone()
+                };
+                self.emit_value_pattern_bindings(pattern, ty, &next, through_ref);
+            }
+            IRPattern::Struct { name, fields, .. } => {
+                let decl = self.struct_map.get(name).cloned().unwrap_or_else(|| {
+                    panic!("compiler bug: struct pattern '{name}' has no struct declaration")
+                });
+                let substitutions: HashMap<String, &Type> = match ty {
+                    Type::Generic { params, .. } => decl
+                        .generics
+                        .iter()
+                        .zip(params.iter())
+                        .map(|(param, ty)| (param.name.clone(), ty))
+                        .collect(),
+                    _ => HashMap::new(),
+                };
+                for (field, field_pattern) in fields {
+                    let field_ty = decl
+                        .fields
+                        .iter()
+                        .find(|item| item.name == *field)
+                        .map(|item| item.ty.clone())
+                        .unwrap_or_else(|| {
+                            panic!("compiler bug: struct '{name}' has no field '{field}'")
+                        });
+                    let field_ty = if substitutions.is_empty() {
+                        field_ty
+                    } else {
+                        substitute_type_params(&field_ty, &substitutions)
+                    };
+                    let field_src = format!("({src}).{field}");
+                    self.emit_value_pattern_bindings(
+                        field_pattern,
+                        &field_ty,
+                        &field_src,
+                        through_ref,
+                    );
+                }
+            }
+            IRPattern::Or { alts } => {
+                if let Some(alt) = alts.first() {
+                    self.emit_value_pattern_bindings(alt, ty, src, through_ref);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Bind `src`. Through `&` / `&mut`, a non-copy place is a reborrow (`&src`)
+    /// and is not cleared or dropped. An owned non-copy place is moved out.
+    fn emit_pattern_binding(&mut self, ty: &Type, name: &str, src: &str, through_ref: bool) {
+        if through_ref && !crate::tc::TypeChecker::is_copy_type(ty) {
+            let ref_ty = Type::Ref {
+                inner: Box::new(ty.clone()),
+                mutable: false,
+            };
+            self.write_indent();
+            self.writeln(&format!("{} {name} = &({src});", self.type_to_c(&ref_ty)));
+            self.scope_register_binding(name, &ref_ty);
+            if Self::should_silence_unused_binding(name, &ref_ty) {
+                self.emit_silence_unused_binding(name);
+            }
+            return;
+        }
+        if through_ref {
+            let c_ty = self.type_to_c(ty);
+            self.write_indent();
+            self.writeln(&format!("{c_ty} {name} = {src};"));
+            self.scope_register_binding(name, ty);
+            if Self::should_silence_unused_binding(name, ty) {
+                self.emit_silence_unused_binding(name);
+            }
+            return;
+        }
+        self.emit_moved_value_binding(ty, name, src);
+    }
+
+    /// Copy `src` into `name`. A type that needs drop is moved: the source place is cleared
+    /// so the scrutinee drop does not free it again.
+    fn emit_moved_value_binding(&mut self, ty: &Type, name: &str, src: &str) {
+        let c_ty = self.type_to_c(ty);
+        if matches!(ty, Type::Array { .. }) {
+            self.write_indent();
+            self.writeln(&format!("{c_ty} {name};"));
+            self.write_indent();
+            self.writeln(&format!("memcpy(&{name}, &({src}), sizeof({name}));"));
+            if self.needs_drop(ty) {
+                self.write_indent();
+                self.writeln(&format!("memset(&({src}), 0, sizeof({src}));"));
+            }
+        } else {
+            self.write_indent();
+            self.writeln(&format!("{c_ty} {name} = {src};"));
+            if self.needs_drop(ty) {
+                self.write_indent();
+                self.writeln(&format!(
+                    "{src} = {};",
+                    self.zero_value_for_scrutinee_payload(ty)
+                ));
+            }
+        }
+        self.scope_register_binding(name, ty);
+        if Self::should_silence_unused_binding(name, ty) {
+            self.emit_silence_unused_binding(name);
+        }
+    }
+
+    fn emit_value_match(
+        &mut self,
+        expr: &IREexpr,
+        ty: &Type,
+        arms: &[IRMatchArm],
+        match_result: Option<(&str, &Type)>,
+    ) {
+        let match_var_name = format!("match_val_{}", self.match_counter);
+        self.match_counter += 1;
+        let (place_ty, through_ref) = match ty {
+            Type::Ref { inner, .. } => (inner.as_ref().clone(), true),
+            other => (other.clone(), false),
+        };
+        let stored_ty = if through_ref {
+            Type::Ref {
+                inner: Box::new(place_ty.clone()),
+                mutable: false,
+            }
+        } else {
+            place_ty.clone()
+        };
+        let c_ty = self.type_to_c(&stored_ty);
+        self.write_indent();
+        self.write(&format!("{c_ty} {match_var_name} = "));
+        self.generate_expr(expr);
+        self.writeln(";");
+        self.mark_moves_in_expr(expr);
+        self.scope_register_binding(&match_var_name, &stored_ty);
+        let src = if through_ref {
+            format!("(*{match_var_name})")
+        } else {
+            match_var_name.clone()
+        };
+
+        let mut opened = false;
+        for arm in arms {
+            let pattern_cond = self.value_pattern_condition(&arm.pattern, &src);
+            let guard_cond = arm.guard.is_some();
+            self.write_indent();
+            if pattern_cond.is_some() || guard_cond {
+                if opened {
+                    self.write("else if (");
+                } else {
+                    self.write("if (");
+                }
+                if let Some(cond) = &pattern_cond {
+                    self.write(cond);
+                }
+                if let Some(guard) = &arm.guard {
+                    if pattern_cond.is_some() {
+                        self.write(" && ");
+                    }
+                    self.generate_expr(guard);
+                }
+                self.writeln(") {");
+            } else if opened {
+                self.writeln("else {");
+            } else {
+                self.writeln("{");
+            }
+            opened = true;
+            self.indent_level += 1;
+            self.scope_begin(&[]);
+            self.emit_value_pattern_bindings(&arm.pattern, &place_ty, &src, through_ref);
+            if let Some((result_var, result_type)) = match_result {
+                self.emit_match_arm_result_stmts(&arm.body, result_var, result_type);
+            } else {
+                self.generate_block(&arm.body);
+            }
+            self.scope_emit_exit();
+            self.indent_level -= 1;
+            self.write_indent();
+            self.writeln("}");
+        }
+    }
+
     fn generate_match_block(
         &mut self,
         expr: &IREexpr,
@@ -4596,6 +4982,16 @@ impl Codegen {
         match_result: Option<(&str, &Type)>,
         scrutinee_type: Option<&Type>,
     ) {
+        if let Some(ty) = scrutinee_type {
+            let peeled = match ty {
+                Type::Ref { inner, .. } => inner.as_ref(),
+                other => other,
+            };
+            if Self::is_value_scrutinee(peeled) {
+                self.emit_value_match(expr, ty, arms, match_result);
+                return;
+            }
+        }
         // Generate match as a block (for statement context)
         // Get monomorphized enum name if it's generic
         let enum_decl = self.enum_map.get(enum_type).cloned();
@@ -4625,12 +5021,10 @@ impl Codegen {
         self.match_counter += 1;
 
         self.write_indent();
-        // Vec::pop / Vec::get (and METHOD::pop/get) return heap Option as void*.
+        // Vec::pop / Vec::get return heap Option as void*.
         let needs_cast = if let IREexpr::Call { callee, .. } = expr {
             callee == "Vec::pop"
                 || callee == "Vec::get"
-                || callee == "METHOD::pop"
-                || callee == "METHOD::get"
                 || callee.starts_with("ion_vec_pop")
                 || callee.starts_with("ion_vec_get")
         } else {
@@ -4639,7 +5033,7 @@ impl Codegen {
 
         if needs_cast {
             let elem_c_type = if type_params.is_empty() {
-                "int".to_string()
+                panic!("compiler bug: Vec::pop/get match missing element type")
             } else {
                 self.type_to_c(&type_params[0])
             };
@@ -4684,6 +5078,14 @@ impl Codegen {
         self.match_in_switch = self.match_in_switch.saturating_sub(1);
     }
 
+    fn pattern_variant_name(pattern: &IRPattern) -> Option<&str> {
+        match pattern {
+            IRPattern::Variant { variant, .. } => Some(variant.as_str()),
+            IRPattern::At { pattern, .. } => Self::pattern_variant_name(pattern),
+            _ => None,
+        }
+    }
+
     fn emit_grouped_match_arms(
         &mut self,
         arms: &[IRMatchArm],
@@ -4697,11 +5099,11 @@ impl Codegen {
         let mut grouped: std::collections::BTreeMap<usize, Vec<&IRMatchArm>> =
             std::collections::BTreeMap::new();
         for arm in arms {
-            let variant_idx = match &arm.pattern {
-                IRPattern::Variant { variant, .. } => enum_decl
-                    .and_then(|e| e.variants.iter().position(|v| v.name == *variant))
+            let variant_idx = match Self::pattern_variant_name(&arm.pattern) {
+                Some(variant) => enum_decl
+                    .and_then(|e| e.variants.iter().position(|v| v.name == variant))
                     .unwrap_or(0),
-                _ => usize::MAX,
+                None => usize::MAX,
             };
             grouped.entry(variant_idx).or_default().push(arm);
         }
@@ -4730,6 +5132,7 @@ impl Codegen {
                     self.generate_match_arm_payload_bindings(
                         first_arm,
                         enum_decl,
+                        enum_type,
                         match_var_name,
                         type_params,
                         variant_idx,
@@ -4772,16 +5175,26 @@ impl Codegen {
         &mut self,
         arm: &IRMatchArm,
         enum_decl: Option<&EnumDecl>,
+        enum_type: &str,
         match_var_name: &str,
         type_params: &[Type],
         variant_idx: usize,
     ) {
+        let (at_name, pattern) = match &arm.pattern {
+            IRPattern::At { name, pattern } => (Some(name.as_str()), pattern.as_ref()),
+            other => (None, other),
+        };
+        if let Some(name) = at_name {
+            self.write_indent();
+            self.writeln(&format!("{enum_type} {name} = {match_var_name};"));
+            self.scope_register_binding(name, &Type::Enum(enum_type.to_string()));
+        }
         let IRPattern::Variant {
             variant,
             sub_patterns,
             named_fields,
             ..
-        } = &arm.pattern
+        } = pattern
         else {
             return;
         };
@@ -4848,6 +5261,12 @@ impl Codegen {
                                 IRPattern::Variant { .. } => {
                                     // Nested constructors are specialized to nested IR Match in lowering.
                                 }
+                                IRPattern::Lit { .. }
+                                | IRPattern::Range { .. }
+                                | IRPattern::Or { .. }
+                                | IRPattern::Struct { .. }
+                                | IRPattern::At { .. }
+                                | IRPattern::Rest => {}
                             }
                         }
                     }
@@ -4868,35 +5287,21 @@ impl Codegen {
                     if let Some(sub_pattern) = sub_patterns.get(i) {
                         match sub_pattern {
                             IRPattern::Binding { name } => {
-                                // Extract payload into binding variable
+                                // A reference payload is the pointer. Do not load
+                                // or drop the referent. Owned payloads still move out.
                                 let payload_field = format!("arg{i}");
                                 self.write_indent();
-                                if let Type::Ref { inner, .. } = &concrete_payload_ty {
-                                    // Vec::get_ref yields Option<&T>. Copy primitives in-place; borrow
-                                    // structs with owned fields as T* so nested Vec fields are not dropped.
-                                    if self.type_needs_drop(inner) {
-                                        self.write(&format!(
-                                            "{} {} = {}.data.variant_{}.{};",
-                                            self.type_to_c(&concrete_payload_ty),
-                                            name,
-                                            match_var_name,
-                                            variant_idx,
-                                            payload_field
-                                        ));
-                                        self.writeln("");
-                                        self.scope_register_binding(name, &concrete_payload_ty);
-                                    } else {
-                                        self.write(&format!(
-                                            "{} {} = *{}.data.variant_{}.{};",
-                                            self.type_to_c(inner),
-                                            name,
-                                            match_var_name,
-                                            variant_idx,
-                                            payload_field
-                                        ));
-                                        self.writeln("");
-                                        self.scope_register_binding(name, inner);
-                                    }
+                                if matches!(concrete_payload_ty, Type::Ref { .. }) {
+                                    self.write(&format!(
+                                        "{} {} = {}.data.variant_{}.{};",
+                                        self.type_to_c(&concrete_payload_ty),
+                                        name,
+                                        match_var_name,
+                                        variant_idx,
+                                        payload_field
+                                    ));
+                                    self.writeln("");
+                                    self.scope_register_binding(name, &concrete_payload_ty);
                                 } else {
                                     self.emit_binding_from_c_expr(
                                         &concrete_payload_ty,
@@ -4915,14 +5320,7 @@ impl Codegen {
                                     );
                                     self.scope_register_binding(name, &concrete_payload_ty);
                                 }
-                                if Self::should_silence_unused_binding(
-                                    name,
-                                    if let Type::Ref { inner, .. } = &concrete_payload_ty {
-                                        inner
-                                    } else {
-                                        &concrete_payload_ty
-                                    },
-                                ) {
+                                if Self::should_silence_unused_binding(name, &concrete_payload_ty) {
                                     self.emit_silence_unused_binding(name);
                                 }
                             }
@@ -4932,6 +5330,12 @@ impl Codegen {
                             IRPattern::Variant { .. } => {
                                 // Nested constructors are specialized to nested IR Match in lowering.
                             }
+                            IRPattern::Lit { .. }
+                            | IRPattern::Range { .. }
+                            | IRPattern::Or { .. }
+                            | IRPattern::Struct { .. }
+                            | IRPattern::At { .. }
+                            | IRPattern::Rest => {}
                         }
                     } else {
                         // No pattern specified - treat as wildcard
@@ -4994,6 +5398,12 @@ impl Codegen {
             IRPattern::Variant { .. } => {
                 // Variant arms are handled by grouped generation in generate_match_block.
             }
+            IRPattern::Lit { .. }
+            | IRPattern::Range { .. }
+            | IRPattern::Or { .. }
+            | IRPattern::Struct { .. }
+            | IRPattern::At { .. }
+            | IRPattern::Rest => {}
         }
     }
 
@@ -5076,6 +5486,7 @@ impl Codegen {
                         enum_type,
                         arms,
                         scrutinee_type,
+                        ..
                     } = expr
                     {
                         self.generate_match_block(
@@ -5202,7 +5613,7 @@ fn collect_array_typedefs(program: &IRProgram) -> Vec<(String, Type)> {
 
 fn collect_array_from_type(ty: &Type, arrays: &mut HashMap<String, Type>) {
     match ty {
-        Type::Array { inner, size } => {
+        Type::Array { inner, size, .. } => {
             arrays.insert(array_type_name(inner, *size), ty.clone());
             collect_array_from_type(inner, arrays);
         }
@@ -5420,7 +5831,7 @@ fn collect_array_from_expr(expr: &IREexpr, arrays: &mut HashMap<String, Type>) {
             collect_array_from_expr(index, arrays);
             collect_array_from_expr(value, arrays);
         }
-        IREexpr::AssignField { target, value } => {
+        IREexpr::AssignField { target, value, .. } => {
             collect_array_from_expr(target, arrays);
             collect_array_from_expr(value, arrays);
         }
@@ -5703,7 +6114,7 @@ fn collect_slice_types_from_expr(
             collect_slice_types_from_expr(index, slice_types);
             collect_slice_types_from_expr(value, slice_types);
         }
-        IREexpr::AssignField { target, value } => {
+        IREexpr::AssignField { target, value, .. } => {
             collect_slice_types_from_expr(target, slice_types);
             collect_slice_types_from_expr(value, slice_types);
         }
@@ -5962,7 +6373,7 @@ fn collect_tuple_types_from_expr(
             collect_tuple_types_from_expr(index, tuple_types);
             collect_tuple_types_from_expr(value, tuple_types);
         }
-        IREexpr::AssignField { target, value } => {
+        IREexpr::AssignField { target, value, .. } => {
             collect_tuple_types_from_expr(target, tuple_types);
             collect_tuple_types_from_expr(value, tuple_types);
         }
@@ -6230,7 +6641,7 @@ fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections:
             collect_vec_types_from_expr(index, vec_types);
             collect_vec_types_from_expr(value, vec_types);
         }
-        IREexpr::AssignField { target, value } => {
+        IREexpr::AssignField { target, value, .. } => {
             collect_vec_types_from_expr(target, vec_types);
             collect_vec_types_from_expr(value, vec_types);
         }
@@ -6339,7 +6750,7 @@ impl Codegen {
                 if self.generated_types.contains_key(name) {
                     continue;
                 }
-                let Type::Array { inner, size } = ty else {
+                let Type::Array { inner, size, .. } = ty else {
                     continue;
                 };
                 if !type_ready_for_by_value(inner, &self.generated_types, &none) {
@@ -6348,6 +6759,7 @@ impl Codegen {
                 if let Type::Array {
                     inner: nested,
                     size: nested_size,
+                    ..
                 } = inner.as_ref()
                     && !self
                         .generated_types
@@ -6504,7 +6916,7 @@ impl Codegen {
         for (i, elem) in elements.iter().enumerate() {
             self.write_indent();
             match elem {
-                Type::Array { inner, size } => {
+                Type::Array { inner, size, .. } => {
                     let base_type = self.type_to_c(inner);
                     self.writeln(&format!("{} f{}[{}];", base_type, i, size));
                 }
@@ -6539,7 +6951,7 @@ impl Codegen {
             // Handle arrays specially: in struct fields, arrays must be declared as "type name[size];"
             // not "type[size] name;" which is invalid C syntax
             let field_decl = match &field_ty {
-                Type::Array { inner, size } => {
+                Type::Array { inner, size, .. } => {
                     let base_type = self.type_to_c(inner);
                     format!("{} {}[{}]", base_type, field.name, size)
                 }
@@ -6560,7 +6972,7 @@ impl Codegen {
         for field in &decl.fields {
             self.write_indent();
             let field_decl = match &field.ty {
-                Type::Array { inner, size } => {
+                Type::Array { inner, size, .. } => {
                     let base_type = self.type_to_c(inner);
                     format!("{} {}[{}]", base_type, field.name, size)
                 }
@@ -6763,9 +7175,14 @@ fn substitute_generic_types(ty: &Type, substitutions: &HashMap<String, &Type>) -
         Type::Channel { elem_type } => Type::Channel {
             elem_type: Box::new(substitute_generic_types(elem_type, substitutions)),
         },
-        Type::Array { inner, size } => Type::Array {
+        Type::Array {
+            inner,
+            size,
+            len_name,
+        } => Type::Array {
             inner: Box::new(substitute_generic_types(inner, substitutions)),
             size: *size,
+            len_name: len_name.clone(),
         },
         Type::Slice { inner } => Type::Slice {
             inner: Box::new(substitute_generic_types(inner, substitutions)),
@@ -6893,6 +7310,7 @@ fn type_ready_for_by_value(
             Type::Array {
                 inner: nested,
                 size,
+                ..
             } => {
                 generated.contains_key(&array_type_name(nested, *size))
                     && type_ready_for_by_value(inner, generated, user_structs)
@@ -7296,10 +7714,7 @@ fn collect_generic_from_expr(
                     || callee == "File::open"
                     || callee == "File::create"
                     || callee == "String::get"
-                    || callee == "String::from_utf8"
-                    || callee == "METHOD::pop"
-                    || callee == "METHOD::get"
-                    || callee == "METHOD::get_ref";
+                    || callee == "String::from_utf8";
 
                 if is_vec_option_call {
                     // First try to get Option type from return_type if available
@@ -7427,7 +7842,7 @@ fn collect_generic_from_expr(
             collect_generic_from_expr(index, instantiations);
             collect_generic_from_expr(value, instantiations);
         }
-        IREexpr::AssignField { target, value } => {
+        IREexpr::AssignField { target, value, .. } => {
             collect_generic_from_expr(target, instantiations);
             collect_generic_from_expr(value, instantiations);
         }

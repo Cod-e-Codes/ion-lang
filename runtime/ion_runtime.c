@@ -30,8 +30,12 @@ static int ion_clock_gettime_realtime(struct timespec *ts) {
 // ============================================================================
 
 void ion_panic(const char *message) {
-  fprintf(stderr, "Ion panic: %s\n", message);
+  fprintf(stderr, "Ion panic: %s\n", message != NULL ? message : "");
   abort();
+}
+
+void ion_abort_bytes(uint8_t *message) {
+  ion_panic(message != NULL ? (const char *)message : "");
 }
 
 // ============================================================================
@@ -937,4 +941,29 @@ void ion_file_close(ion_file_t *file) {
     return;
   fclose((FILE *)file->fp);
   file->fp = NULL;
+}
+
+int ion_millis(void) {
+  struct timespec ts;
+  uint64_t ms;
+  if (ion_clock_gettime(&ts) != 0)
+    return 0;
+  ms = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+  return (int)(ms & 0x7fffffff);
+}
+
+int ion_env_copy(uint8_t *name, uint8_t *buf, int cap) {
+  const char *value;
+  int n;
+  if (!name || !buf || cap <= 0)
+    return -1;
+  value = getenv((const char *)name);
+  if (!value)
+    return -1;
+  n = (int)strlen(value);
+  if (n >= cap)
+    n = cap - 1;
+  if (n > 0)
+    memcpy(buf, value, (size_t)n);
+  return n;
 }

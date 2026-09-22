@@ -1,0 +1,16 @@
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn main() -> int {
+    let p: Point = Point { x: 1, y: 6 };
+    match p {
+        q @ Point { x: 1, y } => {
+            return y + q.x;
+        }
+        Point { .. } => {
+            return 0;
+        }
+    };
+}

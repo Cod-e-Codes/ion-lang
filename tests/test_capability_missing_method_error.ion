@@ -1,0 +1,17 @@
+capability Show {
+    fn show(self: &Self) -> int;
+}
+
+struct Point {
+    x: int;
+}
+
+impl Show for Point {
+    fn other(self: &Point) -> int {
+        return self.x;
+    }
+}
+
+fn main() -> int {
+    return 0;
+}

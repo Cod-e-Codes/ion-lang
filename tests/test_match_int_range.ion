@@ -1,0 +1,14 @@
+fn main() -> int {
+    let n: int = 4;
+    match n {
+        0 => {
+            return 1;
+        }
+        1..10 => {
+            return 8;
+        }
+        _ => {
+            return 0;
+        }
+    };
+}

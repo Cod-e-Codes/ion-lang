@@ -35,7 +35,8 @@ Stable beta expectations:
   negative/OOB index). It does not register a lasting borrow.
 - String literals in `let` bindings and at call sites for `String` parameters
   lower to `ion_string_from_literal` in generated C (NULL from the runtime is a
-  panic).
+  panic). A string literal pattern compares length and bytes with `memcmp` and
+  does not allocate.
 - `String::push_str` appends string literals or owned `String` values (the
   latter reads `.data`/`.len` from the source heap buffer) after UTF-8
   validation.
@@ -53,6 +54,7 @@ Stable beta expectations:
 - `Vec::new`, `Vec::push`, `Vec::pop`, `Vec::get`, `Vec::get_ref`, `Vec::set`, `Vec::len`, and
   `Vec::capacity` remain available through the stdlib/builtin surface.
 - Dropping `Vec<T>` drops owned elements when `T` needs destruction (compiler drop glue over `0..len`, then `ion_vec_free`). The runtime helper does not take a destructor callback.
+- A user `impl Drop` compiles to `void {Type}_Drop_drop({Type} *self)`. Compiler drop glue calls that function once, then drops fields in declaration order. The symbol is part of the generated C for that type. It is not a runtime callback.
 - `Vec::get` of a dropping `T` copies the element into `Option<T>` and hollows the slot. `Vec::set` of a dropping `T` drops the previous element before overwrite. Generated C wraps the runtime status in conventional `SetResult` (`Ok` / `OutOfBounds`).
 - Bounds-sensitive operations either return `Option<T>` where documented or
   trigger the runtime panic path for checked indexing.
@@ -173,3 +175,8 @@ and sets length; `File::write` writes `len` bytes. POSIX and MinGW only.
 Generated code is responsible for normal-scope destruction. Runtime panics abort
 the process; they are not currently exception-style unwinds. Code that relies on
 drop execution after a runtime panic is outside the beta contract.
+
+`ion_panic(const char *)` is the compiler panic path. Call sites pass string
+literals. `ion_abort_bytes(uint8_t *)` is the `panic::abort` entry for `String`
+data. It casts and calls `ion_panic`. `ion_env_copy(uint8_t *name, uint8_t *buf, int cap)`
+copies an environment value and casts `name` to `const char *` for `getenv`.

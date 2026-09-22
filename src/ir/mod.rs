@@ -125,6 +125,8 @@ pub enum IREexpr {
     AddressOf {
         inner: Box<IREexpr>,
         mutable: bool,
+        /// Checked type, `Type::Ref` of `inner`.
+        ty: Type,
     },
     BinOp {
         op: BinOp,
@@ -158,6 +160,8 @@ pub enum IREexpr {
         base: Box<IREexpr>,
         field: String,
         is_pointer: bool,
+        /// Checked type of this field access.
+        ty: Type,
     },
     EnumLit {
         enum_name: String,
@@ -171,6 +175,8 @@ pub enum IREexpr {
         expr: Box<IREexpr>,
         enum_type: String,
         scrutinee_type: Option<Type>,
+        /// Type of the match expression itself. `Void` when the match is a statement.
+        result_type: Type,
         arms: Vec<IRMatchArm>,
     },
     Call {
@@ -206,6 +212,8 @@ pub enum IREexpr {
     AssignField {
         target: Box<IREexpr>,
         value: Box<IREexpr>,
+        /// Checked type of the field being assigned.
+        field_ty: Type,
     },
     Cast {
         expr: Box<IREexpr>,
@@ -281,9 +289,31 @@ impl LoweringContext {
 }
 
 fn record_match_arm_bindings(pattern: &Pattern, scrutinee_ty: &Type, ctx: &mut LoweringContext) {
+    let original = scrutinee_ty.clone();
+    let through_mut = matches!(scrutinee_ty, Type::Ref { mutable: true, .. });
+    let through_ref = matches!(scrutinee_ty, Type::Ref { .. });
+    let scrutinee_ty = match scrutinee_ty {
+        Type::Ref { inner, .. } => inner.as_ref(),
+        other => other,
+    };
+    let bind_ty = |field_ty: &Type| -> Type {
+        if through_ref && !crate::tc::TypeChecker::is_copy_type(field_ty) {
+            Type::Ref {
+                inner: Box::new(field_ty.clone()),
+                mutable: through_mut,
+            }
+        } else {
+            field_ty.clone()
+        }
+    };
+    let bound_value = if matches!(original, Type::Ref { .. }) {
+        original
+    } else {
+        bind_ty(scrutinee_ty)
+    };
     match pattern {
         Pattern::Binding { name, .. } => {
-            ctx.record_binding(name, scrutinee_ty);
+            ctx.record_binding(name, &bound_value);
         }
         Pattern::Wildcard { .. } => {}
         Pattern::Variant {
@@ -303,15 +333,52 @@ fn record_match_arm_bindings(pattern: &Pattern, scrutinee_ty: &Type, ctx: &mut L
                 && let Some(payload_ty) = params.first()
             {
                 if let Some(sub) = sub_patterns.first() {
-                    record_match_arm_bindings(sub, payload_ty, ctx);
+                    let bound = bind_ty(payload_ty);
+                    record_match_arm_bindings(sub, &bound, ctx);
                 }
                 if let Some(named) = named_fields {
                     for (_, sub) in named {
-                        record_match_arm_bindings(sub, payload_ty, ctx);
+                        let bound = bind_ty(payload_ty);
+                        record_match_arm_bindings(sub, &bound, ctx);
                     }
                 }
             }
         }
+        Pattern::At { name, pattern, .. } => {
+            ctx.record_binding(name, &bound_value);
+            record_match_arm_bindings(pattern, &bound_value, ctx);
+        }
+        Pattern::Or { alts, .. } => {
+            if let Some(alt) = alts.first() {
+                let bound = bind_ty(scrutinee_ty);
+                record_match_arm_bindings(alt, &bound, ctx);
+            }
+        }
+        Pattern::Struct { name, fields, .. } => {
+            let peeled = match scrutinee_ty {
+                Type::Ref { inner, .. } => inner.as_ref(),
+                other => other,
+            };
+            let decl = ctx.struct_decls.get(name).cloned();
+            let subst = decl
+                .as_ref()
+                .map(|decl| struct_subst(decl, peeled))
+                .unwrap_or_default();
+            for (field_name, field_pattern) in fields {
+                let field_ty = decl.as_ref().and_then(|decl| {
+                    decl.fields
+                        .iter()
+                        .find(|field| field.name == *field_name)
+                        .map(|field| ctx.types.resolve(&substitute_type(&field.ty, &subst)))
+                });
+                let Some(field_ty) = field_ty else {
+                    panic!("compiler bug: struct '{name}' has no field '{field_name}'");
+                };
+                let bound = bind_ty(&field_ty);
+                record_match_arm_bindings(field_pattern, &bound, ctx);
+            }
+        }
+        Pattern::Lit { .. } | Pattern::Range { .. } | Pattern::Rest { .. } => {}
     }
 }
 
@@ -322,6 +389,13 @@ fn match_scrutinee_type(expr: &Expr, ctx: &LoweringContext) -> Option<Type> {
         });
     }
     ctx.resolve_expr_type(expr)
+}
+
+fn expand_or_patterns(pattern: &Pattern) -> Vec<Pattern> {
+    match pattern {
+        Pattern::Or { alts, .. } => alts.iter().flat_map(expand_or_patterns).collect(),
+        other => vec![other.clone()],
+    }
 }
 
 fn pattern_to_ir(pattern: &Pattern) -> IRPattern {
@@ -345,6 +419,26 @@ fn pattern_to_ir(pattern: &Pattern) -> IRPattern {
         },
         Pattern::Wildcard { .. } => IRPattern::Wildcard,
         Pattern::Binding { name, .. } => IRPattern::Binding { name: name.clone() },
+        Pattern::Lit { lit, .. } => IRPattern::Lit { lit: lit.clone() },
+        Pattern::Range { lo, hi, .. } => IRPattern::Range { lo: *lo, hi: *hi },
+        Pattern::Or { alts, .. } => IRPattern::Or {
+            alts: alts.iter().map(pattern_to_ir).collect(),
+        },
+        Pattern::Struct {
+            name, fields, rest, ..
+        } => IRPattern::Struct {
+            name: name.clone(),
+            fields: fields
+                .iter()
+                .map(|(field, pattern)| (field.clone(), pattern_to_ir(pattern)))
+                .collect(),
+            rest: *rest,
+        },
+        Pattern::At { name, pattern, .. } => IRPattern::At {
+            name: name.clone(),
+            pattern: Box::new(pattern_to_ir(pattern)),
+        },
+        Pattern::Rest { .. } => IRPattern::Rest,
     }
 }
 
@@ -390,12 +484,43 @@ pub enum IRPattern {
     Binding {
         name: String,
     },
+    Lit {
+        lit: crate::ast::PatLit,
+    },
+    Range {
+        lo: i64,
+        hi: i64,
+    },
+    Or {
+        alts: Vec<IRPattern>,
+    },
+    Struct {
+        name: String,
+        fields: Vec<(String, IRPattern)>,
+        rest: bool,
+    },
+    At {
+        name: String,
+        pattern: Box<IRPattern>,
+    },
+    Rest,
 }
 
 #[derive(Clone)]
 enum NestedSlot {
     Pos(usize),
     Named(String),
+}
+
+fn struct_subst(decl: &StructDecl, scrutinee: &Type) -> HashMap<String, Type> {
+    let Type::Generic { params, .. } = scrutinee else {
+        return HashMap::new();
+    };
+    decl.generics
+        .iter()
+        .zip(params.iter())
+        .map(|(param, ty)| (param.name.clone(), ty.clone()))
+        .collect()
 }
 
 fn generic_subst_from_scrutinee(decl: &EnumDecl, scrutinee: &Type) -> HashMap<String, Type> {
@@ -473,6 +598,12 @@ fn pattern_ctor_key(pattern: &IRPattern) -> String {
         IRPattern::Variant { variant, .. } => format!("v:{variant}"),
         IRPattern::Wildcard => "_".to_string(),
         IRPattern::Binding { name } => format!("b:{name}"),
+        IRPattern::At { pattern, .. } => pattern_ctor_key(pattern),
+        IRPattern::Or { .. } => "or".to_string(),
+        IRPattern::Struct { name, .. } => format!("s:{name}"),
+        IRPattern::Lit { .. } => "lit".to_string(),
+        IRPattern::Range { .. } => "range".to_string(),
+        IRPattern::Rest => "..".to_string(),
     }
 }
 
@@ -687,6 +818,7 @@ fn compile_nested_slots(
             expr: Box::new(IREexpr::Var(temp.clone())),
             enum_type: inner_enum.clone(),
             scrutinee_type: Some(payload_ty.clone()),
+            result_type: Type::Void,
             arms: inner_arms,
         })],
         defers: Vec::new(),
@@ -766,7 +898,14 @@ fn specialize_nested_match_arms(
                 }
                 ctor_groups.entry(variant.clone()).or_default().push(arm);
             }
-            IRPattern::Wildcard | IRPattern::Binding { .. } => catch_alls.push(arm),
+            IRPattern::Wildcard
+            | IRPattern::Binding { .. }
+            | IRPattern::Lit { .. }
+            | IRPattern::Range { .. }
+            | IRPattern::Or { .. }
+            | IRPattern::Struct { .. }
+            | IRPattern::At { .. }
+            | IRPattern::Rest => catch_alls.push(arm),
         }
     }
 
@@ -1021,7 +1160,8 @@ impl IRBuilder {
                         ctx.expr_type(init)
                     };
                     if let Type::Tuple { elements } = tuple_ty
-                        && patterns.len() == elements.len()
+                        && (patterns.len() == elements.len()
+                            || patterns.iter().any(|p| matches!(p, Pattern::Rest { .. })))
                     {
                         let temp = format!("__ion_tuple_{}", ctx.tuple_temp_counter);
                         ctx.tuple_temp_counter += 1;
@@ -1033,17 +1173,34 @@ impl IRBuilder {
                             init: Some(build_expr_with_ctx(init, ctx)),
                         }));
                         for (i, pattern) in patterns.iter().enumerate() {
+                            if matches!(pattern, Pattern::Rest { .. }) {
+                                continue;
+                            }
+                            let rest_at = patterns
+                                .iter()
+                                .position(|p| matches!(p, Pattern::Rest { .. }));
+                            let elem_index = if let Some(rest_at) = rest_at {
+                                let tail = patterns.len() - rest_at - 1;
+                                if i < rest_at {
+                                    i
+                                } else {
+                                    elements.len() - tail + (i - rest_at - 1)
+                                }
+                            } else {
+                                i
+                            };
                             if let Pattern::Binding { name, .. } = pattern {
                                 out.push(IRStmt::Let(IRLetStmt {
                                     name: name.clone(),
-                                    ty: elements[i].clone(),
+                                    ty: elements[elem_index].clone(),
                                     init: Some(IREexpr::FieldAccess {
                                         base: Box::new(IREexpr::Var(temp.clone())),
-                                        field: format!("f{}", i),
+                                        field: format!("f{elem_index}"),
                                         is_pointer: false,
+                                        ty: elements[elem_index].clone(),
                                     }),
                                 }));
-                                ctx.record_binding(name, &elements[i]);
+                                ctx.record_binding(name, &elements[elem_index]);
                             }
                         }
                         return;
@@ -1202,15 +1359,24 @@ impl IRBuilder {
                 }));
 
                 let iterable_expr = build_expr_with_ctx(&for_stmt.iterable, ctx);
+                let container_ref_ty = Type::Ref {
+                    inner: Box::new(container_ty.clone()),
+                    mutable: false,
+                };
                 let container_ref = if use_container_copy {
                     IREexpr::AddressOf {
                         inner: Box::new(IREexpr::Var(container_var.clone())),
                         mutable: false,
+                        ty: container_ref_ty,
                     }
                 } else {
                     IREexpr::AddressOf {
                         inner: Box::new(iterable_expr.clone()),
                         mutable: false,
+                        ty: Type::Ref {
+                            inner: Box::new(container_ty.clone()),
+                            mutable: false,
+                        },
                     }
                 };
                 let index_ref = IREexpr::Var(index_var.clone());
@@ -1301,6 +1467,7 @@ impl IRBuilder {
                             expr: Box::new(IREexpr::Var(opt_var)),
                             enum_type: "Option".to_string(),
                             scrutinee_type: None,
+                            result_type: Type::Void,
                             arms: vec![
                                 IRMatchArm {
                                     pattern: IRPattern::Variant {
@@ -1463,11 +1630,28 @@ fn lower_try_expr(try_expr: &TryExpr, ctx: &LoweringContext) -> IREexpr {
         },
     };
 
+    let result_type = match &operand_ty {
+        Type::Generic { params, .. } if !params.is_empty() => params[0].clone(),
+        other => other.clone(),
+    };
     IREexpr::Match {
         expr: Box::new(build_expr_with_ctx(&try_expr.operand, ctx)),
         enum_type: enum_name,
         scrutinee_type: Some(operand_ty),
+        result_type,
         arms: vec![success_arm, error_arm],
+    }
+}
+
+/// Field access of a non-Copy field through `&` or `&mut` is a reborrow.
+/// Assignment stores the owned field, so the place type is that inner type.
+fn owned_field_place_type(ty: Type) -> Type {
+    match ty {
+        Type::Ref {
+            inner,
+            mutable: true,
+        } => *inner,
+        other => other,
     }
 }
 
@@ -1493,6 +1677,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             IREexpr::AddressOf {
                 inner: Box::new(build_expr_with_ctx(&ref_expr.inner, ctx)),
                 mutable: ref_expr.mutable,
+                ty: ctx.expr_type(expr),
             }
         }
         Expr::BinOp(bin_op_expr) => IREexpr::BinOp {
@@ -1574,59 +1759,81 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 base: Box::new(build_expr_with_ctx(&acc.base, ctx)),
                 field,
                 is_pointer,
+                ty: ctx.expr_type(expr),
             }
         }
-        Expr::EnumLit(enum_lit) => IREexpr::EnumLit {
-            enum_name: enum_lit.enum_name.clone(),
-            variant: enum_lit.variant.clone(),
-            args: enum_lit
-                .args
-                .iter()
-                .map(|a| build_expr_with_ctx(a, ctx))
-                .collect(),
-            named_fields: enum_lit.named_fields.as_ref().map(|fields| {
-                fields
+        Expr::EnumLit(enum_lit) => {
+            if let Some(callee) = ctx.types.call_callees.get(&enum_lit.id).cloned() {
+                return IREexpr::Call {
+                    callee,
+                    args: enum_lit
+                        .args
+                        .iter()
+                        .map(|a| build_expr_with_ctx(a, ctx))
+                        .collect(),
+                    return_type: Some(ctx.expr_type(expr)),
+                    tuple_destructure_index: None,
+                };
+            }
+            IREexpr::EnumLit {
+                enum_name: enum_lit.enum_name.clone(),
+                variant: enum_lit.variant.clone(),
+                args: enum_lit
+                    .args
                     .iter()
-                    .map(|(field_name, field_expr)| {
-                        (field_name.clone(), build_expr_with_ctx(field_expr, ctx))
-                    })
-                    .collect()
-            }),
-            ty: ctx.expr_type(expr),
-        },
+                    .map(|a| build_expr_with_ctx(a, ctx))
+                    .collect(),
+                named_fields: enum_lit.named_fields.as_ref().map(|fields| {
+                    fields
+                        .iter()
+                        .map(|(field_name, field_expr)| {
+                            (field_name.clone(), build_expr_with_ctx(field_expr, ctx))
+                        })
+                        .collect()
+                }),
+                ty: ctx.expr_type(expr),
+            }
+        }
         Expr::Match(match_expr) => {
             let scrutinee_ty = match_scrutinee_type(&match_expr.expr, ctx);
             let arms = match_expr
                 .arms
                 .iter()
-                .map(|arm| {
-                    let mut body_stmts = Vec::new();
-                    let mut arm_defers = Vec::new();
-                    let mut arm_ctx = LoweringContext {
-                        var_types: ctx.var_types.clone(),
-                        struct_decls: ctx.struct_decls.clone(),
-                        enum_decls: ctx.enum_decls.clone(),
-                        enum_param_counts: ctx.enum_param_counts.clone(),
-                        tuple_temp_counter: ctx.tuple_temp_counter,
-                        fn_literal_counter: ctx.fn_literal_counter.clone(),
-                        function_returns: ctx.function_returns.clone(),
-                        types: ctx.types.clone(),
-                    };
-                    if let Some(ref ty) = scrutinee_ty {
-                        record_match_arm_bindings(&arm.pattern, ty, &mut arm_ctx);
-                    }
-                    for stmt in &arm.body.statements {
-                        IRBuilder::lower_stmt(stmt, &mut body_stmts, &mut arm_defers, &mut arm_ctx);
-                    }
-                    IRMatchArm {
-                        pattern: pattern_to_ir(&arm.pattern),
-                        guard: arm.guard.as_ref().map(|g| build_expr_with_ctx(g, ctx)),
-                        body: IRBlock {
-                            name: "match_arm".to_string(),
-                            statements: body_stmts,
-                            defers: arm_defers,
-                        },
-                    }
+                .flat_map(|arm| {
+                    expand_or_patterns(&arm.pattern).into_iter().map(|pattern| {
+                        let mut body_stmts = Vec::new();
+                        let mut arm_defers = Vec::new();
+                        let mut arm_ctx = LoweringContext {
+                            var_types: ctx.var_types.clone(),
+                            struct_decls: ctx.struct_decls.clone(),
+                            enum_decls: ctx.enum_decls.clone(),
+                            enum_param_counts: ctx.enum_param_counts.clone(),
+                            tuple_temp_counter: ctx.tuple_temp_counter,
+                            fn_literal_counter: ctx.fn_literal_counter.clone(),
+                            function_returns: ctx.function_returns.clone(),
+                            types: ctx.types.clone(),
+                        };
+                        if let Some(ref ty) = scrutinee_ty {
+                            record_match_arm_bindings(&pattern, ty, &mut arm_ctx);
+                        }
+                        for stmt in &arm.body.statements {
+                            IRBuilder::lower_stmt(
+                                stmt,
+                                &mut body_stmts,
+                                &mut arm_defers,
+                                &mut arm_ctx,
+                            );
+                        }
+                        IRMatchArm {
+                            pattern: pattern_to_ir(&pattern),
+                            guard: arm.guard.as_ref().map(|g| build_expr_with_ctx(g, ctx)),
+                            body: IRBlock {
+                                name: "match_arm".to_string(),
+                                statements: body_stmts,
+                                defers: arm_defers,
+                            },
+                        }
+                    })
                 })
                 .collect();
             let enum_name = match_expr
@@ -1652,14 +1859,21 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 expr: Box::new(build_expr_with_ctx(&match_expr.expr, ctx)),
                 enum_type: enum_name,
                 scrutinee_type,
+                result_type: ctx.expr_type(expr),
                 arms,
             }
         }
         Expr::Try(try_expr) => lower_try_expr(try_expr, ctx),
         Expr::Call(call_expr) => {
             let return_type = Some(ctx.expr_type(expr));
+            let callee = ctx
+                .types
+                .call_callees
+                .get(&call_expr.id)
+                .cloned()
+                .unwrap_or_else(|| call_expr.callee.clone());
             IREexpr::Call {
-                callee: call_expr.callee.clone(),
+                callee,
                 args: call_expr
                     .args
                     .iter()
@@ -1670,113 +1884,31 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             }
         }
         Expr::MethodCall(method_call) => {
-            let vec_methods = [
-                "push",
-                "pop",
-                "len",
-                "capacity",
-                "get",
-                "get_ref",
-                "set",
-                "with_capacity",
-            ];
-            let string_methods = ["push_str", "push_byte", "len", "get"];
-            let receiver_ty = ctx.resolve_expr_type(&method_call.receiver);
-            let receiver_is_string = match receiver_ty.as_ref() {
-                Some(Type::String) => true,
-                Some(Type::Ref { inner, .. }) => matches!(**inner, Type::String),
-                _ => false,
-            };
-            let receiver_is_slice = match receiver_ty.as_ref() {
-                Some(Type::Slice { .. }) => true,
-                Some(Type::Ref { inner, .. }) => {
-                    matches!(**inner, Type::Slice { .. } | Type::Array { .. })
-                }
-                Some(Type::Array { .. }) => true,
-                _ => false,
-            };
-            let receiver_is_arena = match receiver_ty.as_ref() {
-                Some(Type::Generic { name, .. }) if name == "Arena" => true,
-                Some(Type::Struct(name)) if name == "Arena" => true,
-                Some(Type::Ref { inner, .. }) => match inner.as_ref() {
-                    Type::Generic { name, .. } if name == "Arena" => true,
-                    Type::Struct(name) if name == "Arena" => true,
-                    _ => false,
-                },
-                _ => false,
-            };
-            let receiver_is_file = match receiver_ty.as_ref() {
-                Some(Type::File) => true,
-                Some(Type::Ref { inner, .. }) => matches!(**inner, Type::File),
-                _ => false,
-            };
-            let is_string =
-                string_methods.contains(&method_call.method.as_str()) && receiver_is_string;
-            let is_slice = (method_call.method == "get_ref" || method_call.method == "len")
-                && receiver_is_slice;
-            let is_arena = method_call.method == "get_ref" && receiver_is_arena;
-            let is_file = matches!(method_call.method.as_str(), "read" | "write" | "close")
-                && receiver_is_file;
-            let is_vec = vec_methods.contains(&method_call.method.as_str())
-                && !receiver_is_string
-                && !is_slice
-                && !is_arena
-                && !is_file;
-            let callee = if is_slice {
-                format!("Slice::{}", method_call.method)
-            } else if is_arena {
-                format!("Arena::{}", method_call.method)
-            } else if is_file {
-                format!("File::{}", method_call.method)
-            } else if is_vec {
-                format!("Vec::{}", method_call.method)
-            } else if is_string {
-                format!("String::{}", method_call.method)
-            } else {
-                format!("METHOD::{}", method_call.method)
-            };
-            let receiver_is_ref = matches!(
-                method_call.method.as_str(),
-                "push"
-                    | "pop"
-                    | "set"
-                    | "with_capacity"
-                    | "len"
-                    | "capacity"
-                    | "get"
-                    | "get_ref"
-                    | "push_str"
-                    | "push_byte"
-                    | "read"
-                    | "write"
-                    | "close"
-            );
-            let receiver_expr = if receiver_is_ref {
-                let mutable = matches!(
-                    method_call.method.as_str(),
-                    "push"
-                        | "pop"
-                        | "set"
-                        | "with_capacity"
-                        | "push_str"
-                        | "push_byte"
-                        | "read"
-                        | "write"
-                        | "close"
-                );
-                // Already `&[]T` / `&String` / `&Vec<T>`: pass through without double-ref.
-                let already_ref = matches!(receiver_ty.as_ref(), Some(Type::Ref { .. }));
-                if already_ref {
-                    build_expr_with_ctx(&method_call.receiver, ctx)
-                } else {
-                    IREexpr::AddressOf {
-                        inner: Box::new(build_expr_with_ctx(&method_call.receiver, ctx)),
-                        mutable,
-                    }
+            let resolved = ctx
+                .types
+                .resolved_methods
+                .get(&method_call.id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "compiler bug: missing resolved method '{}' at line {}",
+                        method_call.method, method_call.span.line
+                    )
+                });
+            let receiver_ty = ctx.expr_type(&method_call.receiver);
+            let receiver_expr = if resolved.take_address {
+                IREexpr::AddressOf {
+                    ty: Type::Ref {
+                        inner: Box::new(receiver_ty),
+                        mutable: resolved.address_mutable,
+                    },
+                    inner: Box::new(build_expr_with_ctx(&method_call.receiver, ctx)),
+                    mutable: resolved.address_mutable,
                 }
             } else {
                 build_expr_with_ctx(&method_call.receiver, ctx)
             };
+            let callee = resolved.callee;
             let method_args: Vec<IREexpr> = method_call
                 .args
                 .iter()
@@ -1842,6 +1974,7 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 target_type: ctx.resolve_expr_type(&index_expr.target),
             },
             Expr::FieldAccess(_) => IREexpr::AssignField {
+                field_ty: owned_field_place_type(ctx.expr_type(&assign_expr.target)),
                 target: Box::new(build_expr_with_ctx(&assign_expr.target, ctx)),
                 value: Box::new(build_expr_with_ctx(&assign_expr.value, ctx)),
             },
@@ -1990,43 +2123,6 @@ fn lookup_merged<'a, V>(map: &'a HashMap<String, V>, name: &str) -> Option<&'a V
     })
 }
 
-fn ir_field_type(
-    base_ty: &Type,
-    field: &str,
-    struct_decls: &HashMap<String, StructDecl>,
-) -> Option<Type> {
-    match base_ty {
-        Type::Ref { inner, mutable } => {
-            ir_field_type(inner, field, struct_decls).map(|ft| Type::Ref {
-                inner: Box::new(ft),
-                mutable: *mutable,
-            })
-        }
-        Type::Generic { name, params } => {
-            let decl = struct_decls.get(name)?;
-            let field_ty = decl.fields.iter().find(|f| f.name == field)?.ty.clone();
-            if decl.generics.is_empty() || decl.generics.len() != params.len() {
-                return Some(field_ty);
-            }
-            let subs: HashMap<String, Type> = decl
-                .generics
-                .iter()
-                .map(|g| g.name.clone())
-                .zip(params.iter().cloned())
-                .collect();
-            Some(substitute_type(&field_ty, &subs))
-        }
-        Type::Struct(name) => {
-            let decl = struct_decls.get(name)?;
-            decl.fields
-                .iter()
-                .find(|f| f.name == field)
-                .map(|f| f.ty.clone())
-        }
-        _ => None,
-    }
-}
-
 fn apply_generic_instantiation(
     callee: &mut String,
     return_type: &mut Option<Type>,
@@ -2049,8 +2145,115 @@ fn apply_generic_instantiation(
 struct GenericRewrite<'a> {
     generic_defs: &'a HashMap<String, IRFunction>,
     function_fn_types: &'a HashMap<String, Type>,
-    struct_decls: &'a HashMap<String, StructDecl>,
     instantiations: &'a mut HashMap<String, (IRFunction, HashMap<String, Type>)>,
+    structs: &'a [StructDecl],
+    enums: &'a [EnumDecl],
+}
+
+fn bind_ir_pattern_vars(
+    pattern: &IRPattern,
+    ty: &Type,
+    structs: &[StructDecl],
+    enums: &[EnumDecl],
+    vars: &mut HashMap<String, Type>,
+) {
+    let original = ty.clone();
+    let through_mut = matches!(ty, Type::Ref { mutable: true, .. });
+    let through_ref = matches!(ty, Type::Ref { .. });
+    let ty = peel_type_ref(ty);
+    let bind_ty = |field_ty: &Type| -> Type {
+        if through_ref && !crate::tc::TypeChecker::is_copy_type(field_ty) {
+            Type::Ref {
+                inner: Box::new(field_ty.clone()),
+                mutable: through_mut,
+            }
+        } else {
+            field_ty.clone()
+        }
+    };
+    // A pattern that binds a reference value keeps the pointer. Field
+    // projections passed in already peeled still copy `Copy` fields.
+    let bound_value = if matches!(original, Type::Ref { .. }) {
+        original
+    } else {
+        bind_ty(&ty)
+    };
+    match pattern {
+        IRPattern::Binding { name } => {
+            vars.insert(name.clone(), bound_value);
+        }
+        IRPattern::At { name, pattern } => {
+            vars.insert(name.clone(), bound_value.clone());
+            bind_ir_pattern_vars(pattern, &bound_value, structs, enums, vars);
+        }
+        IRPattern::Struct { name, fields, .. } => {
+            let decl = structs.iter().find(|decl| decl.name == *name);
+            let subst = decl.map(|decl| struct_subst(decl, &ty)).unwrap_or_default();
+            for (field_name, field_pattern) in fields {
+                let Some(field) = decl
+                    .and_then(|decl| decl.fields.iter().find(|field| field.name == *field_name))
+                else {
+                    panic!("compiler bug: struct '{name}' has no field '{field_name}'");
+                };
+                let field_ty = substitute_type(&field.ty, &subst);
+                bind_ir_pattern_vars(field_pattern, &bind_ty(&field_ty), structs, enums, vars);
+            }
+        }
+        IRPattern::Variant {
+            enum_name,
+            variant,
+            sub_patterns,
+            named_fields,
+        } => {
+            let decl = enums
+                .iter()
+                .find(|decl| decl.name == *enum_name)
+                .unwrap_or_else(|| {
+                    panic!("compiler bug: enum pattern '{enum_name}' has no enum declaration")
+                });
+            let subst = generic_subst_from_scrutinee(decl, &ty);
+            let variant_decl = decl
+                .variants
+                .iter()
+                .find(|item| item.name == *variant)
+                .unwrap_or_else(|| {
+                    panic!("compiler bug: enum '{enum_name}' has no variant '{variant}'")
+                });
+            if let Some(named) = named_fields {
+                let fields = variant_decl.named_fields.as_ref().unwrap_or_else(|| {
+                    panic!("compiler bug: enum '{enum_name}::{variant}' has no named fields")
+                });
+                for (field_name, field_pattern) in named {
+                    if field_name == ".." {
+                        continue;
+                    }
+                    let (_, field_ty) = fields.iter().find(|(fname, _)| fname == field_name).unwrap_or_else(|| {
+                        panic!("compiler bug: enum '{enum_name}::{variant}' has no field '{field_name}'")
+                    });
+                    let concrete = substitute_type(field_ty, &subst);
+                    bind_ir_pattern_vars(field_pattern, &bind_ty(&concrete), structs, enums, vars);
+                }
+            } else {
+                for (index, sub_pattern) in sub_patterns.iter().enumerate() {
+                    if matches!(sub_pattern, IRPattern::Rest) {
+                        continue;
+                    }
+                    let field_ty = variant_decl.payload_types.get(index).unwrap_or_else(|| {
+                        panic!("compiler bug: enum '{enum_name}::{variant}' has no payload {index}")
+                    });
+                    let concrete = substitute_type(field_ty, &subst);
+                    bind_ir_pattern_vars(sub_pattern, &bind_ty(&concrete), structs, enums, vars);
+                }
+            }
+        }
+        IRPattern::Or { alts } => {
+            if let Some(alt) = alts.first() {
+                bind_ir_pattern_vars(alt, &bind_ty(&ty), structs, enums, vars);
+            }
+        }
+        IRPattern::Lit { .. } | IRPattern::Range { .. } | IRPattern::Wildcard | IRPattern::Rest => {
+        }
+    }
 }
 
 fn monomorphize_generic_functions(program: &mut IRProgram) {
@@ -2066,17 +2269,13 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
     }
 
     let function_fn_types = build_function_fn_types(&program.functions);
-    let struct_decls: HashMap<String, StructDecl> = program
-        .structs
-        .iter()
-        .map(|s| (s.name.clone(), s.clone()))
-        .collect();
     let mut instantiations: HashMap<String, (IRFunction, HashMap<String, Type>)> = HashMap::new();
     let mut ctx = GenericRewrite {
         generic_defs: &generic_defs,
         function_fn_types: &function_fn_types,
-        struct_decls: &struct_decls,
         instantiations: &mut instantiations,
+        structs: &program.structs,
+        enums: &program.enums,
     };
 
     for func in &mut program.functions {
@@ -2104,7 +2303,383 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
         .cloned()
         .collect();
     functions.extend(monomorphized);
-    program.functions = functions;
+    resolve_capability_callees(&mut functions, &program.structs, &program.enums);
+    append_drop_instantiations(&generic_defs, &mut functions);
+
+    let mut pending = functions;
+    for _ in 0..8 {
+        let generic_defs: HashMap<String, IRFunction> = program
+            .functions
+            .iter()
+            .filter(|f| !f.generics.is_empty())
+            .map(|f| (f.name.clone(), f.clone()))
+            .collect();
+        let function_fn_types = build_function_fn_types(&program.functions);
+        let mut instantiations: HashMap<String, (IRFunction, HashMap<String, Type>)> =
+            HashMap::new();
+        let mut ctx = GenericRewrite {
+            generic_defs: &generic_defs,
+            function_fn_types: &function_fn_types,
+            instantiations: &mut instantiations,
+            structs: &program.structs,
+            enums: &program.enums,
+        };
+        for func in &mut pending {
+            let mut var_types: HashMap<String, Type> = HashMap::new();
+            for param in &func.params {
+                var_types.insert(param.name.clone(), param.ty.clone());
+            }
+            for block in &mut func.blocks {
+                rewrite_generic_calls_in_block(block, &mut ctx, &mut var_types);
+            }
+        }
+        if instantiations.is_empty() {
+            program.functions = pending;
+            return;
+        }
+        let more: Vec<IRFunction> = instantiations
+            .into_values()
+            .map(|(template, subs)| instantiate_generic_function(&template, &subs))
+            .filter(|func| !pending.iter().any(|existing| existing.name == func.name))
+            .collect();
+        resolve_capability_callees(&mut pending, &program.structs, &program.enums);
+        let mut more = more;
+        resolve_capability_callees(&mut more, &program.structs, &program.enums);
+        pending.extend(more);
+    }
+    panic!("compiler bug: generic instantiation did not finish within 8 rounds");
+}
+
+fn append_drop_instantiations(
+    generic_defs: &HashMap<String, IRFunction>,
+    functions: &mut Vec<IRFunction>,
+) {
+    let templates: Vec<IRFunction> = generic_defs
+        .values()
+        .filter(|func| func.name.ends_with("_Drop_drop") && !func.generics.is_empty())
+        .cloned()
+        .collect();
+    if templates.is_empty() {
+        return;
+    }
+    let mut types = Vec::new();
+    for func in functions.iter() {
+        collect_drop_types_fn(func, &mut types);
+    }
+    let mut extra: Vec<IRFunction> = Vec::new();
+    for ty in &types {
+        let Type::Generic { name, params } = ty else {
+            continue;
+        };
+        let stem = format!("{name}_Drop_drop");
+        let Some(template) = templates.iter().find(|func| func.name == stem) else {
+            continue;
+        };
+        if template.generics.len() != params.len() {
+            continue;
+        }
+        let subs: HashMap<String, Type> = template
+            .generics
+            .iter()
+            .cloned()
+            .zip(params.iter().cloned())
+            .collect();
+        let inst = instantiate_generic_function(template, &subs);
+        if functions.iter().any(|func| func.name == inst.name)
+            || extra.iter().any(|func| func.name == inst.name)
+        {
+            continue;
+        }
+        extra.push(inst);
+    }
+    functions.extend(extra);
+}
+
+fn collect_drop_types_fn(func: &IRFunction, out: &mut Vec<Type>) {
+    if let Some(ret) = &func.return_type {
+        out.push(ret.clone());
+    }
+    for param in &func.params {
+        out.push(param.ty.clone());
+    }
+    for block in &func.blocks {
+        collect_drop_types_block(block, out);
+    }
+}
+
+fn collect_drop_types_block(block: &IRBlock, out: &mut Vec<Type>) {
+    for stmt in &block.statements {
+        match stmt {
+            IRStmt::Let(let_stmt) => out.push(let_stmt.ty.clone()),
+            IRStmt::If(ir_if) => {
+                collect_drop_types_block(&ir_if.then_block, out);
+                if let Some(else_block) = &ir_if.else_block {
+                    collect_drop_types_block(else_block, out);
+                }
+            }
+            IRStmt::While(ir_while) => {
+                collect_drop_types_block(&ir_while.body, out);
+                if let Some(step) = &ir_while.step {
+                    collect_drop_types_block(step, out);
+                }
+            }
+            IRStmt::UnsafeBlock(block) => collect_drop_types_block(&block.body, out),
+            IRStmt::Spawn(spawn) => collect_drop_types_block(&spawn.body, out),
+            IRStmt::Select(sel) => {
+                for arm in &sel.recv_arms {
+                    collect_drop_types_block(&arm.body, out);
+                }
+                if let Some(body) = &sel.default_body {
+                    collect_drop_types_block(body, out);
+                }
+                if let Some(body) = &sel.timeout_body {
+                    collect_drop_types_block(body, out);
+                }
+            }
+            IRStmt::Return(_)
+            | IRStmt::Break
+            | IRStmt::Continue
+            | IRStmt::Expr(_)
+            | IRStmt::Defer(_) => {}
+        }
+    }
+}
+
+struct TypeLayouts<'a> {
+    structs: &'a [StructDecl],
+    enums: &'a [EnumDecl],
+}
+
+fn resolve_capability_callees(
+    functions: &mut [IRFunction],
+    structs: &[StructDecl],
+    enums: &[EnumDecl],
+) {
+    let layouts = TypeLayouts { structs, enums };
+    for func in functions {
+        let mut vars: HashMap<String, Type> = HashMap::new();
+        for param in &func.params {
+            vars.insert(param.name.clone(), param.ty.clone());
+        }
+        for block in &mut func.blocks {
+            resolve_capability_block(&layouts, block, &mut vars);
+        }
+    }
+}
+
+fn resolve_capability_block(
+    layouts: &TypeLayouts<'_>,
+    block: &mut IRBlock,
+    vars: &mut HashMap<String, Type>,
+) {
+    for stmt in &mut block.statements {
+        match stmt {
+            IRStmt::Let(let_stmt) => {
+                if let Some(init) = &mut let_stmt.init {
+                    resolve_capability_expr(layouts, init, vars);
+                }
+                vars.insert(let_stmt.name.clone(), let_stmt.ty.clone());
+            }
+            IRStmt::Return(ret) => {
+                if let Some(value) = &mut ret.value {
+                    resolve_capability_expr(layouts, value, vars);
+                }
+            }
+            IRStmt::Expr(expr) | IRStmt::Defer(expr) => {
+                resolve_capability_expr(layouts, expr, vars)
+            }
+            IRStmt::If(ir_if) => {
+                resolve_capability_expr(layouts, &mut ir_if.cond, vars);
+                resolve_capability_block(layouts, &mut ir_if.then_block, vars);
+                if let Some(else_block) = &mut ir_if.else_block {
+                    resolve_capability_block(layouts, else_block, vars);
+                }
+            }
+            IRStmt::While(ir_while) => {
+                resolve_capability_expr(layouts, &mut ir_while.cond, vars);
+                resolve_capability_block(layouts, &mut ir_while.body, vars);
+                if let Some(step) = &mut ir_while.step {
+                    resolve_capability_block(layouts, step, vars);
+                }
+            }
+            IRStmt::UnsafeBlock(block) => resolve_capability_block(layouts, &mut block.body, vars),
+            IRStmt::Spawn(spawn) => {
+                let mut spawn_vars = vars.clone();
+                for (name, ty) in &spawn.captures {
+                    spawn_vars.insert(name.clone(), ty.clone());
+                }
+                resolve_capability_block(layouts, &mut spawn.body, &mut spawn_vars);
+            }
+            IRStmt::Select(sel) => {
+                for arm in &mut sel.recv_arms {
+                    resolve_capability_expr(layouts, &mut arm.channel, vars);
+                    resolve_capability_block(layouts, &mut arm.body, vars);
+                }
+                if let Some(body) = &mut sel.default_body {
+                    resolve_capability_block(layouts, body, vars);
+                }
+                if let Some(ms) = &mut sel.timeout_ms {
+                    resolve_capability_expr(layouts, ms, vars);
+                }
+                if let Some(body) = &mut sel.timeout_body {
+                    resolve_capability_block(layouts, body, vars);
+                }
+            }
+            IRStmt::Break | IRStmt::Continue => {}
+        }
+    }
+}
+
+fn resolve_capability_expr(
+    layouts: &TypeLayouts<'_>,
+    expr: &mut IREexpr,
+    vars: &HashMap<String, Type>,
+) {
+    match expr {
+        IREexpr::Call { callee, args, .. } => {
+            for arg in args.iter_mut() {
+                resolve_capability_expr(layouts, arg, vars);
+            }
+            if let Some(rest) = callee.strip_prefix("CAP::")
+                && let Some((cap, method)) = rest.split_once("::")
+            {
+                let base = args
+                    .first()
+                    .and_then(|arg| capability_receiver_base(arg, vars));
+                let Some(base) = base else {
+                    panic!(
+                        "compiler bug: capability call '{callee}' has no receiver type after monomorphization"
+                    );
+                };
+                *callee = if cap == "Hash"
+                    && method == "hash"
+                    && let Some(symbol) = crate::integer_limits::builtin_hash_symbol(&base)
+                {
+                    symbol.to_string()
+                } else {
+                    format!("{base}_{cap}_{method}")
+                };
+            }
+        }
+        IREexpr::AddressOf { inner, .. } => resolve_capability_expr(layouts, inner, vars),
+        IREexpr::BinOp { left, right, .. } => {
+            resolve_capability_expr(layouts, left, vars);
+            resolve_capability_expr(layouts, right, vars);
+        }
+        IREexpr::UnOp { operand, .. } => resolve_capability_expr(layouts, operand, vars),
+        IREexpr::Send { channel, value, .. } => {
+            resolve_capability_expr(layouts, channel, vars);
+            resolve_capability_expr(layouts, value, vars);
+        }
+        IREexpr::Recv { channel, .. } => resolve_capability_expr(layouts, channel, vars),
+        IREexpr::Spawn { body, captures } => {
+            let mut spawn_vars = vars.clone();
+            for (name, ty) in captures {
+                spawn_vars.insert(name.clone(), ty.clone());
+            }
+            resolve_capability_block(layouts, body, &mut spawn_vars);
+        }
+        IREexpr::StructLit { fields, .. } => {
+            for field in fields {
+                resolve_capability_expr(layouts, &mut field.value, vars);
+            }
+        }
+        IREexpr::FieldAccess { base, .. } => resolve_capability_expr(layouts, base, vars),
+        IREexpr::EnumLit {
+            args, named_fields, ..
+        } => {
+            for arg in args {
+                resolve_capability_expr(layouts, arg, vars);
+            }
+            if let Some(fields) = named_fields {
+                for (_, value) in fields {
+                    resolve_capability_expr(layouts, value, vars);
+                }
+            }
+        }
+        IREexpr::Match {
+            expr,
+            arms,
+            scrutinee_type,
+            ..
+        } => {
+            resolve_capability_expr(layouts, expr, vars);
+            for arm in arms {
+                if let Some(guard) = &mut arm.guard {
+                    resolve_capability_expr(layouts, guard, vars);
+                }
+                let mut arm_vars = vars.clone();
+                if let Some(ty) = scrutinee_type {
+                    bind_ir_pattern_vars(
+                        &arm.pattern,
+                        ty,
+                        layouts.structs,
+                        layouts.enums,
+                        &mut arm_vars,
+                    );
+                }
+                resolve_capability_block(layouts, &mut arm.body, &mut arm_vars);
+            }
+        }
+        IREexpr::TupleLit { elements, .. } | IREexpr::ArrayLiteral { elements, .. } => {
+            for element in elements {
+                resolve_capability_expr(layouts, element, vars);
+            }
+        }
+        IREexpr::Index { target, index, .. } => {
+            resolve_capability_expr(layouts, target, vars);
+            resolve_capability_expr(layouts, index, vars);
+        }
+        IREexpr::Assign { value, .. } => resolve_capability_expr(layouts, value, vars),
+        IREexpr::AssignIndex {
+            target,
+            index,
+            value,
+            ..
+        } => {
+            resolve_capability_expr(layouts, target, vars);
+            resolve_capability_expr(layouts, index, vars);
+            resolve_capability_expr(layouts, value, vars);
+        }
+        IREexpr::AssignField { target, value, .. } => {
+            resolve_capability_expr(layouts, target, vars);
+            resolve_capability_expr(layouts, value, vars);
+        }
+        IREexpr::Cast { expr, .. } => resolve_capability_expr(layouts, expr, vars),
+        IREexpr::FnLiteral(lit) => {
+            resolve_capability_block(layouts, &mut lit.body, &mut vars.clone())
+        }
+        IREexpr::Lit(_)
+        | IREexpr::BoolLiteral(_)
+        | IREexpr::FloatLiteral(_)
+        | IREexpr::IntLimit { .. }
+        | IREexpr::Var(_)
+        | IREexpr::StringLit(_) => {}
+    }
+}
+
+fn capability_receiver_base(expr: &IREexpr, vars: &HashMap<String, Type>) -> Option<String> {
+    let ty = match expr {
+        IREexpr::AddressOf { ty, .. } => ty.clone(),
+        IREexpr::Var(name) => vars.get(name)?.clone(),
+        IREexpr::Call {
+            return_type: Some(ty),
+            ..
+        } => ty.clone(),
+        _ => return None,
+    };
+    let mut owned = ty;
+    while let Type::Ref { inner, .. } = owned {
+        owned = *inner;
+    }
+    if let Some(name) = crate::integer_limits::builtin_hash_type_name(&owned) {
+        return Some(name.to_string());
+    }
+    match owned {
+        Type::Struct(name) | Type::Enum(name) => Some(name),
+        Type::Generic { name, .. } => Some(name),
+        _ => None,
+    }
 }
 
 fn rewrite_generic_calls_in_block(
@@ -2200,7 +2775,7 @@ fn rewrite_generic_calls_in_expr(
             {
                 let mut subs = HashMap::new();
                 for (arg, param) in args.iter().zip(template.params.iter()) {
-                    if let Some(arg_ty) = infer_ir_expr_type(arg, ctx, var_types) {
+                    if let Some(arg_ty) = stored_ir_expr_type(arg, ctx, var_types) {
                         subs.extend(infer_generic_substitutions(
                             &param.ty,
                             &arg_ty,
@@ -2282,6 +2857,9 @@ fn rewrite_generic_calls_in_expr(
                     rewrite_generic_calls_in_expr(guard, ctx, var_types);
                 }
                 let mut arm_vars = var_types.clone();
+                if let Some(ty) = scrutinee_type.as_ref() {
+                    bind_ir_pattern_vars(&arm.pattern, ty, ctx.structs, ctx.enums, &mut arm_vars);
+                }
                 rewrite_generic_calls_in_block(&mut arm.body, ctx, &mut arm_vars);
             }
         }
@@ -2315,7 +2893,7 @@ fn rewrite_generic_calls_in_expr(
             rewrite_generic_calls_in_expr(index, ctx, var_types);
             rewrite_generic_calls_in_expr(value, ctx, var_types);
         }
-        IREexpr::AssignField { target, value } => {
+        IREexpr::AssignField { target, value, .. } => {
             rewrite_generic_calls_in_expr(target, ctx, var_types);
             rewrite_generic_calls_in_expr(value, ctx, var_types);
         }
@@ -2335,7 +2913,7 @@ fn rewrite_generic_calls_in_expr(
     }
 }
 
-fn infer_ir_expr_type(
+fn stored_ir_expr_type(
     expr: &IREexpr,
     ctx: &GenericRewrite<'_>,
     var_types: &HashMap<String, Type>,
@@ -2361,16 +2939,8 @@ fn infer_ir_expr_type(
         IREexpr::TupleLit { elem_types, .. } if !elem_types.is_empty() => Some(Type::Tuple {
             elements: elem_types.clone(),
         }),
-        IREexpr::AddressOf { inner, mutable } => {
-            infer_ir_expr_type(inner, ctx, var_types).map(|ty| Type::Ref {
-                inner: Box::new(ty),
-                mutable: *mutable,
-            })
-        }
-        IREexpr::FieldAccess { base, field, .. } => {
-            let base_ty = infer_ir_expr_type(base, ctx, var_types)?;
-            ir_field_type(&base_ty, field, ctx.struct_decls)
-        }
+        IREexpr::AddressOf { ty, .. } => Some(ty.clone()),
+        IREexpr::FieldAccess { ty, .. } => Some(ty.clone()),
         _ => None,
     }
 }
@@ -2454,7 +3024,7 @@ fn type_name_for_mangle(ty: &Type) -> String {
         Type::Vec { elem_type } => mangle_type_name("Vec", std::slice::from_ref(elem_type)),
         Type::Ref { inner, .. } => format!("ref_{}", type_name_for_mangle(inner)),
         Type::RawPtr { inner } => format!("ptr_{}", type_name_for_mangle(inner)),
-        Type::Array { inner, size } => format!("{}_{}", type_name_for_mangle(inner), size),
+        Type::Array { inner, size, .. } => format!("{}_{}", type_name_for_mangle(inner), size),
         Type::Slice { inner } => format!("slice_{}", type_name_for_mangle(inner)),
         Type::Channel { elem_type } => mangle_type_name("Channel", std::slice::from_ref(elem_type)),
         Type::Sender { elem_type } => mangle_type_name("Sender", std::slice::from_ref(elem_type)),
@@ -2657,9 +3227,10 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             expr: Box::new(substitute_types_in_expr(inner, substitutions)),
             target_type: substitute_type(target_type, substitutions),
         },
-        IREexpr::AddressOf { inner, mutable } => IREexpr::AddressOf {
+        IREexpr::AddressOf { inner, mutable, ty } => IREexpr::AddressOf {
             inner: Box::new(substitute_types_in_expr(inner, substitutions)),
             mutable: *mutable,
+            ty: substitute_type(ty, substitutions),
         },
         IREexpr::BinOp {
             op,
@@ -2695,10 +3266,12 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             base,
             field,
             is_pointer,
+            ty,
         } => IREexpr::FieldAccess {
             base: Box::new(substitute_types_in_expr(base, substitutions)),
             field: field.clone(),
             is_pointer: *is_pointer,
+            ty: substitute_type(ty, substitutions),
         },
         IREexpr::EnumLit {
             enum_name,
@@ -2727,6 +3300,7 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             expr: inner,
             enum_type,
             scrutinee_type,
+            result_type,
             arms,
         } => IREexpr::Match {
             expr: Box::new(substitute_types_in_expr(inner, substitutions)),
@@ -2734,6 +3308,7 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             scrutinee_type: scrutinee_type
                 .as_ref()
                 .map(|ty| substitute_type(ty, substitutions)),
+            result_type: substitute_type(result_type, substitutions),
             arms: arms
                 .iter()
                 .map(|arm| IRMatchArm {
@@ -2788,9 +3363,14 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
                 .as_ref()
                 .map(|ty| substitute_type(ty, substitutions)),
         },
-        IREexpr::AssignField { target, value } => IREexpr::AssignField {
+        IREexpr::AssignField {
+            target,
+            value,
+            field_ty,
+        } => IREexpr::AssignField {
             target: Box::new(substitute_types_in_expr(target, substitutions)),
             value: Box::new(substitute_types_in_expr(value, substitutions)),
+            field_ty: substitute_type(field_ty, substitutions),
         },
         IREexpr::Lit(v) => IREexpr::Lit(*v),
         IREexpr::IntLimit { ty, max } => IREexpr::IntLimit {
@@ -2858,9 +3438,14 @@ fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
         Type::Channel { elem_type } => Type::Channel {
             elem_type: Box::new(substitute_type(elem_type, substitutions)),
         },
-        Type::Array { inner, size } => Type::Array {
+        Type::Array {
+            inner,
+            size,
+            len_name,
+        } => Type::Array {
             inner: Box::new(substitute_type(inner, substitutions)),
             size: *size,
+            len_name: len_name.clone(),
         },
         Type::Slice { inner } => Type::Slice {
             inner: Box::new(substitute_type(inner, substitutions)),

@@ -69,9 +69,14 @@ impl TypeChecker {
             Type::Vec { elem_type } => Ok(Type::Vec {
                 elem_type: Box::new(self.resolve_type_name(elem_type)?),
             }),
-            Type::Array { inner, size } => Ok(Type::Array {
+            Type::Array {
+                inner,
+                size,
+                len_name,
+            } => Ok(Type::Array {
                 inner: Box::new(self.resolve_type_name(inner)?),
                 size: *size,
+                len_name: len_name.clone(),
             }),
             Type::Slice { inner } => Ok(Type::Slice {
                 inner: Box::new(self.resolve_type_name(inner)?),
@@ -132,6 +137,16 @@ impl TypeChecker {
             Type::Slice { .. } => Ok(("Slice".to_string(), false, false)),
             Type::Array { .. } => Ok(("Slice".to_string(), false, false)),
             Type::String => Ok(("String".to_string(), false, false)),
+            Type::Int => Ok(("int".to_string(), false, false)),
+            Type::I8 => Ok(("i8".to_string(), false, false)),
+            Type::I16 => Ok(("i16".to_string(), false, false)),
+            Type::I32 => Ok(("i32".to_string(), false, false)),
+            Type::I64 => Ok(("i64".to_string(), false, false)),
+            Type::U8 => Ok(("u8".to_string(), false, false)),
+            Type::U16 => Ok(("u16".to_string(), false, false)),
+            Type::U32 => Ok(("u32".to_string(), false, false)),
+            Type::U64 => Ok(("u64".to_string(), false, false)),
+            Type::UInt => Ok(("uint".to_string(), false, false)),
             Type::Box { .. } => Ok(("Box".to_string(), false, false)),
             Type::File => Ok(("File".to_string(), false, false)),
             Type::JoinHandle => Ok(("JoinHandle".to_string(), false, false)),
@@ -210,12 +225,14 @@ pub(crate) fn types_equal(a: &Type, b: &Type) -> bool {
             Type::Array {
                 inner: a_inner,
                 size: a_size,
+                len_name: a_len,
             },
             Type::Array {
                 inner: b_inner,
                 size: b_size,
+                len_name: b_len,
             },
-        ) => a_size == b_size && types_equal(a_inner, b_inner),
+        ) => a_size == b_size && a_len == b_len && types_equal(a_inner, b_inner),
         (Type::Slice { inner: a_inner }, Type::Slice { inner: b_inner }) => {
             types_equal(a_inner, b_inner)
         }
@@ -309,7 +326,7 @@ pub fn type_to_string(ty: &Type) -> String {
         Type::Vec { elem_type } => format!("Vec<{}>", type_to_string(elem_type)),
         Type::String => "String".to_string(),
         Type::Str => "str".to_string(),
-        Type::Array { inner, size } => format!("[{}; {}]", type_to_string(inner), size),
+        Type::Array { inner, size, .. } => format!("[{}; {}]", type_to_string(inner), size),
         Type::Slice { inner } => format!("[]{}", type_to_string(inner)),
         Type::Sender { elem_type } => format!("Sender<{}>", type_to_string(elem_type)),
         Type::Receiver { elem_type } => format!("Receiver<{}>", type_to_string(elem_type)),

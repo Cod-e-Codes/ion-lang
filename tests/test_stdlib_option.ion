@@ -1,0 +1,27 @@
+import "stdlib/option.ion" as option;
+
+fn inc(x: int) -> int {
+    return x + 1;
+}
+
+fn ok_inc(x: int) -> Option<int> {
+    return Option::Some(x + 1);
+}
+
+fn main() -> int {
+    let some_one: Option<int> = Option::Some(1);
+    let mapped: Option<int> = option::map(some_one, inc);
+    let chained: Option<int> = option::and_then(mapped, ok_inc);
+    let missing: Option<int> = Option::None;
+    let fallback: int = option::unwrap_or(missing, 4);
+    let some_expect: Option<int> = Option::Some(1);
+    let ok: int = option::expect(some_expect, "missing");
+    match chained {
+        Option::Some(n) => {
+            return n + fallback + ok;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

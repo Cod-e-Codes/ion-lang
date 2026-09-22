@@ -1,0 +1,12 @@
+enum Event {
+    Set { state: int, code: int };
+}
+
+fn main() -> int {
+    let event: Event = Event::Set { state: 3, code: 9 };
+    match event {
+        Event::Set { code, .. } => {
+            return code;
+        }
+    };
+}

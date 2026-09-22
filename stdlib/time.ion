@@ -1,0 +1,11 @@
+extern "C" {
+    fn ion_millis() -> int;
+}
+
+pub fn millis() -> int {
+    let mut t: int = 0;
+    unsafe {
+        t = ion_millis();
+    }
+    return t;
+}

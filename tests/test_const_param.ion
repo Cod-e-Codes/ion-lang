@@ -1,0 +1,8 @@
+fn pad<const N: int>(buf: &mut [u8; N]) -> int {
+    return N;
+}
+
+fn main() -> int {
+    let mut buf: [u8; 3] = [0, 0, 0];
+    return pad(&mut buf);
+}

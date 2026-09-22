@@ -1,0 +1,196 @@
+import "option.ion" as option;
+import "hash.ion" as hash;
+
+pub enum Slot<K, V> {
+    Empty;
+    Tomb;
+    Full { key: K, value: V };
+}
+
+pub struct HashMap<K, V> {
+    slots: Vec<Slot<K, V>>;
+    len: int;
+    used: int;
+    cap: int;
+}
+
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
+pub fn new<K, V>() -> HashMap<K, V> {
+    let mut slots: Vec<Slot<K, V>> = Vec::new();
+    let mut i: int = 0;
+    while i < 16 {
+        Vec::push(&mut slots, Slot::Empty);
+        i = i + 1;
+    }
+    return HashMap { slots: slots, len: 0, used: 0, cap: 16 };
+}
+
+fn place<K: Hash + Eq, V>(slots: &mut Vec<Slot<K, V>>, cap: int, key: K, value: V) -> int {
+    let h: int = key.hash();
+    let mut n: int = 0;
+    let mut first_tomb: int = -1;
+    while n < cap {
+        let mut idx: int = (h + n) % cap;
+        if idx < 0 {
+            idx = idx + cap;
+        }
+        let taken: Option<Slot<K, V>> = Vec::get(slots, idx);
+        match taken {
+            Option::Some(slot) => {
+                match slot {
+                    Slot::Empty => {
+                        let mut dest: int = idx;
+                        if first_tomb >= 0 {
+                            dest = first_tomb;
+                        }
+                        if dest != idx {
+                            Vec::set(slots, idx, Slot::Empty);
+                            Vec::set(slots, dest, Slot::Full { key: key, value: value });
+                            return 2;
+                        }
+                        Vec::set(slots, dest, Slot::Full { key: key, value: value });
+                        return 1;
+                    }
+                    Slot::Tomb => {
+                        if first_tomb < 0 {
+                            first_tomb = idx;
+                        }
+                        let _ = Vec::set(slots, idx, Slot::Tomb);
+                    }
+                    Slot::Full { key: found, value: old } => {
+                        if found == key {
+                            let _ = Vec::set(slots, idx, Slot::Full { key: found, value: value });
+                            return 0;
+                        }
+                        let _ = Vec::set(slots, idx, Slot::Full { key: found, value: old });
+                    }
+                }
+            }
+            Option::None => {
+                return -1;
+            }
+        }
+        n = n + 1;
+    }
+    if first_tomb >= 0 {
+        let _ = Vec::set(slots, first_tomb, Slot::Full { key: key, value: value });
+        return 2;
+    }
+    return -1;
+}
+
+fn grow<K: Hash + Eq, V>(map: &mut HashMap<K, V>) {
+    let new_cap: int = map.cap * 2;
+    let mut bigger: Vec<Slot<K, V>> = Vec::new();
+    let mut i: int = 0;
+    while i < new_cap {
+        Vec::push(&mut bigger, Slot::Empty);
+        i = i + 1;
+    }
+    i = 0;
+    while i < map.cap {
+        let taken: Option<Slot<K, V>> = Vec::get(map.slots, i);
+        match taken {
+            Option::Some(slot) => {
+                match slot {
+                    Slot::Full { key: k, value: v } => {
+                        let _ = place(&mut bigger, new_cap, k, v);
+                    }
+                    Slot::Empty => {}
+                    Slot::Tomb => {}
+                }
+            }
+            Option::None => {}
+        }
+        i = i + 1;
+    }
+    map.slots = bigger;
+    map.cap = new_cap;
+    map.used = map.len;
+}
+
+pub fn insert<K: Hash + Eq, V>(map: &mut HashMap<K, V>, key: K, value: V) {
+    if map.used * 2 >= map.cap {
+        grow(map);
+    }
+    let kind: int = place(map.slots, map.cap, key, value);
+    if kind == 1 {
+        map.len = map.len + 1;
+        map.used = map.used + 1;
+    } else if kind == 2 {
+        map.len = map.len + 1;
+    }
+}
+
+pub fn remove<K: Hash + Eq, V>(map: &mut HashMap<K, V>, key: K) -> Option<V> {
+    let cap: int = map.cap;
+    let h: int = key.hash();
+    let mut n: int = 0;
+    while n < cap {
+        let mut idx: int = (h + n) % cap;
+        if idx < 0 {
+            idx = idx + cap;
+        }
+        let taken: Option<Slot<K, V>> = Vec::get(map.slots, idx);
+        match taken {
+            Option::Some(slot) => {
+                match slot {
+                    Slot::Empty => {
+                        let _ = Vec::set(map.slots, idx, Slot::Empty);
+                        return Option::None;
+                    }
+                    Slot::Tomb => {
+                        let _ = Vec::set(map.slots, idx, Slot::Tomb);
+                    }
+                    Slot::Full { key: found, value: old } => {
+                        if found == key {
+                            let _ = Vec::set(map.slots, idx, Slot::Tomb);
+                            map.len = map.len - 1;
+                            return Option::Some(old);
+                        }
+                        let _ = Vec::set(map.slots, idx, Slot::Full { key: found, value: old });
+                    }
+                }
+            }
+            Option::None => {
+                return Option::None;
+            }
+        }
+        n = n + 1;
+    }
+    return Option::None;
+}
+
+pub fn len<K, V>(map: &HashMap<K, V>) -> int {
+    return map.len;
+}
+
+pub fn for_each<K, V>(map: &mut HashMap<K, V>, f: fn(&V) -> int) {
+    let cap: int = map.cap;
+    let mut i: int = 0;
+    while i < cap {
+        let taken: Option<Slot<K, V>> = Vec::get(map.slots, i);
+        match taken {
+            Option::Some(slot) => {
+                match slot {
+                    Slot::Full { key: k, value: v } => {
+                        f(&v);
+                        Vec::set(map.slots, i, Slot::Full { key: k, value: v });
+                    }
+                    Slot::Empty => {
+                        Vec::set(map.slots, i, Slot::Empty);
+                    }
+                    Slot::Tomb => {
+                        Vec::set(map.slots, i, Slot::Tomb);
+                    }
+                }
+            }
+            Option::None => {}
+        }
+        i = i + 1;
+    }
+}

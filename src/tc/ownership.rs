@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 /// Join ownership states from reachable control-flow edges (ION_SPEC §5.2).
 /// Empty `states` is a caller error; prefer skipping the join when no edges reach.
@@ -19,6 +20,26 @@ pub(crate) fn join_ownership_states(
             name: name.to_string(),
             span,
         })
+    }
+}
+
+/// Pops one match-sibling frame when the match check ends, including on error.
+pub(crate) struct MatchSiblingGuard {
+    loans: *mut Vec<Vec<usize>>,
+}
+
+impl Drop for MatchSiblingGuard {
+    fn drop(&mut self) {
+        if self.loans.is_null() {
+            return;
+        }
+        // SAFETY: `loans` points at `TypeChecker::match_sibling_loans` for the
+        // checker that pushed this frame. Drop runs as that match check ends
+        // and only pops the frame `enter_match_siblings` pushed.
+        unsafe {
+            (*self.loans).pop();
+        }
+        self.loans = std::ptr::null_mut();
     }
 }
 
@@ -146,73 +167,771 @@ impl TypeChecker {
 
     pub(crate) fn push_borrow_scope(&mut self) {
         self.borrow_scopes.push(Vec::new());
+        self.borrow_shadows.push(Vec::new());
     }
 
     pub(crate) fn pop_borrow_scope(&mut self) {
         if let Some(scope) = self.borrow_scopes.pop() {
-            for (owner, mutable) in scope {
-                self.release_borrow(&owner, mutable);
+            for idx in scope {
+                self.release_live(idx);
             }
+        }
+        if let Some(shadows) = self.borrow_shadows.pop() {
+            for (name, prev) in shadows.into_iter().rev() {
+                let live: Vec<usize> = prev
+                    .into_iter()
+                    .filter(|idx| {
+                        self.live_borrows
+                            .get(*idx)
+                            .is_some_and(|borrow| !borrow.released)
+                    })
+                    .collect();
+                if live.is_empty() {
+                    self.borrow_names.remove(&name);
+                } else {
+                    self.borrow_names.insert(name, live);
+                }
+            }
+        }
+    }
+
+    fn release_live(&mut self, idx: usize) {
+        let Some(borrow) = self.live_borrows.get(idx) else {
+            return;
+        };
+        if borrow.released {
+            return;
+        }
+        let owner = borrow.owner.clone();
+        let mutable = borrow.mutable;
+        let whole = borrow.fields.is_none();
+        self.live_borrows[idx].released = true;
+        if whole {
+            self.release_borrow(&owner, mutable);
         }
     }
 
     pub(crate) fn check_borrow_allowed(
         &self,
         owner: &str,
+        fields: Option<&[String]>,
         mutable: bool,
         span: Span,
     ) -> Result<(), TypeCheckError> {
-        let info = self
-            .variables
-            .get(owner)
-            .ok_or_else(|| TypeCheckError::UndefinedVariable {
-                name: owner.to_string(),
-                span,
-            })?;
+        self.check_borrow_allowed_except(owner, fields, mutable, span, &[])
+    }
 
-        if mutable {
-            if info.shared_borrow_count > 0 || info.mut_borrow_count > 0 {
-                return Err(TypeCheckError::BorrowConflict {
-                    name: owner.to_string(),
-                    description: "as mutable while it is already borrowed".to_string(),
-                    span,
-                });
-            }
-        } else if info.mut_borrow_count > 0 {
-            return Err(TypeCheckError::BorrowConflict {
+    fn check_borrow_allowed_except(
+        &self,
+        owner: &str,
+        fields: Option<&[String]>,
+        mutable: bool,
+        span: Span,
+        ignore: &[usize],
+    ) -> Result<(), TypeCheckError> {
+        if !self.variables.contains_key(owner) {
+            return Err(TypeCheckError::UndefinedVariable {
                 name: owner.to_string(),
-                description: "as shared while it is mutably borrowed".to_string(),
                 span,
             });
         }
-
+        for (idx, borrow) in self.live_borrows.iter().enumerate() {
+            if ignore.contains(&idx)
+                || self.loan_ignored_as_match_sibling(idx)
+                || borrow.released
+                || borrow.owner != owner
+            {
+                continue;
+            }
+            if borrow_paths_conflict(borrow.mutable, borrow.fields.as_deref(), mutable, fields) {
+                return Err(TypeCheckError::BorrowConflict {
+                    name: owner.to_string(),
+                    description: if mutable {
+                        "as mutable while it is already borrowed".to_string()
+                    } else {
+                        "as shared while it is mutably borrowed".to_string()
+                    },
+                    span,
+                });
+            }
+        }
         Ok(())
     }
 
     pub(crate) fn register_borrow(
         &mut self,
         owner: &str,
+        fields: Option<Vec<String>>,
         mutable: bool,
         span: Span,
     ) -> Result<(), TypeCheckError> {
-        self.check_borrow_allowed(owner, mutable, span)?;
+        self.register_borrow_except(owner, fields, mutable, span, &[])
+    }
 
-        let info = self
-            .variables
-            .get_mut(owner)
-            .expect("owner exists after check");
-
-        if mutable {
-            info.mut_borrow_count += 1;
-        } else {
-            info.shared_borrow_count += 1;
+    fn register_borrow_except(
+        &mut self,
+        owner: &str,
+        fields: Option<Vec<String>>,
+        mutable: bool,
+        span: Span,
+        ignore: &[usize],
+    ) -> Result<(), TypeCheckError> {
+        self.check_borrow_allowed_except(owner, fields.as_deref(), mutable, span, ignore)?;
+        if fields.is_none() {
+            let info = self
+                .variables
+                .get_mut(owner)
+                .expect("owner exists after check");
+            if mutable {
+                info.mut_borrow_count += 1;
+            } else {
+                info.shared_borrow_count += 1;
+            }
         }
-
+        let idx = self.live_borrows.len();
+        self.live_borrows.push(LiveBorrow {
+            owner: owner.to_string(),
+            fields,
+            mutable,
+            released: false,
+            depth: self.borrow_scopes.len(),
+        });
         if let Some(scope) = self.borrow_scopes.last_mut() {
-            scope.push((owner.to_string(), mutable));
+            scope.push(idx);
         }
-
         Ok(())
+    }
+
+    fn ensure_loan_shadow(&mut self, name: &str) {
+        let already = self
+            .borrow_shadows
+            .last()
+            .is_some_and(|frame| frame.iter().any(|(existing, _)| existing == name));
+        if already {
+            return;
+        }
+        let prev = self.borrow_names.get(name).cloned().unwrap_or_default();
+        if let Some(frame) = self.borrow_shadows.last_mut() {
+            frame.push((name.to_string(), prev));
+        }
+    }
+
+    fn loans_of(&self, name: &str) -> Vec<usize> {
+        self.borrow_names
+            .get(name)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|idx| {
+                self.live_borrows
+                    .get(*idx)
+                    .is_some_and(|borrow| !borrow.released)
+            })
+            .collect()
+    }
+
+    fn add_loan(&mut self, name: &str, idx: usize) {
+        if name.is_empty() {
+            return;
+        }
+        if self
+            .live_borrows
+            .get(idx)
+            .is_some_and(|borrow| borrow.released)
+        {
+            return;
+        }
+        let entry = self.borrow_names.entry(name.to_string()).or_default();
+        if !entry.contains(&idx) {
+            entry.push(idx);
+        }
+    }
+
+    /// A `let` binding. Restored when the borrow scope that introduced it pops.
+    pub(crate) fn add_loan_in_scope(&mut self, name: &str, idx: usize) {
+        self.ensure_loan_shadow(name);
+        self.add_loan(name, idx);
+    }
+
+    pub(crate) fn var_is_ref(&self, name: &str) -> bool {
+        self.variables
+            .get(name)
+            .is_some_and(|info| matches!(info.ty, Type::Ref { .. }))
+    }
+
+    /// `&mut a.field` or `&mut a[i]` reads through a reference that already carries a loan.
+    fn is_projected_reborrow(&self, owner: &str, fields: Option<&[String]>, inner: &Expr) -> bool {
+        let through_field = fields.is_some_and(|path| !path.is_empty())
+            && self.var_is_ref(owner)
+            && !self.loans_of(owner).is_empty();
+        through_field || self.indexes_through_ref(inner)
+    }
+
+    /// `a[i]` where `a` is a reference that already carries a loan.
+    /// An index borrows the whole place behind that reference.
+    fn indexes_through_ref(&self, expr: &Expr) -> bool {
+        let mut saw_index = false;
+        let mut current = expr;
+        loop {
+            match current {
+                Expr::FieldAccess(acc) => current = &acc.base,
+                Expr::Index(index) => {
+                    saw_index = true;
+                    current = &index.target;
+                }
+                Expr::Var(var) => {
+                    return saw_index
+                        && self.var_is_ref(&var.name)
+                        && !self.loans_of(&var.name).is_empty();
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    fn combine_loan_fields(
+        existing: &Option<Vec<String>>,
+        extra: Option<&[String]>,
+    ) -> Option<Vec<String>> {
+        let extra = extra.unwrap_or(&[]);
+        if extra.is_empty() {
+            return existing.clone();
+        }
+        match existing {
+            None => Some(extra.to_vec()),
+            Some(prefix) => {
+                let mut path = prefix.clone();
+                path.extend(extra.iter().cloned());
+                Some(path)
+            }
+        }
+    }
+
+    fn push_unique_loans(out: &mut Vec<usize>, more: Vec<usize>) {
+        for idx in more {
+            if !out.contains(&idx) {
+                out.push(idx);
+            }
+        }
+    }
+
+    /// Loans carried by the value of `expr`: a reference variable, a reborrow
+    /// through one, a fresh `&` / `&mut` stored in a struct, enum, tuple, or
+    /// match result, or a field of such a value.
+    pub(crate) fn loans_in_expr(&self, expr: &Expr) -> Vec<usize> {
+        match expr {
+            Expr::Var(var) => self.loans_of(&var.name),
+            Expr::Ref(ref_expr) => {
+                if let Some(ids) = self.stored_ref_loans.get(&ref_expr.id) {
+                    return ids.clone();
+                }
+                if let Some((owner, fields, _)) = self.place_from_expr(&ref_expr.inner)
+                    && self.is_projected_reborrow(&owner, fields.as_deref(), &ref_expr.inner)
+                {
+                    self.loans_of(&owner)
+                } else {
+                    Vec::new()
+                }
+            }
+            Expr::TupleLit(tuple) => {
+                let mut out = Vec::new();
+                for element in &tuple.elements {
+                    Self::push_unique_loans(&mut out, self.loans_in_expr(element));
+                }
+                out
+            }
+            Expr::FieldAccess(acc) => self.loans_in_expr(&acc.base),
+            Expr::StructLit(lit) => {
+                let mut out = Vec::new();
+                for field in &lit.fields {
+                    Self::push_unique_loans(&mut out, self.loans_in_expr(&field.value));
+                }
+                out
+            }
+            Expr::EnumLit(lit) => {
+                let mut out = Vec::new();
+                for arg in &lit.args {
+                    Self::push_unique_loans(&mut out, self.loans_in_expr(arg));
+                }
+                if let Some(fields) = &lit.named_fields {
+                    for (_, value) in fields {
+                        Self::push_unique_loans(&mut out, self.loans_in_expr(value));
+                    }
+                }
+                out
+            }
+            Expr::Match(match_expr) => {
+                if let Some(recorded) = self.match_result_loans.get(&match_expr.id) {
+                    let mut out = recorded.clone();
+                    for arm in &match_expr.arms {
+                        Self::push_unique_loans(&mut out, self.stored_loans_in_block(&arm.body));
+                    }
+                    out
+                } else {
+                    let mut out = Vec::new();
+                    for arm in &match_expr.arms {
+                        Self::push_unique_loans(&mut out, self.loans_in_block(&arm.body));
+                    }
+                    out
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub(crate) fn loans_in_block(&self, block: &crate::ast::Block) -> Vec<usize> {
+        self.loans_in_stmts(&block.statements)
+    }
+
+    fn loans_in_stmts(&self, stmts: &[crate::ast::Stmt]) -> Vec<usize> {
+        let Some(last) = stmts.last() else {
+            return Vec::new();
+        };
+        match last {
+            crate::ast::Stmt::Expr(expr) => self.loans_in_expr(&expr.expr),
+            crate::ast::Stmt::If(if_stmt) => {
+                let mut out = self.loans_in_block(&if_stmt.then_block);
+                if let Some(else_block) = &if_stmt.else_block {
+                    Self::push_unique_loans(&mut out, self.loans_in_block(else_block));
+                }
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Loans of `&` / `&mut` expressions stored in `expr`, ignoring names.
+    /// Pattern bindings have already left scope when a recorded match is read.
+    fn stored_loans_in_expr(&self, expr: &Expr) -> Vec<usize> {
+        match expr {
+            Expr::Ref(ref_expr) => self
+                .stored_ref_loans
+                .get(&ref_expr.id)
+                .cloned()
+                .unwrap_or_default(),
+            Expr::StructLit(lit) => {
+                let mut out = Vec::new();
+                for field in &lit.fields {
+                    Self::push_unique_loans(&mut out, self.stored_loans_in_expr(&field.value));
+                }
+                out
+            }
+            Expr::EnumLit(lit) => {
+                let mut out = Vec::new();
+                for arg in &lit.args {
+                    Self::push_unique_loans(&mut out, self.stored_loans_in_expr(arg));
+                }
+                if let Some(fields) = &lit.named_fields {
+                    for (_, value) in fields {
+                        Self::push_unique_loans(&mut out, self.stored_loans_in_expr(value));
+                    }
+                }
+                out
+            }
+            Expr::TupleLit(tuple) => {
+                let mut out = Vec::new();
+                for element in &tuple.elements {
+                    Self::push_unique_loans(&mut out, self.stored_loans_in_expr(element));
+                }
+                out
+            }
+            Expr::FieldAccess(acc) => self.stored_loans_in_expr(&acc.base),
+            Expr::Match(match_expr) => {
+                let mut out = Vec::new();
+                for arm in &match_expr.arms {
+                    Self::push_unique_loans(&mut out, self.stored_loans_in_block(&arm.body));
+                }
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn stored_loans_in_block(&self, block: &crate::ast::Block) -> Vec<usize> {
+        self.stored_loans_in_stmts(&block.statements)
+    }
+
+    fn stored_loans_in_stmts(&self, stmts: &[crate::ast::Stmt]) -> Vec<usize> {
+        let Some(last) = stmts.last() else {
+            return Vec::new();
+        };
+        match last {
+            crate::ast::Stmt::Expr(expr) => self.stored_loans_in_expr(&expr.expr),
+            crate::ast::Stmt::If(if_stmt) => {
+                let mut out = self.stored_loans_in_block(&if_stmt.then_block);
+                if let Some(else_block) = &if_stmt.else_block {
+                    Self::push_unique_loans(&mut out, self.stored_loans_in_block(else_block));
+                }
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Register lasting loans for `&` / `&mut` created inside a stored value.
+    /// `ignore` lists loans from other arms of the same match or `if`: only one
+    /// of those runs. Call arguments are not walked, so they stay ephemeral.
+    /// Returns loan indices created by this walk.
+    fn ensure_stored_ref_loans(
+        &mut self,
+        expr: &Expr,
+        ignore: &[usize],
+    ) -> Result<Vec<usize>, TypeCheckError> {
+        match expr {
+            Expr::Ref(ref_expr) => self.register_stored_ref(ref_expr, ignore),
+            Expr::StructLit(lit) => {
+                let mut created = Vec::new();
+                for field in &lit.fields {
+                    created.extend(self.ensure_stored_ref_loans(&field.value, ignore)?);
+                }
+                Ok(created)
+            }
+            Expr::EnumLit(lit) => {
+                let mut created = Vec::new();
+                for arg in &lit.args {
+                    created.extend(self.ensure_stored_ref_loans(arg, ignore)?);
+                }
+                if let Some(fields) = &lit.named_fields {
+                    for (_, value) in fields {
+                        created.extend(self.ensure_stored_ref_loans(value, ignore)?);
+                    }
+                }
+                Ok(created)
+            }
+            Expr::TupleLit(tuple) => {
+                let mut created = Vec::new();
+                for element in &tuple.elements {
+                    created.extend(self.ensure_stored_ref_loans(element, ignore)?);
+                }
+                Ok(created)
+            }
+            Expr::FieldAccess(acc) => self.ensure_stored_ref_loans(&acc.base, ignore),
+            Expr::Match(match_expr) => {
+                self.ensure_stored_alternatives(match_expr.arms.iter().map(|arm| &arm.body), ignore)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn ensure_stored_in_block(
+        &mut self,
+        block: &crate::ast::Block,
+        ignore: &[usize],
+    ) -> Result<Vec<usize>, TypeCheckError> {
+        self.ensure_stored_in_stmts(&block.statements, ignore)
+    }
+
+    fn ensure_stored_in_stmts(
+        &mut self,
+        stmts: &[crate::ast::Stmt],
+        ignore: &[usize],
+    ) -> Result<Vec<usize>, TypeCheckError> {
+        let Some(last) = stmts.last() else {
+            return Ok(Vec::new());
+        };
+        match last {
+            crate::ast::Stmt::Expr(expr) => self.ensure_stored_ref_loans(&expr.expr, ignore),
+            crate::ast::Stmt::If(if_stmt) => {
+                let mut branches = vec![&if_stmt.then_block];
+                if let Some(else_block) = &if_stmt.else_block {
+                    branches.push(else_block);
+                }
+                self.ensure_stored_alternatives(branches.into_iter(), ignore)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn ensure_stored_alternatives<'a>(
+        &mut self,
+        branches: impl Iterator<Item = &'a crate::ast::Block>,
+        ignore: &[usize],
+    ) -> Result<Vec<usize>, TypeCheckError> {
+        let mut arm_ignore = ignore.to_vec();
+        let mut created = Vec::new();
+        for block in branches {
+            let arm_new = self.ensure_stored_in_block(block, &arm_ignore)?;
+            for idx in &arm_new {
+                if !arm_ignore.contains(idx) {
+                    arm_ignore.push(*idx);
+                }
+            }
+            created.extend(arm_new);
+        }
+        Ok(created)
+    }
+
+    /// Record the loan of a `&` / `&mut` that is stored in a value, not bound
+    /// by itself. A second walk of the same expression does not register again.
+    fn register_stored_ref(
+        &mut self,
+        ref_expr: &RefExpr,
+        ignore: &[usize],
+    ) -> Result<Vec<usize>, TypeCheckError> {
+        if self.stored_ref_loans.contains_key(&ref_expr.id) {
+            return Ok(Vec::new());
+        }
+        let Some((owner, fields, span)) = self.place_from_expr(&ref_expr.inner) else {
+            self.stored_ref_loans.insert(ref_expr.id, Vec::new());
+            return Ok(Vec::new());
+        };
+        let before = self.live_borrows.len();
+        let mut carried = Vec::new();
+        if self.is_projected_reborrow(&owner, fields.as_deref(), &ref_expr.inner) {
+            let parents = self.loans_of(&owner);
+            let parent = &self.live_borrows[parents[0]];
+            let under_owner = parent.owner.clone();
+            let under_fields = Self::combine_loan_fields(&parent.fields, fields.as_deref());
+            let mut except = parents.clone();
+            for idx in ignore {
+                if !except.contains(idx) {
+                    except.push(*idx);
+                }
+            }
+            self.register_borrow_except(
+                &under_owner,
+                under_fields,
+                ref_expr.mutable,
+                span,
+                &except,
+            )?;
+            carried.extend(parents);
+        } else {
+            self.register_borrow_except(&owner, fields, ref_expr.mutable, span, ignore)?;
+        }
+        let mut created = Vec::new();
+        if self.live_borrows.len() > before {
+            let idx = self.live_borrows.len() - 1;
+            carried.push(idx);
+            created.push(idx);
+        }
+        self.stored_ref_loans.insert(ref_expr.id, carried);
+        Ok(created)
+    }
+
+    pub(crate) fn carry_expr_loans(
+        &mut self,
+        dest: &str,
+        expr: &Expr,
+        in_scope: bool,
+    ) -> Result<(), TypeCheckError> {
+        self.ensure_stored_ref_loans(expr, &[])?;
+        for idx in self.loans_in_expr(expr) {
+            if in_scope {
+                self.add_loan_in_scope(dest, idx);
+            } else {
+                self.add_loan(dest, idx);
+            }
+        }
+        Ok(())
+    }
+
+    /// An enum, struct, or array still holds the pointer after its last read.
+    /// A bare `&T` binding ends at its last use.
+    fn carrier_outlives_uses(&self, name: &str) -> bool {
+        self.variables.get(name).is_some_and(|info| {
+            matches!(
+                info.ty,
+                Type::Enum(_) | Type::Generic { .. } | Type::Struct(_) | Type::Array { .. }
+            )
+        })
+    }
+
+    pub(crate) fn record_match_loans(&mut self, id: ExprId, loans: &[usize]) {
+        let entry = self.match_result_loans.entry(id).or_default();
+        for idx in loans {
+            if !entry.contains(idx) {
+                entry.push(*idx);
+            }
+        }
+    }
+
+    pub(crate) fn enter_match_siblings(&mut self) -> MatchSiblingGuard {
+        self.match_sibling_loans.push(Vec::new());
+        MatchSiblingGuard {
+            loans: &mut self.match_sibling_loans,
+        }
+    }
+
+    fn loan_ignored_as_match_sibling(&self, idx: usize) -> bool {
+        self.match_sibling_loans
+            .iter()
+            .any(|frame| frame.contains(&idx))
+    }
+
+    /// Keep loans the arm yields. A loan created on a local in the arm would
+    /// otherwise end with that local, while the match result still holds the
+    /// pointer. Loans that already belonged to an outer binding stay put.
+    /// Loans this arm created are ignored by later arms, because only one arm runs.
+    pub(crate) fn keep_arm_result_loans(&mut self, match_id: ExprId, escaping: &[usize]) {
+        let current = self.borrow_scopes.last().cloned().unwrap_or_default();
+        let created: Vec<usize> = escaping
+            .iter()
+            .copied()
+            .filter(|idx| current.contains(idx))
+            .collect();
+        self.promote_current_scope_loans(&created);
+        self.record_match_loans(match_id, escaping);
+        if let Some(frame) = self.match_sibling_loans.last_mut() {
+            for idx in created {
+                if !frame.contains(&idx) {
+                    frame.push(idx);
+                }
+            }
+        }
+    }
+
+    /// Move loans this scope registered onto the parent scope so a `match`
+    /// result can keep them after the arm ends.
+    pub(crate) fn promote_current_scope_loans(&mut self, loans: &[usize]) {
+        let Some(current) = self.borrow_scopes.last().cloned() else {
+            return;
+        };
+        if self.borrow_scopes.len() < 2 {
+            return;
+        }
+        let parent_depth = self.borrow_scopes.len() - 1;
+        for idx in loans {
+            if !current.contains(idx) {
+                continue;
+            }
+            if let Some(scope) = self.borrow_scopes.last_mut() {
+                scope.retain(|id| id != idx);
+            }
+            if let Some(borrow) = self.live_borrows.get_mut(*idx) {
+                borrow.depth = parent_depth;
+            }
+            let parent = self.borrow_scopes.len() - 2;
+            if let Some(scope) = self.borrow_scopes.get_mut(parent)
+                && !scope.contains(idx)
+            {
+                scope.push(*idx);
+            }
+        }
+    }
+
+    /// Register the loan for `&` / `&mut`, including a field reborrow of an
+    /// existing reference. The new binding carries that same loan.
+    pub(crate) fn finish_ref_loan(
+        &mut self,
+        dest: &str,
+        mutable: bool,
+        inner: &Expr,
+        in_scope: bool,
+    ) -> Result<(), TypeCheckError> {
+        let Some((owner, fields, span)) = self.place_from_expr(inner) else {
+            return Ok(());
+        };
+        if self.is_projected_reborrow(&owner, fields.as_deref(), inner) {
+            let parents = self.loans_of(&owner);
+            let parent = &self.live_borrows[parents[0]];
+            let under_owner = parent.owner.clone();
+            let under_fields = Self::combine_loan_fields(&parent.fields, fields.as_deref());
+            self.register_borrow_except(&under_owner, under_fields, mutable, span, &parents)?;
+            for idx in parents {
+                if in_scope {
+                    self.add_loan_in_scope(dest, idx);
+                } else {
+                    self.add_loan(dest, idx);
+                }
+            }
+            self.note_borrow_binding_scoped(dest, in_scope);
+            return Ok(());
+        }
+        self.register_borrow(&owner, fields, mutable, span)?;
+        self.note_borrow_binding_scoped(dest, in_scope);
+        Ok(())
+    }
+
+    pub(crate) fn note_borrow_binding(&mut self, name: &str) {
+        self.note_borrow_binding_scoped(name, true);
+    }
+
+    fn note_borrow_binding_scoped(&mut self, name: &str, in_scope: bool) {
+        if let Some(idx) = self.live_borrows.len().checked_sub(1) {
+            if in_scope {
+                self.add_loan_in_scope(name, idx);
+            } else {
+                self.add_loan(name, idx);
+            }
+        }
+    }
+
+    /// Check a borrow that may be a projection through an existing reference.
+    pub(crate) fn check_ref_place(
+        &self,
+        mutable: bool,
+        inner: &Expr,
+    ) -> Result<(), TypeCheckError> {
+        let Some((owner, fields, span)) = self.place_from_expr(inner) else {
+            return Ok(());
+        };
+        if self.is_projected_reborrow(&owner, fields.as_deref(), inner) {
+            let parents = self.loans_of(&owner);
+            let parent = &self.live_borrows[parents[0]];
+            let under_owner = parent.owner.clone();
+            let under_fields = Self::combine_loan_fields(&parent.fields, fields.as_deref());
+            return self.check_borrow_allowed_except(
+                &under_owner,
+                under_fields.as_deref(),
+                mutable,
+                span,
+                &parents,
+            );
+        }
+        self.check_borrow_allowed(&owner, fields.as_deref(), mutable, span)
+    }
+
+    pub(crate) fn release_borrows_ending_at(
+        &mut self,
+        stmt_index: usize,
+        last_uses: &HashMap<String, usize>,
+        depth: usize,
+    ) {
+        let mut by_loan: HashMap<usize, Vec<String>> = HashMap::new();
+        for (name, idxs) in &self.borrow_names {
+            for idx in idxs {
+                let Some(borrow) = self.live_borrows.get(*idx) else {
+                    continue;
+                };
+                if borrow.released || borrow.depth != depth {
+                    continue;
+                }
+                by_loan.entry(*idx).or_default().push(name.clone());
+            }
+        }
+        let mut ending = Vec::new();
+        for (idx, names) in by_loan {
+            if names
+                .iter()
+                .any(|name| !last_uses.contains_key(name) || self.carrier_outlives_uses(name))
+            {
+                continue;
+            }
+            let max_use = names
+                .iter()
+                .filter_map(|name| last_uses.get(name))
+                .copied()
+                .max();
+            if max_use == Some(stmt_index) {
+                ending.push((idx, names));
+            }
+        }
+        for (idx, names) in ending {
+            for name in names {
+                if let Some(list) = self.borrow_names.get_mut(&name) {
+                    list.retain(|loan| *loan != idx);
+                }
+                if self
+                    .borrow_names
+                    .get(&name)
+                    .is_some_and(|list| list.is_empty())
+                {
+                    self.borrow_names.remove(&name);
+                }
+            }
+            self.release_live(idx);
+        }
     }
 
     fn release_borrow(&mut self, owner: &str, mutable: bool) {
@@ -243,21 +962,45 @@ impl TypeChecker {
         }
     }
 
+    pub(crate) fn place_from_expr(
+        &self,
+        expr: &Expr,
+    ) -> Option<(String, Option<Vec<String>>, Span)> {
+        let mut fields = Vec::new();
+        let mut current = expr;
+        loop {
+            match current {
+                Expr::FieldAccess(acc) => {
+                    fields.push(acc.field.clone());
+                    current = &acc.base;
+                }
+                Expr::Index(_) => {
+                    let (owner, span) = self.borrow_owner_from_expr(expr)?;
+                    return Some((owner, None, span));
+                }
+                Expr::Var(var) => {
+                    if !self.variables.contains_key(&var.name) {
+                        return None;
+                    }
+                    fields.reverse();
+                    let path = if fields.is_empty() {
+                        None
+                    } else {
+                        Some(fields)
+                    };
+                    return Some((var.name.clone(), path, var.span));
+                }
+                _ => return None,
+            }
+        }
+    }
+
     pub(crate) fn check_owner_not_borrowed(
         &self,
         owner: &str,
         span: Span,
     ) -> Result<(), TypeCheckError> {
-        if let Some(info) = self.variables.get(owner)
-            && (info.shared_borrow_count > 0 || info.mut_borrow_count > 0)
-        {
-            return Err(TypeCheckError::BorrowConflict {
-                name: owner.to_string(),
-                description: "while it is borrowed".to_string(),
-                span,
-            });
-        }
-        Ok(())
+        self.check_borrow_allowed(owner, None, true, span)
     }
 
     /// Check expression for moves and mark variables as Moved.
@@ -285,15 +1028,17 @@ impl TypeChecker {
                     }
                 }
 
-                let var_info = self.variables.get(&var_expr.name).ok_or_else(|| {
-                    TypeCheckError::UndefinedVariable {
-                        name: var_expr.name.clone(),
-                        span: var_expr.span,
-                    }
-                })?;
+                let (state, ty) = {
+                    let var_info = self.variables.get(&var_expr.name).ok_or_else(|| {
+                        TypeCheckError::UndefinedVariable {
+                            name: var_expr.name.clone(),
+                            span: var_expr.span,
+                        }
+                    })?;
+                    (var_info.state, var_info.ty.clone())
+                };
 
-                // Check for use-after-move
-                if var_info.state == OwnershipState::Moved {
+                if state == OwnershipState::Moved {
                     return Err(TypeCheckError::UseAfterMove {
                         name: var_expr.name.clone(),
                         span: var_expr.span,
@@ -302,8 +1047,8 @@ impl TypeChecker {
 
                 self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
 
-                // Primitives and references are copied, not moved (see ION_SPEC §5.2).
-                if Self::is_copy_type(&var_info.ty) {
+                // Primitives, references, and `T: Copy` parameters are copied.
+                if self.satisfies_bound(&ty, "Copy") {
                     return Ok(());
                 }
 
@@ -315,10 +1060,7 @@ impl TypeChecker {
                 Ok(())
             }
             Expr::Ref(ref_expr) => {
-                // Creating a reference borrows the owner; it is not a direct owner use.
-                if let Some((owner, span)) = self.borrow_owner_from_expr(&ref_expr.inner) {
-                    self.check_borrow_allowed(&owner, ref_expr.mutable, span)?;
-                }
+                self.check_ref_place(ref_expr.mutable, &ref_expr.inner)?;
                 if !matches!(ref_expr.inner.as_ref(), Expr::Var(_)) {
                     self.check_expr_borrow_operand(&ref_expr.inner)?;
                 }
@@ -338,8 +1080,20 @@ impl TypeChecker {
                 Ok(())
             }
             Expr::FieldAccess(acc) => {
-                // Field access reads from the base but does not move the entire struct.
-                self.check_expr(&acc.base)?;
+                if let Some((owner, fields, span)) =
+                    self.place_from_expr(&Expr::FieldAccess(acc.clone()))
+                {
+                    self.check_borrow_allowed(&owner, fields.as_deref(), false, span)?;
+                }
+                let base_ty = self.check_expr_with_context(&acc.base, true)?;
+                if let Some(field_ty) = self.struct_field_type(&base_ty, &acc.field)
+                    && !Self::is_copy_type(&field_ty)
+                    && (self.type_has_user_drop(&base_ty) || self.chain_has_user_drop(&acc.base))
+                {
+                    return Err(TypeCheckError::Message(
+                        "cannot partially move a value that implements Drop".to_string(),
+                    ));
+                }
                 Ok(())
             }
             Expr::BinOp(bin_op_expr) => {
@@ -455,5 +1209,203 @@ impl TypeChecker {
                 | Type::Ref { .. }
                 | Type::Fn { .. }
         )
+    }
+}
+
+pub(crate) fn lasting_borrow_uses(stmts: &[Stmt]) -> HashMap<String, usize> {
+    let mut last = HashMap::new();
+    for (index, stmt) in stmts.iter().enumerate() {
+        let mut names = Vec::new();
+        collect_borrow_use_names(stmt, &mut names);
+        for name in names {
+            last.insert(name, index);
+        }
+    }
+    last
+}
+
+fn collect_borrow_use_names(stmt: &Stmt, names: &mut Vec<String>) {
+    match stmt {
+        Stmt::Let(let_stmt) => {
+            names.push(let_stmt.name.clone());
+            if let Some(init) = &let_stmt.init {
+                collect_expr_names(init, names);
+            }
+        }
+        Stmt::Return(ret) => {
+            if let Some(value) = &ret.value {
+                collect_expr_names(value, names);
+            }
+        }
+        Stmt::Expr(expr) => collect_expr_names(&expr.expr, names),
+        Stmt::If(if_stmt) => {
+            collect_expr_names(&if_stmt.cond, names);
+            for inner in &if_stmt.then_block.statements {
+                collect_borrow_use_names(inner, names);
+            }
+            if let Some(else_block) = &if_stmt.else_block {
+                for inner in &else_block.statements {
+                    collect_borrow_use_names(inner, names);
+                }
+            }
+        }
+        Stmt::While(while_stmt) => {
+            collect_expr_names(&while_stmt.cond, names);
+            for inner in &while_stmt.body.statements {
+                collect_borrow_use_names(inner, names);
+            }
+        }
+        Stmt::Loop(loop_stmt) => {
+            for inner in &loop_stmt.body.statements {
+                collect_borrow_use_names(inner, names);
+            }
+        }
+        Stmt::UnsafeBlock(block) => {
+            for inner in &block.body.statements {
+                collect_borrow_use_names(inner, names);
+            }
+        }
+        Stmt::For(for_stmt) => {
+            collect_expr_names(&for_stmt.iterable, names);
+            for inner in &for_stmt.body.statements {
+                collect_borrow_use_names(inner, names);
+            }
+        }
+        Stmt::Defer(defer_stmt) => collect_expr_names(&defer_stmt.expr, names),
+        Stmt::Spawn(spawn) => {
+            for inner in &spawn.body.statements {
+                collect_borrow_use_names(inner, names);
+            }
+        }
+        Stmt::Select(select) => {
+            for arm in &select.recv_arms {
+                collect_expr_names(&arm.recv.channel, names);
+                collect_block_names(&arm.body, names);
+            }
+            if let Some(body) = &select.default_body {
+                collect_block_names(body, names);
+            }
+            if let Some(ms) = &select.timeout_ms {
+                collect_expr_names(ms, names);
+            }
+            if let Some(body) = &select.timeout_body {
+                collect_block_names(body, names);
+            }
+        }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
+    }
+}
+
+fn collect_block_names(block: &Block, names: &mut Vec<String>) {
+    for stmt in &block.statements {
+        collect_borrow_use_names(stmt, names);
+    }
+}
+
+fn collect_expr_names(expr: &Expr, names: &mut Vec<String>) {
+    match expr {
+        Expr::Var(var) => names.push(var.name.clone()),
+        Expr::BinOp(op) => {
+            collect_expr_names(&op.left, names);
+            collect_expr_names(&op.right, names);
+        }
+        Expr::UnOp(op) => collect_expr_names(&op.operand, names),
+        Expr::Ref(inner) => collect_expr_names(&inner.inner, names),
+        Expr::Call(call) => {
+            for arg in &call.args {
+                collect_expr_names(arg, names);
+            }
+        }
+        Expr::MethodCall(call) => {
+            collect_expr_names(&call.receiver, names);
+            for arg in &call.args {
+                collect_expr_names(arg, names);
+            }
+        }
+        Expr::FieldAccess(acc) => collect_expr_names(&acc.base, names),
+        Expr::Index(index) => {
+            collect_expr_names(&index.target, names);
+            collect_expr_names(&index.index, names);
+        }
+        Expr::Assign(assign) => {
+            collect_expr_names(&assign.target, names);
+            collect_expr_names(&assign.value, names);
+        }
+        Expr::StructLit(lit) => {
+            for field in &lit.fields {
+                collect_expr_names(&field.value, names);
+            }
+        }
+        Expr::EnumLit(lit) => {
+            for arg in &lit.args {
+                collect_expr_names(arg, names);
+            }
+            if let Some(fields) = &lit.named_fields {
+                for (_, value) in fields {
+                    collect_expr_names(value, names);
+                }
+            }
+        }
+        Expr::Match(match_expr) => {
+            collect_expr_names(&match_expr.expr, names);
+            for arm in &match_expr.arms {
+                if let Some(guard) = &arm.guard {
+                    collect_expr_names(guard, names);
+                }
+                collect_block_names(&arm.body, names);
+            }
+        }
+        Expr::Try(try_expr) => collect_expr_names(&try_expr.operand, names),
+        Expr::Send(send) => {
+            collect_expr_names(&send.channel, names);
+            collect_expr_names(&send.value, names);
+        }
+        Expr::Recv(recv) => collect_expr_names(&recv.channel, names),
+        Expr::Spawn(spawn) => collect_block_names(&spawn.body, names),
+        Expr::ArrayLiteral(arr) => {
+            for elem in &arr.elements {
+                collect_expr_names(elem, names);
+            }
+            if let Some((value, _)) = &arr.repeat {
+                collect_expr_names(value, names);
+            }
+        }
+        Expr::TupleLit(tuple) => {
+            for elem in &tuple.elements {
+                collect_expr_names(elem, names);
+            }
+        }
+        Expr::Cast(cast) => collect_expr_names(&cast.expr, names),
+        // A function literal does not capture, so names in its body are not uses of this loan.
+        Expr::FnLiteral(_)
+        | Expr::Lit(_)
+        | Expr::BoolLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::StringLit(_)
+        | Expr::TypeConst(_) => {}
+    }
+}
+
+fn borrow_paths_conflict(
+    existing_mut: bool,
+    existing: Option<&[String]>,
+    new_mut: bool,
+    new_fields: Option<&[String]>,
+) -> bool {
+    if !existing_mut && !new_mut {
+        return false;
+    }
+    match (existing, new_fields) {
+        (None, _) | (_, None) => true,
+        (Some(left), Some(right)) => {
+            if left.is_empty() || right.is_empty() {
+                return true;
+            }
+            left.iter()
+                .zip(right.iter())
+                .take_while(|(a, b)| a == b)
+                .count()
+                > 0
+        }
     }
 }

@@ -68,7 +68,7 @@ Pin `CARGO_TARGET_DIR` to the repo `target/` when agent shells would otherwise b
 
 **Codegen inspection / integration harness:** `ion-compiler` still transpiles only (or `--mode multi` with in-tree link). Integration tests call `ion-compiler` directly; `test_runner.sh` also runs `ion-build` smoke tests in `tests/build_hello/`.
 
-**Stdlib imports:** `import "stdlib/io.ion" as io;` resolves via manifest `stdlib_paths`, `ION_STDLIB`, `{project_root}/stdlib`, then install-relative `stdlib/` next to the compiler. CLI and LSP share `build::discover_import_config`.
+**Stdlib imports:** `import "stdlib/io.ion" as io;` resolves via manifest `stdlib_paths`, `ION_STDLIB`, `{project_root}/stdlib`, then install-relative `stdlib/` next to the compiler. CLI and LSP share `build::discover_import_config`. There is no prelude. Section 8 also specifies `option.ion`, `result.ion`, `string.ion`, `hash.ion`, `map.ion`, `math.ion`, `path.ion`, `env.ion`, and `time.ion`.
 
 **Windows:** Stop `ion-lsp` / `ion-compiler` before rebuilding if you get "Access is denied". After compiler or import-resolution changes, rebuild LSP and reload the editor window:
 

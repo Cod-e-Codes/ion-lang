@@ -1,0 +1,12 @@
+struct Guard {
+    n: int;
+}
+
+impl Drop for Guard {
+    fn drop(self: &Guard) {
+    }
+}
+
+fn main() -> int {
+    return 0;
+}

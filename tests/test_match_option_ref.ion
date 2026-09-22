@@ -1,0 +1,22 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut s: int = 7;
+    let a: &int = &s;
+    let o: Option<&int> = Option::Some(a);
+    let c: &int = match o {
+        Option::Some(p) => {
+            p;
+        }
+        Option::None => {
+            return 0;
+        }
+    };
+    if c != 7 {
+        return 1;
+    }
+    return 7;
+}

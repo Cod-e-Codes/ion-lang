@@ -1,0 +1,22 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn touch(p: &mut int) -> int {
+    return 1;
+}
+
+fn main() -> int {
+    let mut s: int = 1;
+    let o: Option<&mut int> = Option::Some(&mut s);
+    let n: int = match o {
+        Option::Some(p) => {
+            touch(p);
+        }
+        Option::None => {
+            return 0;
+        }
+    };
+    return n;
+}

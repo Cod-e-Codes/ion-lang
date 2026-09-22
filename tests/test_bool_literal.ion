@@ -1,12 +1,11 @@
 fn main() -> int {
     let x: bool = true;
     let y: bool = false;
-    
+
     if x {
-        if y == false {  // Use comparison instead of ! operator (not yet implemented)
+        if !y {
             return 0;
         }
     }
     return 1;
 }
-

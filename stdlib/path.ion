@@ -1,0 +1,68 @@
+import "string.ion" as string;
+
+fn is_sep(b: u8) -> bool {
+    return b == 47 || b == 92;
+}
+
+pub fn file_name(path: &String) -> String {
+    let n: int = String::len(path);
+    let mut i: int = n;
+    while i > 0 {
+        match String::get(path, i - 1) {
+            Option::Some(b) => {
+                if is_sep(b) {
+                    return string::slice(path, i, n);
+                }
+            }
+            Option::None => {
+                return string::slice(path, 0, n);
+            }
+        }
+        i = i - 1;
+    }
+    return string::slice(path, 0, n);
+}
+
+pub fn parent(path: &String) -> String {
+    let n: int = String::len(path);
+    let mut i: int = n;
+    while i > 0 {
+        match String::get(path, i - 1) {
+            Option::Some(b) => {
+                if is_sep(b) {
+                    if i == 1 {
+                        return string::slice(path, 0, 1);
+                    }
+                    return string::slice(path, 0, i - 1);
+                }
+            }
+            Option::None => {
+                return String::new();
+            }
+        }
+        i = i - 1;
+    }
+    return String::new();
+}
+
+pub fn join(dir: &String, name: &String) -> String {
+    let n: int = String::len(dir);
+    let mut slash: bool = false;
+    if n > 0 {
+        match String::get(dir, n - 1) {
+            Option::Some(b) => {
+                if is_sep(b) {
+                    slash = true;
+                }
+            }
+            Option::None => {}
+        }
+    }
+    let mut head: String = string::slice(dir, 0, n);
+    let tail: String = string::slice(name, 0, String::len(name));
+    if !slash {
+        String::push_str(&mut head, "/");
+    }
+    String::push_str(&mut head, tail);
+    return head;
+}

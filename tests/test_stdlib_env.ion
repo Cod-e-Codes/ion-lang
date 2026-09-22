@@ -1,0 +1,23 @@
+import "stdlib/env.ion" as env;
+
+fn main() -> int {
+    let missing: String = "___ION_NO_SUCH_VAR___";
+    match env::get(missing) {
+        Result::Err(_) => {}
+        Result::Ok(_) => {
+            return 2;
+        }
+    }
+    let path: String = "PATH";
+    match env::get(path) {
+        Result::Ok(v) => {
+            if String::len(&v) > 0 {
+                return 1;
+            }
+            return 3;
+        }
+        Result::Err(_) => {
+            return 4;
+        }
+    }
+}

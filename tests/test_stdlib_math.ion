@@ -1,0 +1,24 @@
+import "stdlib/math.ion" as math;
+
+fn main() -> int {
+    if math::abs(0 - 3) != 3 {
+        return 1;
+    }
+    if math::clamp(10, 1, 4) != 4 {
+        return 2;
+    }
+    match math::checked_div(1, 0) {
+        Result::Err(_) => {}
+        Result::Ok(_) => {
+            return 5;
+        }
+    }
+    match math::checked_div(8, 2) {
+        Result::Ok(v) => {
+            return v;
+        }
+        Result::Err(_) => {
+            return 3;
+        }
+    }
+}

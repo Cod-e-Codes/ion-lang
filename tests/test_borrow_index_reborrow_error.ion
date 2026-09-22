@@ -1,0 +1,11 @@
+fn touch(p: &mut int) -> int {
+    return 1;
+}
+
+fn main() -> int {
+    let mut xs: [int; 2] = [1, 2];
+    let a: &mut [int; 2] = &mut xs;
+    let d: &mut int = &mut a[0];
+    let b: &mut int = &mut xs[0];
+    return touch(d);
+}

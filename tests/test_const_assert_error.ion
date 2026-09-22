@@ -1,0 +1,4 @@
+fn main() -> int {
+    const_assert(1 == 0);
+    return 1;
+}

@@ -1,0 +1,19 @@
+struct Inner {
+    b: int;
+    c: int;
+}
+
+struct Outer {
+    a: Inner;
+}
+
+fn touch(p: &mut int, q: &mut int) -> int {
+    return 0;
+}
+
+fn main() -> int {
+    let mut o: Outer = Outer { a: Inner { b: 1, c: 2 } };
+    let left: &mut int = &mut o.a.b;
+    let right: &mut int = &mut o.a.c;
+    return touch(left, right);
+}

@@ -165,6 +165,15 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_unannotated_let_non_int.ion` - unannotated `let q = p` / `let n = w.p` / `let v = origin()` keep struct types, not default int (exit 5); cgen asserts `Point q =` / `Point n =` / `Point v =`
 - `test_enum_generic.ion` - Generic enum types
 - `test_result_custom_enum.ion` - `Result<int, MyError>` via `stdlib/result.ion` (Ok and Err, exit 0)
+- `test_stdlib_option.ion` - `option::map`, `and_then`, `unwrap_or`, `expect` (exit 8)
+- `test_stdlib_result.ion` - `result::map`, `and_then`, `unwrap_or`, `expect` (exit 8)
+- `test_stdlib_string.ion` - `contains`, `starts_with`, `ends_with`, `trim_ascii`, `split_once` (exit 3)
+- `test_stdlib_hash.ion` - compiler `Hash` for `int` and `String` (exit 0)
+- `test_stdlib_map.ion` - `HashMap` grows past 16 slots, replaces a key, and accepts a non-`Copy` `Hash` key and value (exit 170)
+- `test_stdlib_math.ion` - `abs`, `clamp`, `checked_div` (exit 4)
+- `test_stdlib_path.ion` - `file_name`, `parent`, `join` (exit 5)
+- `test_stdlib_env.ion` - missing name and `PATH` (exit 1)
+- `test_stdlib_time.ion` - `millis` is non-negative (exit 1)
 - `test_match_ref_generic_enum_arith.ion` - Match on `&Status<int>` and non-generic `&Flag` with arithmetic on copy payloads (exit 55)
 - `test_match_basic.ion` - Pattern matching
 - `test_match_pattern_bindings.ion` - Pattern matching with bindings
@@ -174,7 +183,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_nested_match_catchall_binding.ion` - Nested constructor plus catch-all binding `other` (exit 4); `default:` arms are braced so Clang accepts a declaration after the label
 - `test_nested_match_unknown_error.ion` - Unknown nested enum `Nope` is TypeMismatch
 - `test_nested_match_nonexhaustive_error.ion` - Inner variant `B` not covered
-- `test_while_basic.ion` - While loops
+- `test_while_basic.ion` - While loops with assignment
 - `test_break_continue.ion` - `break` and `continue` in `while` and `for` loops
 - `test_match_break_in_while.ion` - `break` inside `match` within `while` exits the loop (exit 3)
 - `test_call_basic.ion` - Function calls
@@ -264,7 +273,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 ### Arrays, slices, and unsafe
 - `test_array_basic.ion` - Fixed-size arrays
 - `test_array_literal.ion` - Array literals
-- `test_array_indexing.ion` - Array indexing operations
+- `test_array_indexing.ion` - Array indexing and index assignment
 - `test_index_i32.ion` - Array indexing with `i32` index variables
 - `test_array_bounds_safe.ion` - Array bounds checking with valid indices (Safety Enhancement)
 - `test_unsafe_array_indexing.ion` - Unsafe array indexing without bounds checking (Safety Enhancement)
@@ -283,13 +292,75 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_match_move_join_error.ion` - match arm move joined with a fall-through arm is `UseAfterMove`
 - `test_unsafe_basic.ion` - Unsafe blocks
 - `test_unsafe_extern_required.ion` - Unsafe requirement for extern calls (negative test)
+- `test_capability_show.ion` - Capability method, generic bound, and `Show::show`
+- `test_capability_generic_impl.ion` - Generic `impl Show for Wrap<T>`
+- `test_capability_impl_copy_error.ion` - `impl Copy` is rejected
+- `test_capability_missing_method_error.ion` - Impl must supply every capability method
+- `test_capability_bound_error.ion` - Instantiation must satisfy `T: Show`
+- `test_capability_ambiguous_error.ion` - Two capabilities with the same method name
+- `test_capability_foreign_impl_error.ion` - Impl must sit in the type's module
+- `test_drop_sends.ion` - `impl Drop` runs before the sender field is dropped
+- `test_field_replace_drop.ion` - replacing a field drops the previous value (exit 42)
+- `test_aggregate_eq.ion` - struct, enum, and array `==` compare fields, the active variant, and elements (exit 0)
+- `test_drop_partial_move_error.ion` - `Drop` types cannot be partially moved
+- `test_drop_match_partial_move_error.ion` - `match` cannot move a non-Copy field out of a `Drop` value
+- `test_drop_match_rest.ion` - `Guard { .. }` leaves the field for `Drop` (exit 7)
+- `test_drop_receiver_error.ion` - `Drop::drop` takes `&mut Self`
+- `test_match_named_field_pun.ion` - `Event::Set { state, code }` field pun
+- `test_match_struct_rest.ion` - `..` in a struct-variant pattern
+- `test_tuple_rest.ion` - `let (a, .., b)`
+- `test_match_or_pattern.ion` - `Done | Ready`
+- `test_match_at_binding.ion` - `p @ State::Done`
+- `test_match_or_bindings_error.ion` - Or-pattern bindings must match
+- `test_match_int_range.ion` - Integer literal and inclusive range
+- `test_match_bool.ion` - `true` / `false` patterns
+- `test_match_string_lit.ion` - String literal pattern compares bytes with `memcmp` and does not allocate
+- `test_match_struct_pattern.ion` - `Point { x: 1, y }` and `@`
+- `test_match_struct_string.ion` - moving a `String` field out of a struct pattern nulls the source (exit 5)
+- `test_match_value_rvalue.ion` - `match` as a `+` operand yields the arm result (exit 5)
+- `test_match_pattern_generic.ion` - a generic call on a struct-pattern binding is monomorphized (exit 4)
+- `test_match_not_exhaustive_error.ion` - Integer match needs an irrefutable arm
+- `test_let_refutable_error.ion` - Refutable `let` pattern
+- `test_borrow_last_use.ion` - A lasting borrow ends at the last use of that binding
+- `test_borrow_nested_last_use.ion` - A use inside `if` ends the loan when the outer block does not use it again
+- `test_borrow_copy_last_use.ion` - A copied reference keeps the loan until the copy's last use
+- `test_borrow_nested_use_error.ion` - A nested use does not end an outer loan that is used again
+- `test_borrow_copy_error.ion` - Copying `&mut` does not end the loan
+- `test_borrow_reborrow_error.ion` - `&mut a.x` keeps the loan of `a`
+- `test_borrow_tuple_error.ion` - A tuple element keeps the loan
+- `test_borrow_match_alias_error.ion` - A `match` result keeps the loan
+- `test_borrow_assign_error.ion` - Assigning a reference keeps the loan
+- `test_borrow_index_reborrow_error.ion` - `&mut a[i]` keeps the loan of `a`
+- `test_borrow_enum_ref_error.ion` - `Option::Some` keeps the loan of the reference
+- `test_borrow_struct_ref_error.ion` - `Hold { v: a }` keeps the loan of the reference
+- `test_borrow_struct_ref_call.ion` - `touch(h.v)` passes the field pointer (exit 1)
+- `test_borrow_struct_fresh.ion` - `Hold { v: &mut s }` keeps the new loan (exit 1)
+- `test_borrow_struct_fresh_error.ion` - `Hold { v: &mut s }` conflicts with a later `&mut s`
+- `test_borrow_enum_fresh.ion` - `Option::Some(&mut s)` keeps the new loan (exit 1)
+- `test_borrow_enum_fresh_error.ion` - `Option::Some(&mut s)` conflicts with a later `&mut s`
+- `test_borrow_tuple_fresh.ion` - `(&mut s.x, 1)` keeps the new loan (exit 2)
+- `test_borrow_tuple_fresh_error.ion` - `(&mut s.x, 1)` conflicts with a later `&mut s.x`
+- `test_borrow_match_fresh.ion` - a `match` arm that yields `&mut s.x` keeps the new loan (exit 1)
+- `test_borrow_match_fresh_error.ion` - a `match` arm that yields `&mut s.x` conflicts with a later `&mut s.x`
+- `test_borrow_match_yield_local.ion` - a `match` arm that yields a local tuple of `&mut s.x` keeps the loan (exit 2)
+- `test_borrow_match_yield_local_error.ion` - that local yield conflicts with a later `&mut s.x`
+- `test_borrow_get_ref_yield_error.ion` - A `match` that yields a `get_ref` payload keeps the loan
+- `test_match_ref_struct.ion` - `match` on `&Pair` reborrows the `String` field (exit 5)
+- `test_match_option_ref.ion` - `Option<&int>` binds the pointer (exit 7)
+- `test_borrow_match_use_error.ion` - A use inside `match` keeps the loan live
+- `test_field_same_mut_borrow_error.ion` - Two `&mut` of the same field
+- `test_field_nested_prefix_borrow_error.ion` - `s.a.b` conflicts with `s.a.c`
+- `test_const_item.ion` - `const` item, `const fn`, and `[int; LIMIT]`
+- `test_const_param.ion` - `fn pad<const N: int>`
+- `test_const_assert_error.ion` - `const_assert` failure
+- `test_const_fn_error.ion` - `const fn` cannot call a runtime function
 - `test_extern_rust_error.ion` - Non-`"C"` `extern` linkage (negative test)
 - `test_multifile.ion` - Multi-file compilation
 - `test_multi_struct.ion` - Multi-file module with private struct in library
 - `test_multi_fmt_io.ion` - Multi-file link with both `fmt` and `io` stdlib modules
 
 ### Numeric types and aliases
-- `test_bool_literal.ion` - Boolean literals (`true`, `false`)
+- `test_bool_literal.ion` - Boolean literals (`true`, `false`) and `!`
 - `test_bool_operations.ion` - Boolean type usage
 - `test_bool_comparison.ion` - Comparison operators returning `bool`
 - `test_if_bool_required.ion` - Negative test: `if` requires `bool` condition
@@ -324,7 +395,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 ### Literals and bitwise operators
 - `test_escape_sequences.ion` - Complete escape sequence support (`\r`, `\t`, `\0`, etc.)
 - `test_array_init.ion` - Array initialization syntax (`[value; count]`)
-- `test_bitwise_ops.ion` - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`)
+- `test_bitwise_ops.ion` - Bitwise operators, hex literals, wrapping shifts, and integer `as` narrowing
 
 ### Casting, comparison, and stdlib I/O
 - `test_comparison_operators.ion` - Full comparison operators (`<=`, `>=`)
