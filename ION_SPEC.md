@@ -495,8 +495,10 @@ enum_pat         = identifier , "::" , identifier ,
                    [ "(" , pattern_list? , ")" | "{" , named_pattern_fields? , "}" ] ;
 pattern_list     = pattern , { "," , pattern } ;
 named_pattern_fields = named_pattern_field , { "," , named_pattern_field } ;
-named_pattern_field = identifier , ":" , pattern ;
+named_pattern_field = identifier , [ ":" , pattern ] ;
 ```
+
+A named pattern field may omit `: pattern`. The field name is then a binding of that name: `Event::Set { state, code }` is `Event::Set { state: state, code: code }`. An explicit pattern is kept: `Event::Set { state: State::Done, code }` puns only `code`. Struct patterns use the same field form (`Point { x, y }`).
 
 #### 3.6 Nested constructors
 

@@ -4268,4 +4268,88 @@ fn main() -> int {
             other => panic!("expected try, got {other:?}"),
         }
     }
+
+    fn first_match_pattern(program: &Program) -> &Pattern {
+        match &program.functions[0].body.statements[0] {
+            Stmt::Expr(stmt) => match &stmt.expr {
+                Expr::Match(m) => &m.arms[0].pattern,
+                other => panic!("expected match, got {other:?}"),
+            },
+            other => panic!("expected expression statement, got {other:?}"),
+        }
+    }
+
+    fn assert_field_binding(pattern: &Pattern, name: &str) {
+        match pattern {
+            Pattern::Binding { name: got, .. } => assert_eq!(got, name),
+            other => panic!("expected binding {name}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_struct_variant_field_pun() {
+        let program = parse_with_source(
+            r#"enum Event { Set { state: int, code: int }; }
+fn main() -> int {
+    match event {
+        Event::Set { state, code } => { return 0; }
+    };
+}"#,
+        );
+        match first_match_pattern(&program) {
+            Pattern::Variant {
+                enum_name,
+                variant,
+                named_fields,
+                sub_patterns,
+                ..
+            } => {
+                assert_eq!(enum_name, "Event");
+                assert_eq!(variant, "Set");
+                assert!(sub_patterns.is_empty());
+                let fields = named_fields.as_ref().expect("named fields");
+                assert_eq!(fields[0].0, "state");
+                assert_field_binding(&fields[0].1, "state");
+                assert_eq!(fields[1].0, "code");
+                assert_field_binding(&fields[1].1, "code");
+            }
+            other => panic!("expected variant pattern, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_struct_variant_field_pun_keeps_explicit_pattern() {
+        let program = parse_with_source(
+            r#"enum State { Ready; Done; }
+enum Event { Set { state: State, code: int }; }
+fn main() -> int {
+    match event {
+        Event::Set { state: State::Done, code } => { return 0; }
+    };
+}"#,
+        );
+        match first_match_pattern(&program) {
+            Pattern::Variant { named_fields, .. } => {
+                let fields = named_fields.as_ref().expect("named fields");
+                match &fields[0].1 {
+                    Pattern::Variant {
+                        enum_name,
+                        variant,
+                        sub_patterns,
+                        named_fields,
+                        ..
+                    } => {
+                        assert_eq!(enum_name, "State");
+                        assert_eq!(variant, "Done");
+                        assert!(sub_patterns.is_empty());
+                        assert!(named_fields.is_none());
+                    }
+                    other => panic!("expected nested State::Done, got {other:?}"),
+                }
+                assert_eq!(fields[1].0, "code");
+                assert_field_binding(&fields[1].1, "code");
+            }
+            other => panic!("expected variant pattern, got {other:?}"),
+        }
+    }
 }
