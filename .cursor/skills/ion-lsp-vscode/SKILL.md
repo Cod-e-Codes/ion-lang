@@ -69,7 +69,7 @@ Adjust path for OS (no `.exe` on Linux/macOS).
 4. **Type-check** - `tc::TypeChecker::check_program_collecting_with_source` on the merged program, symbols seeded from the buffer AST (`check_program_collecting` for unit tests)
 5. Publish diagnostics from lexer, parser, import resolution, or type-check errors
 6. **Hover** - expression types, symbol docs, builtin signatures
-7. **Completion** - prefix-filtered; context-aware for `alias::` and `Type.` / `expr.` (`int`, `i8`-`i64`, `u8`-`u64`, `uint` expose `MIN`/`MAX` via `BUILTIN_TYPE_MEMBERS` in `util.rs`)
+7. **Completion** - prefix-filtered; context-aware for `alias::` and `Type.` / `expr.` (integer types expose `MIN`/`MAX` from `integer_limits`; methods come from `builtin_signature`)
 8. **Go to definition** - variables, calls, methods, fields, variants, type aliases; cross-file via `module_paths`
 9. **References**, **document symbols**, **signature help**, **semantic tokens**
 10. **`did_change_watched_files`** - re-check open files whose import dependencies changed
@@ -93,7 +93,7 @@ The CLI and `ion-build` print `Type check failed with N error(s):` followed by n
 
 Parser or type checker changes often need no LSP code if error types already map to strings. Update LSP when adding:
 
-- New keywords or builtins (`src/lsp/util.rs` lists)
+- New keywords (lexer `KEYWORDS`, plus `EXTRA_COMPLETION_WORDS` when the word is not a lexer keyword) or builtins (`TypeChecker::builtin_signature`)
 - New diagnostic categories or positions
 - Import resolution behavior
 - New symbols to record in `tc::LspInfo`

@@ -2,7 +2,7 @@
 
 ## Lexer (`src/lexer/mod.rs`)
 
-- [ ] New keyword added to keyword map (ION_SPEC §2.2.2 lists reserved words)
+- [ ] New keyword added to the lexer `KEYWORDS` table (ION_SPEC §2.2.2 lists reserved words)
 - [ ] Token variant in public token enum
 - [ ] `tokenize()` handles edge cases (strings, escapes, floats)
 - [ ] Unit test in `#[cfg(test)]` module
@@ -64,5 +64,5 @@
 
 - [ ] Parser errors surface in diagnostics
 - [ ] Buffer AST is numbered after `load_imports`, then merged (do not re-number the merge)
-- [ ] New keywords in `src/lsp/util.rs` `KEYWORDS` and TextMate grammar
+- [ ] New keywords in the lexer `KEYWORDS` table. Words that are not lexer keywords also go in `EXTRA_COMPLETION_WORDS` (`src/lsp/util.rs`). Update the TextMate grammar. `lexer_keywords_are_completed_and_highlighted` covers completion and the grammar
 - [ ] Rebuild: `cargo build --release --bin ion-lsp`

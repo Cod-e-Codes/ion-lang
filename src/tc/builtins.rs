@@ -8,28 +8,15 @@ impl TypeChecker {
         call_expr: &CallExpr,
     ) -> Result<Option<Type>, TypeCheckError> {
         let callee = &call_expr.callee;
+        self.expect_builtin_arity(call_expr)?;
 
         if crate::integer_limits::is_builtin_hash_callee(callee) {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let _arg_ty = self.check_expr(&call_expr.args[0])?;
             return Ok(Some(Type::Int));
         }
 
         // Box::new<T>(value: T) -> Box<T>
         if callee.starts_with("Box::new") {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let expected_inner = match &self.expr_expected {
                 Some(Type::Box { inner }) => Some(inner.as_ref().clone()),
                 _ => match &self.current_return_type {
@@ -51,13 +38,6 @@ impl TypeChecker {
 
         // Box::unwrap<T>(box: Box<T>) -> T
         if callee == "Box::unwrap" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let box_ty = self.check_expr(&call_expr.args[0])?;
             return match box_ty {
                 Type::Box { inner } => Ok(Some(*inner)),
@@ -73,13 +53,6 @@ impl TypeChecker {
         // Note: We can't infer T from empty args, so this requires type annotation
         // For now, we'll return Vec<Int> as a default and let codegen handle it
         if callee == "Vec::new" {
-            if !call_expr.args.is_empty() {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "0 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             // Return Vec<Int> as default - actual type should come from context
             return Ok(Some(Type::Vec {
                 elem_type: Box::new(Type::Int),
@@ -88,13 +61,6 @@ impl TypeChecker {
 
         // Vec::with_capacity<T>(cap: int) -> Vec<T>
         if callee == "Vec::with_capacity" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let cap_ty = self.check_expr(&call_expr.args[0])?;
             if !self.is_integer_type(&cap_ty) {
                 return Err(TypeCheckError::TypeMismatch {
@@ -111,13 +77,6 @@ impl TypeChecker {
 
         // Vec::len<T>(vec: &Vec<T>) -> int
         if callee == "Vec::len" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
             // `&mut Vec<T>` reborrows as `&Vec<T>` (method calls on `&mut Arena` fields).
             if crate::types_util::is_ref_to_vec(&vec_ty) {
@@ -132,13 +91,6 @@ impl TypeChecker {
 
         // Vec::capacity<T>(vec: &Vec<T>) -> int
         if callee == "Vec::capacity" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
             if crate::types_util::is_ref_to_vec(&vec_ty) {
                 return Ok(Some(Type::Int));
@@ -152,13 +104,6 @@ impl TypeChecker {
 
         // Vec::push<T>(vec: &mut Vec<T>, value: T)
         if callee == "Vec::push" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
             let expected_elem = match &vec_ty {
                 Type::Ref {
@@ -203,13 +148,6 @@ impl TypeChecker {
 
         // Vec::pop<T>(vec: &mut Vec<T>) -> Option<T>
         if callee == "Vec::pop" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
             if let Type::Ref {
                 inner: ref inner_ty,
@@ -240,13 +178,6 @@ impl TypeChecker {
 
         // Vec::get<T>(vec: &Vec<T>, index: int) -> Option<T>
         if callee == "Vec::get" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             self.check_integer_operand(&call_expr.args[1])?;
 
             let elem_type = self.vec_elem_type_from_vec_arg(&call_expr.args[0]);
@@ -268,13 +199,6 @@ impl TypeChecker {
 
         // Vec::get_ref<T>(vec: &Vec<T>, index: int) -> Option<&T>
         if callee == "Vec::get_ref" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             self.check_integer_operand(&call_expr.args[1])?;
 
             let elem_type = self.vec_elem_type_from_vec_arg(&call_expr.args[0]);
@@ -299,13 +223,6 @@ impl TypeChecker {
 
         // Slice::len<T>(s: &[]T) -> int
         if callee == "Slice::len" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             if self
                 .slice_elem_type_from_slice_arg(&call_expr.args[0])
                 .is_some()
@@ -322,13 +239,6 @@ impl TypeChecker {
 
         // Slice::get_ref<T>(s: &[]T, index: int) -> Option<&T>
         if callee == "Slice::get_ref" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             self.check_integer_operand(&call_expr.args[1])?;
 
             let elem_type = self.slice_elem_type_from_slice_arg(&call_expr.args[0]);
@@ -353,13 +263,6 @@ impl TypeChecker {
 
         // Vec::set<T>(vec: &mut Vec<T>, index: int, value: T) -> SetResult
         if callee == "Vec::set" {
-            if call_expr.args.len() != 3 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "3 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let vec_ty = self.check_expr(&call_expr.args[0])?;
             let index_ty = self.check_expr(&call_expr.args[1])?;
             let expected_elem = match &vec_ty {
@@ -417,25 +320,11 @@ impl TypeChecker {
 
         // String::new() -> String
         if callee == "String::new" {
-            if !call_expr.args.is_empty() {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "0 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             return Ok(Some(Type::String));
         }
 
         // String::from(s: &str) -> String
         if callee == "String::from" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let arg_ty = self.check_expr(&call_expr.args[0])?;
             let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
             if !Self::can_coerce_to_str_ref(&resolved_arg_ty)
@@ -452,13 +341,6 @@ impl TypeChecker {
 
         // String::from_utf8(bytes: Vec<u8>) -> Option<String>
         if callee == "String::from_utf8" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let bytes_ty = self.check_expr(&call_expr.args[0])?;
             let resolved = self.resolve_type_name(&bytes_ty)?;
             match resolved {
@@ -480,13 +362,6 @@ impl TypeChecker {
 
         // String::len(s: &String) -> int
         if callee == "String::len" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let str_ty = self.check_expr(&call_expr.args[0])?;
             if let Type::Ref {
                 inner: ref inner_ty,
@@ -505,13 +380,6 @@ impl TypeChecker {
 
         // String::get(s: &String, index: int) -> Option<u8>
         if callee == "String::get" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             self.check_integer_operand(&call_expr.args[1])?;
             let str_ty = self.check_expr(&call_expr.args[0])?;
             if let Type::Ref {
@@ -534,13 +402,6 @@ impl TypeChecker {
 
         // String::push_str(s: &mut String, other: &str)
         if callee == "String::push_str" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let str_ty = self.check_expr(&call_expr.args[0])?;
             let _other_ty = self.check_expr(&call_expr.args[1])?;
             if let Type::Ref {
@@ -560,13 +421,6 @@ impl TypeChecker {
 
         // String::push_byte(s: &mut String, b: u8)
         if callee == "String::push_byte" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let str_ty = self.check_expr(&call_expr.args[0])?;
             let byte_ty = self.check_expr(&call_expr.args[1])?;
             if let Type::Ref {
@@ -600,13 +454,6 @@ impl TypeChecker {
 
         // clone_sender(&Sender<T>) -> Sender<T>
         if callee == "clone_sender" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let sender_ref = self.check_expr(&call_expr.args[0])?;
             return match sender_ref {
                 Type::Ref {
@@ -629,13 +476,6 @@ impl TypeChecker {
         }
 
         if callee == "try_send" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let sender_ref = self.check_expr(&call_expr.args[0])?;
             let elem_type = match sender_ref {
                 Type::Ref { inner, .. } => match *inner {
@@ -669,13 +509,6 @@ impl TypeChecker {
         }
 
         if callee == "try_recv" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let recv_ref = self.check_expr(&call_expr.args[0])?;
             let elem_type = match recv_ref {
                 Type::Ref {
@@ -711,13 +544,6 @@ impl TypeChecker {
         }
 
         if callee == "join" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let handle_ty = self.check_expr(&call_expr.args[0])?;
             if !matches!(handle_ty, Type::JoinHandle) {
                 return Err(TypeCheckError::TypeMismatch {
@@ -730,13 +556,6 @@ impl TypeChecker {
         }
 
         if callee == "Arena::get_ref" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let arena_ty = self.check_expr(&call_expr.args[0])?;
             let handle_ty = self.check_expr(&call_expr.args[1])?;
             let handle_ok = match &handle_ty {
@@ -785,13 +604,6 @@ impl TypeChecker {
         }
 
         if callee == "File::open" || callee == "File::create" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let path_ty = self.check_expr(&call_expr.args[0])?;
             let path_ok = match &path_ty {
                 Type::Ref { inner, .. } => matches!(inner.as_ref(), Type::String | Type::Str),
@@ -813,13 +625,6 @@ impl TypeChecker {
         }
 
         if callee == "File::read" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let file_ty = self.check_expr(&call_expr.args[0])?;
             let buf_ty = self.check_expr(&call_expr.args[1])?;
             let file_ok = matches!(
@@ -857,13 +662,6 @@ impl TypeChecker {
         }
 
         if callee == "File::write" {
-            if call_expr.args.len() != 2 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "2 arguments".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let file_ty = self.check_expr(&call_expr.args[0])?;
             let buf_ty = self.check_expr(&call_expr.args[1])?;
             let file_ok = matches!(
@@ -899,13 +697,6 @@ impl TypeChecker {
         }
 
         if callee == "File::close" {
-            if call_expr.args.len() != 1 {
-                return Err(TypeCheckError::TypeMismatch {
-                    expected: "1 argument".to_string(),
-                    got: format!("{} arguments", call_expr.args.len()),
-                    span: call_expr.span,
-                });
-            }
             let file_ty = self.check_expr(&call_expr.args[0])?;
             let file_ok = matches!(
                 &file_ty,

@@ -11,43 +11,6 @@ use std::path::PathBuf;
 pub use types::type_to_string;
 pub(crate) use types::{fn_type_from_signature, types_equal};
 
-// Helper trait for getting span from expressions
-trait HasSpan {
-    fn span(&self) -> Span;
-}
-
-impl HasSpan for Expr {
-    fn span(&self) -> Span {
-        match self {
-            Expr::Lit(e) => e.span,
-            Expr::BoolLiteral(e) => e.span,
-            Expr::FloatLiteral(e) => e.span,
-            Expr::Var(e) => e.span,
-            Expr::BinOp(e) => e.span,
-            Expr::UnOp(e) => e.span,
-            Expr::Ref(e) => e.span,
-            Expr::Send(e) => e.span,
-            Expr::Recv(e) => e.span,
-            Expr::Spawn(e) => e.span,
-            Expr::StructLit(e) => e.span,
-            Expr::FieldAccess(e) => e.span,
-            Expr::EnumLit(e) => e.span,
-            Expr::Match(e) => e.span,
-            Expr::Try(e) => e.span,
-            Expr::Call(e) => e.span,
-            Expr::MethodCall(e) => e.span,
-            Expr::StringLit(e) => e.span,
-            Expr::ArrayLiteral(e) => e.span,
-            Expr::TupleLit(e) => e.span,
-            Expr::Index(e) => e.span,
-            Expr::Cast(e) => e.span,
-            Expr::Assign(e) => e.span,
-            Expr::FnLiteral(e) => e.span,
-            Expr::TypeConst(e) => e.span,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OwnershipState {
     Valid,
@@ -427,6 +390,151 @@ pub struct ModuleExports {
 impl Default for TypeChecker {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub(crate) const BUILTIN_SIGNATURES: &[(&str, &str)] = &[
+    ("Vec::new", "fn Vec::new() -> Vec<T>"),
+    (
+        "Vec::with_capacity",
+        "fn Vec::with_capacity(cap: int) -> Vec<T>",
+    ),
+    ("Vec::push", "fn Vec::push(vec: &mut Vec<T>, value: T)"),
+    ("Vec::pop", "fn Vec::pop(vec: &mut Vec<T>) -> Option<T>"),
+    ("Vec::len", "fn Vec::len(vec: &Vec<T>) -> int"),
+    ("Vec::capacity", "fn Vec::capacity(vec: &Vec<T>) -> int"),
+    (
+        "Vec::get",
+        "fn Vec::get(vec: &Vec<T>, index: int) -> Option<T>",
+    ),
+    (
+        "Vec::get_ref",
+        "fn Vec::get_ref(vec: &Vec<T>, index: int) -> Option<&T>",
+    ),
+    (
+        "Vec::set",
+        "fn Vec::set(vec: &mut Vec<T>, index: int, value: T) -> SetResult",
+    ),
+    ("Slice::len", "fn Slice::len(s: &[]T) -> int"),
+    (
+        "Slice::get_ref",
+        "fn Slice::get_ref(s: &[]T, index: int) -> Option<&T>",
+    ),
+    (
+        "Arena::get_ref",
+        "fn Arena::get_ref(arena: &Arena<T>, h: Handle) -> Option<&T>",
+    ),
+    ("File::open", "fn File::open(path: &String) -> Option<File>"),
+    (
+        "File::create",
+        "fn File::create(path: &String) -> Option<File>",
+    ),
+    (
+        "File::read",
+        "fn File::read(file: &mut File, buf: &mut Vec<u8>) -> int",
+    ),
+    (
+        "File::write",
+        "fn File::write(file: &mut File, buf: &Vec<u8>) -> int",
+    ),
+    ("File::close", "fn File::close(file: &mut File)"),
+    ("String::new", "fn String::new() -> String"),
+    ("String::from", "fn String::from(s: &str) -> String"),
+    (
+        "String::from_utf8",
+        "fn String::from_utf8(bytes: Vec<u8>) -> Option<String>",
+    ),
+    (
+        "String::get",
+        "fn String::get(s: &String, index: int) -> Option<u8>",
+    ),
+    ("String::len", "fn String::len(s: &String) -> int"),
+    (
+        "String::push_str",
+        "fn String::push_str(s: &mut String, other: &str)",
+    ),
+    (
+        "String::push_byte",
+        "fn String::push_byte(s: &mut String, b: u8)",
+    ),
+    ("Box::new", "fn Box::new<T>(value: T) -> Box<T>"),
+    ("Box::unwrap", "fn Box::unwrap<T>(box: Box<T>) -> T"),
+    (
+        "channel",
+        "fn channel<T>() / channel<T>(cap: int) -> (Sender<T>, Receiver<T>)",
+    ),
+    (
+        "clone_sender",
+        "fn clone_sender(sender: &Sender<T>) -> Sender<T>",
+    ),
+    (
+        "send",
+        "fn send(sender: &Sender<T>, value: T) -> SendResult<T>",
+    ),
+    ("recv", "fn recv(receiver: &mut Receiver<T>) -> Option<T>"),
+    (
+        "try_send",
+        "fn try_send(sender: &Sender<T>, value: T) -> TrySendResult<T>",
+    ),
+    (
+        "try_recv",
+        "fn try_recv(receiver: &mut Receiver<T>) -> TryRecvResult<T>",
+    ),
+    ("join", "fn join(handle: JoinHandle)"),
+];
+
+pub(crate) fn is_option_producing_builtin(callee: &str) -> bool {
+    if callee == "recv" {
+        return false;
+    }
+    BUILTIN_SIGNATURES
+        .iter()
+        .any(|(name, signature)| *name == callee && signature.contains("-> Option"))
+}
+
+fn signature_arities(signature: &str) -> Vec<usize> {
+    signature
+        .split(" / ")
+        .filter_map(signature_param_count)
+        .collect()
+}
+
+fn signature_param_count(signature_part: &str) -> Option<usize> {
+    let open = signature_part.find('(')?;
+    let mut depth = 0i32;
+    let mut commas = 0usize;
+    let mut saw_param = false;
+    for c in signature_part[open + 1..].chars() {
+        match c {
+            '<' | '(' => depth += 1,
+            '>' | ')' if depth > 0 => depth -= 1,
+            ')' => return Some(if saw_param { commas + 1 } else { 0 }),
+            ',' if depth == 0 => {
+                commas += 1;
+                saw_param = true;
+            }
+            _ if depth == 0 && !c.is_whitespace() => saw_param = true,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn arity_expected(allowed: &[usize]) -> String {
+    if allowed.len() == 2 && allowed.contains(&0) && allowed.contains(&1) {
+        return "0 or 1 arguments".to_string();
+    }
+    match allowed {
+        [1] => "1 argument".to_string(),
+        [n] => format!("{n} arguments"),
+        other => format!(
+            "{} arguments",
+            other
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ),
     }
 }
 
@@ -977,45 +1085,37 @@ impl TypeChecker {
         })
     }
 
-    fn builtin_signature(qualified: &str) -> Option<&'static str> {
-        match qualified {
-            "Vec::new" => Some("fn Vec::new() -> Vec<T>"),
-            "Vec::with_capacity" => Some("fn Vec::with_capacity(cap: int) -> Vec<T>"),
-            "Vec::push" => Some("fn Vec::push(vec: &mut Vec<T>, value: T)"),
-            "Vec::pop" => Some("fn Vec::pop(vec: &mut Vec<T>) -> Option<T>"),
-            "Vec::len" => Some("fn Vec::len(vec: &Vec<T>) -> int"),
-            "Vec::capacity" => Some("fn Vec::capacity(vec: &Vec<T>) -> int"),
-            "Vec::get" => Some("fn Vec::get(vec: &Vec<T>, index: int) -> Option<T>"),
-            "Vec::get_ref" => Some("fn Vec::get_ref(vec: &Vec<T>, index: int) -> Option<&T>"),
-            "Vec::set" => Some("fn Vec::set(vec: &mut Vec<T>, index: int, value: T) -> SetResult"),
-            "Slice::len" => Some("fn Slice::len(s: &[]T) -> int"),
-            "Slice::get_ref" => Some("fn Slice::get_ref(s: &[]T, index: int) -> Option<&T>"),
-            "Arena::get_ref" => {
-                Some("fn Arena::get_ref(arena: &Arena<T>, h: Handle) -> Option<&T>")
-            }
-            "File::open" => Some("fn File::open(path: &String) -> Option<File>"),
-            "File::create" => Some("fn File::create(path: &String) -> Option<File>"),
-            "File::read" => Some("fn File::read(file: &mut File, buf: &mut Vec<u8>) -> int"),
-            "File::write" => Some("fn File::write(file: &mut File, buf: &Vec<u8>) -> int"),
-            "File::close" => Some("fn File::close(file: &mut File)"),
-            "String::new" => Some("fn String::new() -> String"),
-            "String::from" => Some("fn String::from(s: &str) -> String"),
-            "String::from_utf8" => Some("fn String::from_utf8(bytes: Vec<u8>) -> Option<String>"),
-            "String::get" => Some("fn String::get(s: &String, index: int) -> Option<u8>"),
-            "String::len" => Some("fn String::len(s: &String) -> int"),
-            "String::push_str" => Some("fn String::push_str(s: &mut String, other: &str)"),
-            "String::push_byte" => Some("fn String::push_byte(s: &mut String, b: u8)"),
-            "Box::new" => Some("fn Box::new<T>(value: T) -> Box<T>"),
-            "Box::unwrap" => Some("fn Box::unwrap<T>(box: Box<T>) -> T"),
-            "channel" => Some("fn channel<T>() / channel<T>(cap: int) -> (Sender<T>, Receiver<T>)"),
-            "clone_sender" => Some("fn clone_sender(sender: &Sender<T>) -> Sender<T>"),
-            "send" => Some("fn send(sender: &Sender<T>, value: T) -> SendResult<T>"),
-            "recv" => Some("fn recv(receiver: &mut Receiver<T>) -> Option<T>"),
-            "try_send" => Some("fn try_send(sender: &Sender<T>, value: T) -> TrySendResult<T>"),
-            "try_recv" => Some("fn try_recv(receiver: &mut Receiver<T>) -> TryRecvResult<T>"),
-            "join" => Some("fn join(handle: JoinHandle)"),
-            _ => None,
+    pub(crate) fn builtin_signature(qualified: &str) -> Option<&'static str> {
+        BUILTIN_SIGNATURES
+            .iter()
+            .find(|(name, _)| *name == qualified)
+            .map(|(_, signature)| *signature)
+    }
+
+    fn builtin_arities(callee: &str) -> Option<Vec<usize>> {
+        if crate::integer_limits::is_builtin_hash_callee(callee) {
+            return Some(vec![1]);
         }
+        let name = if callee.starts_with("Box::new") {
+            "Box::new"
+        } else {
+            callee
+        };
+        Self::builtin_signature(name).map(signature_arities)
+    }
+
+    fn expect_builtin_arity(&self, call_expr: &crate::ast::CallExpr) -> Result<(), TypeCheckError> {
+        let Some(allowed) = Self::builtin_arities(&call_expr.callee) else {
+            return Ok(());
+        };
+        if allowed.contains(&call_expr.args.len()) {
+            return Ok(());
+        }
+        Err(TypeCheckError::TypeMismatch {
+            expected: arity_expected(&allowed),
+            got: format!("{} arguments", call_expr.args.len()),
+            span: call_expr.span,
+        })
     }
 
     fn lookup_fn_target(&self, callee: &str) -> Option<LspTarget> {
@@ -1852,6 +1952,52 @@ impl TypeChecker {
         Ok(Some(symbol))
     }
 
+    /// Resolve `module::func` to a public function imported from `module`.
+    fn lookup_imported_function(
+        &self,
+        qualified: &str,
+        span: Span,
+    ) -> Result<FnDecl, TypeCheckError> {
+        let parts: Vec<&str> = qualified.split("::").collect();
+        if parts.len() != 2 {
+            return Err(TypeCheckError::Message(format!(
+                "Invalid qualified function name: {}",
+                qualified
+            )));
+        }
+        let module_name = parts[0];
+        let func_name = parts[1];
+        let module_exports = self.module_imports.get(module_name).ok_or_else(|| {
+            TypeCheckError::UndefinedVariable {
+                name: format!("module '{}'", module_name),
+                span,
+            }
+        })?;
+        match module_exports.all_functions.get(func_name) {
+            Some(true) => {}
+            Some(false) => {
+                return Err(TypeCheckError::Message(format!(
+                    "Cannot access non-public function '{}::{}' from module '{}'. Add 'pub' before 'fn {}' in the module to make it accessible.",
+                    module_name, func_name, module_name, func_name
+                )));
+            }
+            None => {
+                return Err(TypeCheckError::UndefinedVariable {
+                    name: format!("{}::{}", module_name, func_name),
+                    span,
+                });
+            }
+        }
+        module_exports
+            .functions
+            .get(func_name)
+            .cloned()
+            .ok_or_else(|| TypeCheckError::UndefinedVariable {
+                name: format!("{}::{}", module_name, func_name),
+                span,
+            })
+    }
+
     /// Look up a method function by qualified name.
     /// Returns the function declaration if found.
     fn lookup_method_function(
@@ -1968,79 +2114,8 @@ impl TypeChecker {
         }
     }
 
-    /// Helper function to substitute type parameters (similar to the one in cgen)
     fn substitute_type_params(ty: &Type, substitutions: &HashMap<String, &Type>) -> Type {
-        match ty {
-            Type::Struct(name) | Type::Enum(name) => substitutions
-                .get(name)
-                .map(|&sub_ty| sub_ty.clone())
-                .unwrap_or_else(|| ty.clone()),
-            Type::Generic { name, params } => {
-                if let Some(&sub_ty) = substitutions.get(name) {
-                    sub_ty.clone()
-                } else {
-                    let substituted_params: Vec<Type> = params
-                        .iter()
-                        .map(|p| Self::substitute_type_params(p, substitutions))
-                        .collect();
-                    Type::Generic {
-                        name: name.clone(),
-                        params: substituted_params,
-                    }
-                }
-            }
-            Type::Ref { inner, mutable } => Type::Ref {
-                inner: Box::new(Self::substitute_type_params(inner, substitutions)),
-                mutable: *mutable,
-            },
-            Type::RawPtr { inner } => Type::RawPtr {
-                inner: Box::new(Self::substitute_type_params(inner, substitutions)),
-            },
-            Type::Box { inner } => Type::Box {
-                inner: Box::new(Self::substitute_type_params(inner, substitutions)),
-            },
-            Type::Vec { elem_type } => Type::Vec {
-                elem_type: Box::new(Self::substitute_type_params(elem_type, substitutions)),
-            },
-            Type::Channel { elem_type } => Type::Channel {
-                elem_type: Box::new(Self::substitute_type_params(elem_type, substitutions)),
-            },
-            Type::Array {
-                inner,
-                size,
-                len_name,
-            } => Type::Array {
-                inner: Box::new(Self::substitute_type_params(inner, substitutions)),
-                size: *size,
-                len_name: len_name.clone(),
-            },
-            Type::Slice { inner } => Type::Slice {
-                inner: Box::new(Self::substitute_type_params(inner, substitutions)),
-            },
-            Type::Sender { elem_type } => Type::Sender {
-                elem_type: Box::new(Self::substitute_type_params(elem_type, substitutions)),
-            },
-            Type::Receiver { elem_type } => Type::Receiver {
-                elem_type: Box::new(Self::substitute_type_params(elem_type, substitutions)),
-            },
-            Type::Tuple { elements } => Type::Tuple {
-                elements: elements
-                    .iter()
-                    .map(|e| Self::substitute_type_params(e, substitutions))
-                    .collect(),
-            },
-            Type::Fn {
-                params,
-                return_type,
-            } => Type::Fn {
-                params: params
-                    .iter()
-                    .map(|p| Self::substitute_type_params(p, substitutions))
-                    .collect(),
-                return_type: Box::new(Self::substitute_type_params(return_type, substitutions)),
-            },
-            _ => ty.clone(),
-        }
+        crate::types_util::substitute_type_params(ty, substitutions)
     }
 
     fn check_stmt_seq(&mut self, stmts: &[Stmt]) -> Result<(), TypeCheckError> {
@@ -3462,54 +3537,20 @@ impl TypeChecker {
                         )));
                     }
                     let module_name = parts[0];
-                    let item_name = parts[1];
 
-                    // Look up module in imports
-                    let module_exports = self.module_imports.get(module_name).ok_or_else(|| {
-                        TypeCheckError::UndefinedVariable {
-                            name: format!("module '{}'", module_name),
-                            span: var_expr.span,
-                        }
-                    })?;
-
-                    // Look up item in module's exports
-                    // For now, we only support functions from modules via VarExpr
-                    // (This is unusual - typically functions are called, not referenced as variables)
-                    // Structs and enums would be accessed via type names, not VarExpr
-                    if let Some(&is_public) = module_exports.all_functions.get(item_name) {
-                        if !is_public {
-                            return Err(TypeCheckError::Message(format!(
-                                "Cannot access non-public function '{}::{}' from module '{}'. Add 'pub' before 'fn {}' in the module to make it accessible.",
-                                module_name, item_name, module_name, item_name
-                            )));
-                        }
-                        // Return function type for module function references
-                        let func_decl = module_exports
-                            .functions
-                            .get(item_name)
-                            .ok_or_else(|| TypeCheckError::UndefinedVariable {
-                                name: format!("{}::{}", module_name, item_name),
-                                span: var_expr.span,
-                            })?
-                            .clone();
-                        let module_file = self.module_paths.get(module_name).cloned();
-                        self.record_reference(
-                            var_expr.span,
-                            LspTarget {
-                                span: func_decl.span,
-                                file: module_file,
-                            },
-                        );
-                        Ok(fn_type_from_signature(
-                            &func_decl.params,
-                            &func_decl.return_type,
-                        ))
-                    } else {
-                        Err(TypeCheckError::UndefinedVariable {
-                            name: format!("{}::{}", module_name, item_name),
-                            span: var_expr.span,
-                        })
-                    }
+                    let func_decl = self.lookup_imported_function(&var_expr.name, var_expr.span)?;
+                    let module_file = self.module_paths.get(module_name).cloned();
+                    self.record_reference(
+                        var_expr.span,
+                        LspTarget {
+                            span: func_decl.span,
+                            file: module_file,
+                        },
+                    );
+                    Ok(fn_type_from_signature(
+                        &func_decl.params,
+                        &func_decl.return_type,
+                    ))
                 } else if let Some(var_info) = self.variables.get(&var_expr.name) {
                     // Check for use-after-move
                     if var_info.state == OwnershipState::Moved {
@@ -4048,38 +4089,11 @@ impl TypeChecker {
                 }
                 // Check if this is actually a qualified function call that was mis-parsed
                 // This happens when mod::func(...) is parsed as EnumLit instead of CallExpr
-                if let Some(module_exports) = self.module_imports.get(&enum_lit.enum_name) {
-                    // This is actually a qualified function call, not an enum literal
-                    // First check if the function exists (public or private)
-                    if let Some(&is_public) = module_exports.all_functions.get(&enum_lit.variant) {
-                        if !is_public {
-                            return Err(TypeCheckError::Message(format!(
-                                "Cannot access non-public function '{}::{}' from module '{}'. Add 'pub' before 'fn {}' in the module to make it accessible.",
-                                enum_lit.enum_name,
-                                enum_lit.variant,
-                                enum_lit.enum_name,
-                                enum_lit.variant
-                            )));
-                        }
-                    } else {
-                        return Err(TypeCheckError::UndefinedVariable {
-                            name: format!("{}::{}", enum_lit.enum_name, enum_lit.variant),
-                            span: enum_lit.span,
-                        });
-                    }
-
-                    // Get the function declaration (we know it's public now)
-                    let func_decl = module_exports
-                        .functions
-                        .get(&enum_lit.variant)
-                        .ok_or_else(|| {
-                            // This shouldn't happen if all_functions is correct, but handle it gracefully
-                            TypeCheckError::UndefinedVariable {
-                                name: format!("{}::{}", enum_lit.enum_name, enum_lit.variant),
-                                span: enum_lit.span,
-                            }
-                        })?
-                        .clone();
+                if self.module_imports.contains_key(&enum_lit.enum_name) {
+                    let func_decl = self.lookup_imported_function(
+                        &format!("{}::{}", enum_lit.enum_name, enum_lit.variant),
+                        enum_lit.span,
+                    )?;
 
                     // Check argument count
                     if enum_lit.args.len() != func_decl.params.len() {
@@ -4090,12 +4104,9 @@ impl TypeChecker {
                         });
                     }
 
-                    // Clone params to avoid borrow issues
-                    let params = func_decl.params.clone();
                     let return_type = func_decl.return_type.clone();
 
-                    // Check argument types (now we can call self.check_expr since we've dropped the module_exports borrow)
-                    for (arg_expr, param) in enum_lit.args.iter().zip(params.iter()) {
+                    for (arg_expr, param) in enum_lit.args.iter().zip(func_decl.params.iter()) {
                         let resolved_param_ty = self.resolve_type_name(&param.ty)?;
                         let arg_ty = self.check_expr_with_expected(arg_expr, &resolved_param_ty)?;
                         let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
@@ -4412,7 +4423,7 @@ impl TypeChecker {
                     }
                 };
 
-                if self.is_value_pattern_scrutinee(&scrutinee_ty) {
+                if crate::types_util::is_value_scrutinee(&scrutinee_ty) {
                     return self.check_value_pattern_match(
                         match_expr,
                         &scrutinee_ty,
@@ -4600,20 +4611,7 @@ impl TypeChecker {
                             }
                             let mut expected: Option<Vec<String>> = None;
                             for alt in alts {
-                                let mut set = std::collections::HashSet::new();
-                                add_pattern_binding_names(alt, &mut set);
-                                let mut got: Vec<String> = set.into_iter().collect();
-                                got.sort();
-                                if let Some(prev) = &expected {
-                                    if prev != &got {
-                                        return Err(TypeCheckError::Message(
-                                            "or-pattern alternatives must bind the same names"
-                                                .to_string(),
-                                        ));
-                                    }
-                                } else {
-                                    expected = Some(got);
-                                }
+                                or_alt_names_match(&mut expected, alt)?;
                             }
                         }
                         Pattern::Lit { .. }
@@ -4759,100 +4757,74 @@ impl TypeChecker {
                     let func_name = parts[1];
 
                     // Look up module in imports or check if it's actually an enum literal that was mis-parsed
-                    let module_exports = match self.module_imports.get(module_name) {
-                        Some(exports) => exports,
-                        None => {
-                            // Not a module - check if it's an enum literal
-                            // This handles cases where the parser treated Enum::Variant(...) as a qualified call
-                            if let Some(enum_decl) = self.enums.get(module_name) {
-                                // Clone the variant payload types to avoid borrow checker issues
-                                let variant = enum_decl
-                                    .variants
-                                    .iter()
-                                    .find(|v| v.name == func_name)
-                                    .ok_or_else(|| TypeCheckError::TypeMismatch {
-                                        expected: format!("variant of enum '{}'", module_name),
-                                        got: func_name.to_string(),
-                                        span: call_expr.span,
-                                    })?;
+                    if self.module_imports.contains_key(module_name) {
+                        let func_decl =
+                            self.lookup_imported_function(&call_expr.callee, call_expr.span)?;
+                        (func_decl.params, func_decl.return_type)
+                    } else {
+                        // Not a module - check if it's an enum literal
+                        // This handles cases where the parser treated Enum::Variant(...) as a qualified call
+                        if let Some(enum_decl) = self.enums.get(module_name) {
+                            // Clone the variant payload types to avoid borrow checker issues
+                            let variant = enum_decl
+                                .variants
+                                .iter()
+                                .find(|v| v.name == func_name)
+                                .ok_or_else(|| TypeCheckError::TypeMismatch {
+                                expected: format!("variant of enum '{}'", module_name),
+                                got: func_name.to_string(),
+                                span: call_expr.span,
+                            })?;
 
-                                let payload_types = variant.payload_types.clone();
-                                let generic_names = TypeParam::names(&enum_decl.generics);
-                                let enum_name = enum_decl.name.clone();
+                            let payload_types = variant.payload_types.clone();
+                            let generic_names = TypeParam::names(&enum_decl.generics);
+                            let enum_name = enum_decl.name.clone();
 
-                                // Check argument count matches variant
-                                if call_expr.args.len() != payload_types.len() {
-                                    return Err(TypeCheckError::TypeMismatch {
-                                        expected: format!("{} arguments", payload_types.len()),
-                                        got: format!("{} arguments", call_expr.args.len()),
-                                        span: call_expr.span,
-                                    });
-                                }
-
-                                // Check argument types (now we can call self.check_expr since we've dropped the enum_decl borrow)
-                                for (arg_expr, expected_ty) in
-                                    call_expr.args.iter().zip(payload_types.iter())
-                                {
-                                    let arg_ty = self.check_enum_payload_arg(
-                                        arg_expr,
-                                        expected_ty,
-                                        &enum_name,
-                                        &generic_names,
-                                    )?;
-                                    let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
-                                    let resolved_expected_ty =
-                                        self.resolve_type_name(expected_ty)?;
-                                    let numeric_coerced = Self::can_coerce_numeric(
-                                        &resolved_arg_ty,
-                                        &resolved_expected_ty,
-                                    );
-                                    if !numeric_coerced
-                                        && !types_equal(&resolved_arg_ty, &resolved_expected_ty)
-                                    {
-                                        return Err(TypeCheckError::TypeMismatch {
-                                            expected: type_to_string(&resolved_expected_ty),
-                                            got: type_to_string(&resolved_arg_ty),
-                                            span: arg_expr.span(),
-                                        });
-                                    }
-                                }
-
-                                // Return the enum type
-                                return Ok(Type::Enum(module_name.to_string()));
-                            } else {
-                                return Err(TypeCheckError::UndefinedVariable {
-                                    name: format!("module '{}'", module_name),
+                            // Check argument count matches variant
+                            if call_expr.args.len() != payload_types.len() {
+                                return Err(TypeCheckError::TypeMismatch {
+                                    expected: format!("{} arguments", payload_types.len()),
+                                    got: format!("{} arguments", call_expr.args.len()),
                                     span: call_expr.span,
                                 });
                             }
-                        }
-                    };
 
-                    // First check if the function exists (public or private)
-                    if let Some(&is_public) = module_exports.all_functions.get(func_name) {
-                        if !is_public {
-                            return Err(TypeCheckError::Message(format!(
-                                "Cannot access non-public function '{}::{}' from module '{}'. Add 'pub' before 'fn {}' in the module to make it accessible.",
-                                module_name, func_name, module_name, func_name
-                            )));
+                            // Check argument types (now we can call self.check_expr since we've dropped the enum_decl borrow)
+                            for (arg_expr, expected_ty) in
+                                call_expr.args.iter().zip(payload_types.iter())
+                            {
+                                let arg_ty = self.check_enum_payload_arg(
+                                    arg_expr,
+                                    expected_ty,
+                                    &enum_name,
+                                    &generic_names,
+                                )?;
+                                let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
+                                let resolved_expected_ty = self.resolve_type_name(expected_ty)?;
+                                let numeric_coerced = Self::can_coerce_numeric(
+                                    &resolved_arg_ty,
+                                    &resolved_expected_ty,
+                                );
+                                if !numeric_coerced
+                                    && !types_equal(&resolved_arg_ty, &resolved_expected_ty)
+                                {
+                                    return Err(TypeCheckError::TypeMismatch {
+                                        expected: type_to_string(&resolved_expected_ty),
+                                        got: type_to_string(&resolved_arg_ty),
+                                        span: arg_expr.span(),
+                                    });
+                                }
+                            }
+
+                            // Return the enum type
+                            return Ok(Type::Enum(module_name.to_string()));
+                        } else {
+                            return Err(TypeCheckError::UndefinedVariable {
+                                name: format!("module '{}'", module_name),
+                                span: call_expr.span,
+                            });
                         }
-                    } else {
-                        return Err(TypeCheckError::UndefinedVariable {
-                            name: format!("{}::{}", module_name, func_name),
-                            span: call_expr.span,
-                        });
                     }
-
-                    // Get the function declaration (we know it's public now)
-                    let func_decl = module_exports.functions.get(func_name).ok_or_else(|| {
-                        // This shouldn't happen if all_functions is correct, but handle it gracefully
-                        TypeCheckError::UndefinedVariable {
-                            name: format!("{}::{}", module_name, func_name),
-                            span: call_expr.span,
-                        }
-                    })?;
-
-                    (func_decl.params.clone(), func_decl.return_type.clone())
                 } else if let Some(var_info) = self.variables.get(&call_expr.callee) {
                     let resolved_ty = self.resolve_type_name(&var_info.ty)?;
                     match resolved_ty {
@@ -5210,73 +5182,47 @@ impl TypeChecker {
                 }
 
                 // Regular function call type checking
-                let (params, return_type_opt, fn_type_params) = if desugared_call
-                    .callee
-                    .contains("::")
-                {
-                    let parts: Vec<&str> = desugared_call.callee.split("::").collect();
-                    if parts.len() != 2 {
-                        return Err(TypeCheckError::Message(format!(
-                            "Invalid qualified function name: {}",
-                            desugared_call.callee
-                        )));
-                    }
-                    let module_name = parts[0];
-                    let func_name = parts[1];
-
-                    // Look up module in imports or check if it's a type with methods
-                    if let Some(module_exports) = self.module_imports.get(module_name) {
-                        // Module import case
-                        if let Some(&is_public) = module_exports.all_functions.get(func_name) {
-                            if !is_public {
-                                return Err(TypeCheckError::Message(format!(
-                                    "Cannot access non-public function '{}::{}' from module '{}'. Add 'pub' before 'fn {}' in the module to make it accessible.",
-                                    module_name, func_name, module_name, func_name
-                                )));
-                            }
-                        } else {
-                            return Err(TypeCheckError::UndefinedVariable {
-                                name: format!("{}::{}", module_name, func_name),
-                                span: desugared_call.span,
-                            });
+                let (params, return_type_opt, fn_type_params) =
+                    if desugared_call.callee.contains("::") {
+                        let parts: Vec<&str> = desugared_call.callee.split("::").collect();
+                        if parts.len() != 2 {
+                            return Err(TypeCheckError::Message(format!(
+                                "Invalid qualified function name: {}",
+                                desugared_call.callee
+                            )));
                         }
+                        let module_name = parts[0];
 
-                        let func_decl =
-                            module_exports.functions.get(func_name).ok_or_else(|| {
-                                TypeCheckError::UndefinedVariable {
-                                    name: format!("{}::{}", module_name, func_name),
-                                    span: desugared_call.span,
-                                }
-                            })?;
-
-                        (
-                            func_decl.params.clone(),
-                            func_decl.return_type.clone(),
-                            func_decl.generics.clone(),
-                        )
+                        // Look up module in imports or check if it's a type with methods
+                        if self.module_imports.contains_key(module_name) {
+                            let func_decl = self.lookup_imported_function(
+                                &desugared_call.callee,
+                                desugared_call.span,
+                            )?;
+                            (func_decl.params, func_decl.return_type, func_decl.generics)
+                        } else {
+                            // Type method case - look up the function again
+                            let func_decl = self
+                                .lookup_method_function(&desugared_call.callee, &base_type_name)?;
+                            (
+                                func_decl.params.clone(),
+                                func_decl.return_type.clone(),
+                                func_decl.generics.clone(),
+                            )
+                        }
                     } else {
-                        // Type method case - look up the function again
-                        let func_decl =
-                            self.lookup_method_function(&desugared_call.callee, &base_type_name)?;
-                        (
-                            func_decl.params.clone(),
-                            func_decl.return_type.clone(),
-                            func_decl.generics.clone(),
-                        )
-                    }
-                } else {
-                    let func_decl = self
-                        .functions
-                        .get(&desugared_call.callee)
-                        .cloned()
-                        .ok_or_else(|| {
-                            TypeCheckError::Message(format!(
-                                "Method call '{}' must resolve to qualified function name",
-                                method_call.method
-                            ))
-                        })?;
-                    (func_decl.params, func_decl.return_type, func_decl.generics)
-                };
+                        let func_decl = self
+                            .functions
+                            .get(&desugared_call.callee)
+                            .cloned()
+                            .ok_or_else(|| {
+                                TypeCheckError::Message(format!(
+                                    "Method call '{}' must resolve to qualified function name",
+                                    method_call.method
+                                ))
+                            })?;
+                        (func_decl.params, func_decl.return_type, func_decl.generics)
+                    };
 
                 let mut generic_substitutions = std::collections::HashMap::new();
                 let fn_generics = TypeParam::names(&fn_type_params);
@@ -5710,40 +5656,12 @@ impl TypeChecker {
         }
     }
 
-    /// Check if a type is numeric (all integer and float types)
     fn is_numeric_type(&self, ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::Int
-                | Type::F32
-                | Type::F64
-                | Type::I8
-                | Type::I16
-                | Type::I32
-                | Type::I64
-                | Type::U8
-                | Type::U16
-                | Type::U32
-                | Type::U64
-                | Type::UInt
-        )
+        self.is_integer_type(ty) || matches!(ty, Type::F32 | Type::F64)
     }
 
-    /// Check if a type is an integer type (signed or unsigned, excluding floats)
     fn is_integer_type(&self, ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::Int
-                | Type::I8
-                | Type::I16
-                | Type::I32
-                | Type::I64
-                | Type::U8
-                | Type::U16
-                | Type::U32
-                | Type::U64
-                | Type::UInt
-        )
+        crate::integer_limits::integer_row(ty).is_some()
     }
 
     fn int_literal_value(expr: &Expr) -> Option<i64> {
@@ -5754,10 +5672,6 @@ impl TypeChecker {
             }
             _ => None,
         }
-    }
-
-    fn is_value_pattern_scrutinee(&self, ty: &Type) -> bool {
-        self.is_integer_type(ty) || matches!(ty, Type::Bool | Type::String | Type::Struct(_))
     }
 
     fn check_value_pattern_match(
@@ -5851,7 +5765,7 @@ impl TypeChecker {
         Ok(match_value_type.unwrap_or(Type::Void))
     }
 
-    fn ref_pattern_ty(&self, ty: &Type, through_ref: bool, mutable: bool) -> Type {
+    fn ref_pattern_ty(ty: &Type, through_ref: bool, mutable: bool) -> Type {
         if through_ref && !Self::is_copy_type(ty) {
             Type::Ref {
                 inner: Box::new(ty.clone()),
@@ -5873,14 +5787,14 @@ impl TypeChecker {
         match pattern {
             Pattern::Wildcard { .. } => Ok(()),
             Pattern::Binding { name, .. } => {
-                let bound = self.ref_pattern_ty(ty, through_ref, ref_mutability);
+                let bound = Self::ref_pattern_ty(ty, through_ref, ref_mutability);
                 self.check_no_off_stack_reference(&bound, span)?;
                 self.variables
                     .insert(name.clone(), Self::new_variable_info(bound, span));
                 Ok(())
             }
             Pattern::At { name, pattern, .. } => {
-                let bound = self.ref_pattern_ty(ty, through_ref, ref_mutability);
+                let bound = Self::ref_pattern_ty(ty, through_ref, ref_mutability);
                 self.check_no_off_stack_reference(&bound, span)?;
                 self.variables
                     .insert(name.clone(), Self::new_variable_info(bound, span));
@@ -5915,19 +5829,7 @@ impl TypeChecker {
                 let mut expected: Option<Vec<String>> = None;
                 for alt in alts {
                     self.check_and_bind_value_pattern(alt, ty, span, through_ref, ref_mutability)?;
-                    let mut set = std::collections::HashSet::new();
-                    add_pattern_binding_names(alt, &mut set);
-                    let mut got: Vec<String> = set.into_iter().collect();
-                    got.sort();
-                    if let Some(prev) = &expected {
-                        if prev != &got {
-                            return Err(TypeCheckError::Message(
-                                "or-pattern alternatives must bind the same names".to_string(),
-                            ));
-                        }
-                    } else {
-                        expected = Some(got);
-                    }
+                    or_alt_names_match(&mut expected, alt)?;
                 }
                 Ok(())
             }
@@ -6181,12 +6083,8 @@ impl TypeChecker {
         }
     }
 
-    /// Check if a type is an unsigned integer type
     fn is_unsigned_integer_type(&self, ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::UInt
-        )
+        crate::integer_limits::is_unsigned_integer(ty)
     }
 
     /// Promote two integer types to a common type (for bitwise operations)
@@ -6204,15 +6102,8 @@ impl TypeChecker {
         )
     }
 
-    /// Get the width of an integer type (in bits)
     fn integer_width(ty: &Type) -> Option<u32> {
-        match ty {
-            Type::I8 | Type::U8 => Some(8),
-            Type::I16 | Type::U16 => Some(16),
-            Type::I32 | Type::U32 | Type::Int | Type::UInt => Some(32),
-            Type::I64 | Type::U64 => Some(64),
-            _ => None,
-        }
+        crate::integer_limits::integer_row(ty).map(|row| row.promote_bits)
     }
 
     /// For comparisons, `&T` compares as `T` when `T` is a copy type.
@@ -6254,10 +6145,8 @@ impl TypeChecker {
             (l, r) if Self::integer_width(l).is_some() && Self::integer_width(r).is_some() => {
                 let l_width = Self::integer_width(l).unwrap();
                 let r_width = Self::integer_width(r).unwrap();
-                let l_signed =
-                    matches!(l, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::Int);
-                let r_signed =
-                    matches!(r, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::Int);
+                let l_signed = crate::integer_limits::integer_row(l).is_some_and(|row| row.signed);
+                let r_signed = crate::integer_limits::integer_row(r).is_some_and(|row| row.signed);
 
                 // If mixing signed/unsigned, promote to signed wider type
                 if l_signed != r_signed {
@@ -7241,18 +7130,8 @@ impl TypeChecker {
         ref_mutability: bool,
         expr: &Expr,
     ) -> Result<(), TypeCheckError> {
-        let wrap_ref_binding = |ty: Type| -> Type {
-            if match_through_ref && Self::is_copy_type(&ty) {
-                ty
-            } else if match_through_ref {
-                Type::Ref {
-                    inner: Box::new(ty),
-                    mutable: ref_mutability,
-                }
-            } else {
-                ty
-            }
-        };
+        let wrap_ref_binding =
+            |ty: Type| Self::ref_pattern_ty(&ty, match_through_ref, ref_mutability);
         match pattern {
             Pattern::Variant {
                 enum_name: _,
@@ -7523,35 +7402,6 @@ fn pattern_fully_covers_ctor(pattern: &Pattern) -> bool {
     }
 }
 
-fn synthetic_option_enum(span: Span) -> EnumDecl {
-    EnumDecl {
-        doc: None,
-        pub_: false,
-        name: "Option".to_string(),
-        generics: vec![TypeParam::simple("T")],
-        variants: vec![
-            EnumVariant {
-                doc: None,
-                name: "Some".to_string(),
-                payload_types: vec![Type::Generic {
-                    name: "T".to_string(),
-                    params: vec![],
-                }],
-                named_fields: None,
-                span,
-            },
-            EnumVariant {
-                doc: None,
-                name: "None".to_string(),
-                payload_types: vec![],
-                named_fields: None,
-                span,
-            },
-        ],
-        span,
-    }
-}
-
 /// How a match arm contributes to rvalue unification.
 #[derive(Clone)]
 enum MatchArmValue {
@@ -7640,89 +7490,11 @@ fn expr_falls_through(expr: &Expr) -> bool {
     }
 }
 
-/// Substitute generic type parameters with concrete types
 fn substitute_generic_types_impl(
     ty: &Type,
     substitutions: &std::collections::HashMap<String, Type>,
 ) -> Type {
-    match ty {
-        Type::Generic { name, params } => {
-            // If this is a generic parameter, substitute it
-            if params.is_empty() {
-                substitutions
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| ty.clone())
-            } else {
-                // Recursively substitute in nested generic types
-                Type::Generic {
-                    name: name.clone(),
-                    params: params
-                        .iter()
-                        .map(|p| substitute_generic_types_impl(p, substitutions))
-                        .collect(),
-                }
-            }
-        }
-        // The parser stores generic type parameters as Struct(name) or Enum(name)
-        // when they appear in enum variant payloads. Check if this is actually
-        // a generic parameter that needs substitution.
-        Type::Struct(name) | Type::Enum(name) => {
-            // If this name is in the substitutions map, it's a generic parameter
-            substitutions
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| ty.clone())
-        }
-        Type::Box { inner } => Type::Box {
-            inner: Box::new(substitute_generic_types_impl(inner, substitutions)),
-        },
-        Type::Vec { elem_type } => Type::Vec {
-            elem_type: Box::new(substitute_generic_types_impl(elem_type, substitutions)),
-        },
-        Type::Ref { inner, mutable } => Type::Ref {
-            inner: Box::new(substitute_generic_types_impl(inner, substitutions)),
-            mutable: *mutable,
-        },
-        Type::Channel { elem_type } => Type::Channel {
-            elem_type: Box::new(substitute_generic_types_impl(elem_type, substitutions)),
-        },
-        Type::Sender { elem_type } => Type::Sender {
-            elem_type: Box::new(substitute_generic_types_impl(elem_type, substitutions)),
-        },
-        Type::Receiver { elem_type } => Type::Receiver {
-            elem_type: Box::new(substitute_generic_types_impl(elem_type, substitutions)),
-        },
-        Type::Array {
-            inner,
-            size,
-            len_name,
-        } => Type::Array {
-            inner: Box::new(substitute_generic_types_impl(inner, substitutions)),
-            size: *size,
-            len_name: len_name.clone(),
-        },
-        Type::Slice { inner } => Type::Slice {
-            inner: Box::new(substitute_generic_types_impl(inner, substitutions)),
-        },
-        Type::Tuple { elements } => Type::Tuple {
-            elements: elements
-                .iter()
-                .map(|e| substitute_generic_types_impl(e, substitutions))
-                .collect(),
-        },
-        Type::Fn {
-            params,
-            return_type,
-        } => Type::Fn {
-            params: params
-                .iter()
-                .map(|p| substitute_generic_types_impl(p, substitutions))
-                .collect(),
-            return_type: Box::new(substitute_generic_types_impl(return_type, substitutions)),
-        },
-        _ => ty.clone(),
-    }
+    crate::types_util::substitute_type(ty, substitutions)
 }
 
 /// Collect names of variables from the enclosing scope referenced inside a block.
@@ -7742,6 +7514,26 @@ pub(crate) fn collect_captured_vars_excluding(
     refs.sort();
     refs.dedup();
     refs
+}
+
+fn or_alt_names_match(
+    expected: &mut Option<Vec<String>>,
+    alt: &Pattern,
+) -> Result<(), TypeCheckError> {
+    let mut set = std::collections::HashSet::new();
+    add_pattern_binding_names(alt, &mut set);
+    let mut got: Vec<String> = set.into_iter().collect();
+    got.sort();
+    if let Some(prev) = expected {
+        if prev != &got {
+            return Err(TypeCheckError::Message(
+                "or-pattern alternatives must bind the same names".to_string(),
+            ));
+        }
+    } else {
+        *expected = Some(got);
+    }
+    Ok(())
 }
 
 fn add_pattern_binding_names(pattern: &Pattern, locals: &mut std::collections::HashSet<String>) {

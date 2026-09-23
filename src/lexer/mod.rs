@@ -115,6 +115,58 @@ pub struct Span {
     pub column: usize,
 }
 
+/// Spellings the lexer treats as keywords. Completion reads this table.
+pub const KEYWORDS: &[(&str, TokenKind)] = &[
+    ("fn", TokenKind::Fn),
+    ("let", TokenKind::Let),
+    ("struct", TokenKind::Struct),
+    ("enum", TokenKind::Enum),
+    ("if", TokenKind::If),
+    ("else", TokenKind::Else),
+    ("return", TokenKind::Return),
+    ("break", TokenKind::Break),
+    ("continue", TokenKind::Continue),
+    ("channel", TokenKind::Channel),
+    ("send", TokenKind::Send),
+    ("recv", TokenKind::Recv),
+    ("spawn", TokenKind::Spawn),
+    ("select", TokenKind::Select),
+    ("defer", TokenKind::Defer),
+    ("int", TokenKind::Int),
+    ("bool", TokenKind::Bool),
+    ("f32", TokenKind::F32),
+    ("f64", TokenKind::F64),
+    ("i8", TokenKind::I8),
+    ("i16", TokenKind::I16),
+    ("i32", TokenKind::I32),
+    ("i64", TokenKind::I64),
+    ("u16", TokenKind::U16),
+    ("u32", TokenKind::U32),
+    ("u64", TokenKind::U64),
+    ("uint", TokenKind::UInt),
+    ("mut", TokenKind::Mut),
+    ("while", TokenKind::While),
+    ("for", TokenKind::For),
+    ("loop", TokenKind::Loop),
+    ("match", TokenKind::Match),
+    ("Box", TokenKind::Box),
+    ("Vec", TokenKind::Vec),
+    ("String", TokenKind::String),
+    ("Slice", TokenKind::Slice),
+    ("File", TokenKind::File),
+    ("pub", TokenKind::Pub),
+    ("import", TokenKind::Import),
+    ("extern", TokenKind::Extern),
+    ("unsafe", TokenKind::Unsafe),
+    ("type", TokenKind::Type),
+    ("capability", TokenKind::Capability),
+    ("impl", TokenKind::Impl),
+    ("const", TokenKind::Const),
+    ("as", TokenKind::As),
+    ("true", TokenKind::True),
+    ("false", TokenKind::False),
+];
+
 pub struct Lexer {
     input: Vec<char>,
     position: usize,
@@ -748,57 +800,11 @@ impl Lexer {
 
         let text: String = self.input[start..self.position].iter().collect();
 
-        match text.as_str() {
-            "fn" => TokenKind::Fn,
-            "let" => TokenKind::Let,
-            "struct" => TokenKind::Struct,
-            "enum" => TokenKind::Enum,
-            "if" => TokenKind::If,
-            "else" => TokenKind::Else,
-            "return" => TokenKind::Return,
-            "break" => TokenKind::Break,
-            "continue" => TokenKind::Continue,
-            "channel" => TokenKind::Channel,
-            "send" => TokenKind::Send,
-            "recv" => TokenKind::Recv,
-            "spawn" => TokenKind::Spawn,
-            "select" => TokenKind::Select,
-            "defer" => TokenKind::Defer,
-            "int" => TokenKind::Int,
-            "bool" => TokenKind::Bool,
-            "f32" => TokenKind::F32,
-            "f64" => TokenKind::F64,
-            "i8" => TokenKind::I8,
-            "i16" => TokenKind::I16,
-            "i32" => TokenKind::I32,
-            "i64" => TokenKind::I64,
-            "u16" => TokenKind::U16,
-            "u32" => TokenKind::U32,
-            "u64" => TokenKind::U64,
-            "uint" => TokenKind::UInt,
-            "mut" => TokenKind::Mut,
-            "while" => TokenKind::While,
-            "for" => TokenKind::For,
-            "loop" => TokenKind::Loop,
-            "match" => TokenKind::Match,
-            "Box" => TokenKind::Box,
-            "Vec" => TokenKind::Vec,
-            "String" => TokenKind::String,
-            "Slice" => TokenKind::Slice,
-            "File" => TokenKind::File,
-            "pub" => TokenKind::Pub,
-            "import" => TokenKind::Import,
-            "extern" => TokenKind::Extern,
-            "unsafe" => TokenKind::Unsafe,
-            "type" => TokenKind::Type,
-            "capability" => TokenKind::Capability,
-            "impl" => TokenKind::Impl,
-            "const" => TokenKind::Const,
-            "as" => TokenKind::As,
-            "true" => TokenKind::True,
-            "false" => TokenKind::False,
-            _ => TokenKind::Ident(text),
-        }
+        KEYWORDS
+            .iter()
+            .find(|(word, _)| *word == text)
+            .map(|(_, kind)| kind.clone())
+            .unwrap_or(TokenKind::Ident(text))
     }
 }
 
@@ -812,6 +818,28 @@ mod tests {
         let tokens = lexer.tokenize().unwrap();
         assert_eq!(tokens[0].kind, TokenKind::Break);
         assert_eq!(tokens[1].kind, TokenKind::Continue);
+    }
+
+    #[test]
+    fn lexer_keywords_are_completed_and_highlighted() {
+        let grammar = include_str!("../../ion-vscode/syntaxes/ion.tmLanguage.json");
+        let items = crate::lsp::util::completion_items(
+            None,
+            &crate::lsp::util::CompletionContext::TopLevel {
+                prefix: String::new(),
+            },
+        );
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        for (word, _) in KEYWORDS {
+            assert!(
+                labels.iter().any(|label| *label == *word),
+                "completion missing {word}"
+            );
+            let in_grammar = grammar.contains(&format!("|{word}|"))
+                || grammar.contains(&format!("|{word})"))
+                || grammar.contains(&format!("({word}|"));
+            assert!(in_grammar, "grammar missing {word}");
+        }
     }
 
     #[test]

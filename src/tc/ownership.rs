@@ -419,13 +419,21 @@ impl TypeChecker {
     /// through one, a fresh `&` / `&mut` stored in a struct, enum, tuple, or
     /// match result, or a field of such a value.
     pub(crate) fn loans_in_expr(&self, expr: &Expr) -> Vec<usize> {
+        self.loans_in_expr_kind(expr, false)
+    }
+
+    fn loans_in_expr_kind(&self, expr: &Expr, stored_only: bool) -> Vec<usize> {
         match expr {
-            Expr::Var(var) => self.loans_of(&var.name),
+            Expr::Var(var) if !stored_only => self.loans_of(&var.name),
+            Expr::Ref(ref_expr) if stored_only => self
+                .stored_ref_loans
+                .get(&ref_expr.id)
+                .cloned()
+                .unwrap_or_default(),
             Expr::Ref(ref_expr) => {
                 if let Some(ids) = self.stored_ref_loans.get(&ref_expr.id) {
-                    return ids.clone();
-                }
-                if let Some((owner, fields, _)) = self.place_from_expr(&ref_expr.inner)
+                    ids.clone()
+                } else if let Some((owner, fields, _)) = self.place_from_expr(&ref_expr.inner)
                     && self.is_projected_reborrow(&owner, fields.as_deref(), &ref_expr.inner)
                 {
                     self.loans_of(&owner)
@@ -436,31 +444,40 @@ impl TypeChecker {
             Expr::TupleLit(tuple) => {
                 let mut out = Vec::new();
                 for element in &tuple.elements {
-                    Self::push_unique_loans(&mut out, self.loans_in_expr(element));
+                    Self::push_unique_loans(
+                        &mut out,
+                        self.loans_in_expr_kind(element, stored_only),
+                    );
                 }
                 out
             }
-            Expr::FieldAccess(acc) => self.loans_in_expr(&acc.base),
+            Expr::FieldAccess(acc) => self.loans_in_expr_kind(&acc.base, stored_only),
             Expr::StructLit(lit) => {
                 let mut out = Vec::new();
                 for field in &lit.fields {
-                    Self::push_unique_loans(&mut out, self.loans_in_expr(&field.value));
+                    Self::push_unique_loans(
+                        &mut out,
+                        self.loans_in_expr_kind(&field.value, stored_only),
+                    );
                 }
                 out
             }
             Expr::EnumLit(lit) => {
                 let mut out = Vec::new();
                 for arg in &lit.args {
-                    Self::push_unique_loans(&mut out, self.loans_in_expr(arg));
+                    Self::push_unique_loans(&mut out, self.loans_in_expr_kind(arg, stored_only));
                 }
                 if let Some(fields) = &lit.named_fields {
                     for (_, value) in fields {
-                        Self::push_unique_loans(&mut out, self.loans_in_expr(value));
+                        Self::push_unique_loans(
+                            &mut out,
+                            self.loans_in_expr_kind(value, stored_only),
+                        );
                     }
                 }
                 out
             }
-            Expr::Match(match_expr) => {
+            Expr::Match(match_expr) if !stored_only => {
                 if let Some(recorded) = self.match_result_loans.get(&match_expr.id) {
                     let mut out = recorded.clone();
                     for arm in &match_expr.arms {
@@ -475,67 +492,6 @@ impl TypeChecker {
                     out
                 }
             }
-            _ => Vec::new(),
-        }
-    }
-
-    pub(crate) fn loans_in_block(&self, block: &crate::ast::Block) -> Vec<usize> {
-        self.loans_in_stmts(&block.statements)
-    }
-
-    fn loans_in_stmts(&self, stmts: &[crate::ast::Stmt]) -> Vec<usize> {
-        let Some(last) = stmts.last() else {
-            return Vec::new();
-        };
-        match last {
-            crate::ast::Stmt::Expr(expr) => self.loans_in_expr(&expr.expr),
-            crate::ast::Stmt::If(if_stmt) => {
-                let mut out = self.loans_in_block(&if_stmt.then_block);
-                if let Some(else_block) = &if_stmt.else_block {
-                    Self::push_unique_loans(&mut out, self.loans_in_block(else_block));
-                }
-                out
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    /// Loans of `&` / `&mut` expressions stored in `expr`, ignoring names.
-    /// Pattern bindings have already left scope when a recorded match is read.
-    fn stored_loans_in_expr(&self, expr: &Expr) -> Vec<usize> {
-        match expr {
-            Expr::Ref(ref_expr) => self
-                .stored_ref_loans
-                .get(&ref_expr.id)
-                .cloned()
-                .unwrap_or_default(),
-            Expr::StructLit(lit) => {
-                let mut out = Vec::new();
-                for field in &lit.fields {
-                    Self::push_unique_loans(&mut out, self.stored_loans_in_expr(&field.value));
-                }
-                out
-            }
-            Expr::EnumLit(lit) => {
-                let mut out = Vec::new();
-                for arg in &lit.args {
-                    Self::push_unique_loans(&mut out, self.stored_loans_in_expr(arg));
-                }
-                if let Some(fields) = &lit.named_fields {
-                    for (_, value) in fields {
-                        Self::push_unique_loans(&mut out, self.stored_loans_in_expr(value));
-                    }
-                }
-                out
-            }
-            Expr::TupleLit(tuple) => {
-                let mut out = Vec::new();
-                for element in &tuple.elements {
-                    Self::push_unique_loans(&mut out, self.stored_loans_in_expr(element));
-                }
-                out
-            }
-            Expr::FieldAccess(acc) => self.stored_loans_in_expr(&acc.base),
             Expr::Match(match_expr) => {
                 let mut out = Vec::new();
                 for arm in &match_expr.arms {
@@ -547,25 +503,32 @@ impl TypeChecker {
         }
     }
 
-    fn stored_loans_in_block(&self, block: &crate::ast::Block) -> Vec<usize> {
-        self.stored_loans_in_stmts(&block.statements)
+    pub(crate) fn loans_in_block(&self, block: &crate::ast::Block) -> Vec<usize> {
+        self.loans_in_stmts_kind(&block.statements, false)
     }
 
-    fn stored_loans_in_stmts(&self, stmts: &[crate::ast::Stmt]) -> Vec<usize> {
+    fn loans_in_stmts_kind(&self, stmts: &[crate::ast::Stmt], stored_only: bool) -> Vec<usize> {
         let Some(last) = stmts.last() else {
             return Vec::new();
         };
         match last {
-            crate::ast::Stmt::Expr(expr) => self.stored_loans_in_expr(&expr.expr),
+            crate::ast::Stmt::Expr(expr) => self.loans_in_expr_kind(&expr.expr, stored_only),
             crate::ast::Stmt::If(if_stmt) => {
-                let mut out = self.stored_loans_in_block(&if_stmt.then_block);
+                let mut out = self.loans_in_stmts_kind(&if_stmt.then_block.statements, stored_only);
                 if let Some(else_block) = &if_stmt.else_block {
-                    Self::push_unique_loans(&mut out, self.stored_loans_in_block(else_block));
+                    Self::push_unique_loans(
+                        &mut out,
+                        self.loans_in_stmts_kind(&else_block.statements, stored_only),
+                    );
                 }
                 out
             }
             _ => Vec::new(),
         }
+    }
+
+    fn stored_loans_in_block(&self, block: &crate::ast::Block) -> Vec<usize> {
+        self.loans_in_stmts_kind(&block.statements, true)
     }
 
     /// Register lasting loans for `&` / `&mut` created inside a stored value.

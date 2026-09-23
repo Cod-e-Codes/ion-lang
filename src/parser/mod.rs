@@ -477,18 +477,7 @@ impl Parser {
         }
         self.advance(); // consume 'as'
 
-        // Expect identifier for alias
-        let alias_token_idx = self.current;
-        let alias = if let TokenKind::Ident(ref alias_str) = self.tokens[alias_token_idx].kind {
-            alias_str.clone()
-        } else {
-            return Err(ParseError::UnexpectedToken {
-                expected: "identifier".to_string(),
-                got: self.tokens[alias_token_idx].kind.clone(),
-                span: Span::from_token(&self.tokens[alias_token_idx]),
-            });
-        };
-        self.advance(); // consume identifier
+        let alias = self.expect_ident("identifier")?;
 
         self.expect(TokenKind::Semicolon)?;
 
@@ -540,17 +529,7 @@ impl Parser {
     fn parse_extern_function(&mut self) -> Result<ExternFnDecl, ParseError> {
         let fn_span = Span::from_token(self.expect(TokenKind::Fn)?);
 
-        let name_token_idx = self.current;
-        let name = if let TokenKind::Ident(ref name_str) = self.tokens[name_token_idx].kind {
-            name_str.clone()
-        } else {
-            return Err(ParseError::UnexpectedToken {
-                expected: "function name".to_string(),
-                got: self.tokens[name_token_idx].kind.clone(),
-                span: Span::from_token(&self.tokens[name_token_idx]),
-            });
-        };
-        self.advance(); // consume identifier
+        let name = self.expect_ident("function name")?;
 
         self.expect(TokenKind::LParen)?;
 
@@ -573,18 +552,7 @@ impl Parser {
                         break;
                     }
 
-                    let name_idx = self.current;
-                    let name = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind
-                    {
-                        ident_name.clone()
-                    } else {
-                        return Err(ParseError::UnexpectedToken {
-                            expected: "parameter name".to_string(),
-                            got: self.tokens[name_idx].kind.clone(),
-                            span: Span::from_token(&self.tokens[name_idx]),
-                        });
-                    };
-                    self.current += 1; // consume identifier
+                    let name = self.expect_ident("parameter name")?;
 
                     self.expect(TokenKind::Colon)?;
                     let ty = self.parse_type()?;
@@ -625,18 +593,7 @@ impl Parser {
     fn parse_function(&mut self) -> Result<FnDecl, ParseError> {
         let fn_token_span = Span::from_token(self.expect(TokenKind::Fn)?);
 
-        // Extract name using current index to avoid borrow conflicts
-        let name_token_idx = self.current;
-        let name = if let TokenKind::Ident(ref ident_name) = self.tokens[name_token_idx].kind {
-            ident_name.clone()
-        } else {
-            return Err(ParseError::UnexpectedToken {
-                expected: "function name".to_string(),
-                got: self.tokens[name_token_idx].kind.clone(),
-                span: Span::from_token(&self.tokens[name_token_idx]),
-            });
-        };
-        self.advance(); // consume identifier
+        let name = self.expect_ident("function name")?;
 
         // Parse generic parameters
         let generics = self.parse_generic_params()?;
@@ -660,21 +617,7 @@ impl Parser {
         let end_span = body
             .statements
             .last()
-            .map(|s| match s {
-                Stmt::Let(s) => s.span,
-                Stmt::Return(s) => s.span,
-                Stmt::Break(s) => s.span,
-                Stmt::Continue(s) => s.span,
-                Stmt::Expr(s) => s.expr.span(),
-                Stmt::Defer(s) => s.span,
-                Stmt::Spawn(s) => s.span,
-                Stmt::Select(s) => s.span,
-                Stmt::If(s) => s.span,
-                Stmt::While(s) => s.span,
-                Stmt::Loop(s) => s.span,
-                Stmt::For(s) => s.span,
-                Stmt::UnsafeBlock(s) => s.span,
-            })
+            .map(stmt_end_span)
             .unwrap_or_else(|| Span::from_token(self.previous()));
         let span = fn_token_span.merge(&end_span);
 
@@ -819,21 +762,7 @@ impl Parser {
         let end_span = body
             .statements
             .last()
-            .map(|s| match s {
-                Stmt::Let(s) => s.span,
-                Stmt::Return(s) => s.span,
-                Stmt::Break(s) => s.span,
-                Stmt::Continue(s) => s.span,
-                Stmt::Expr(s) => s.expr.span(),
-                Stmt::Defer(s) => s.span,
-                Stmt::Spawn(s) => s.span,
-                Stmt::Select(s) => s.span,
-                Stmt::If(s) => s.span,
-                Stmt::While(s) => s.span,
-                Stmt::Loop(s) => s.span,
-                Stmt::For(s) => s.span,
-                Stmt::UnsafeBlock(s) => s.span,
-            })
+            .map(stmt_end_span)
             .unwrap_or_else(|| Span::from_token(self.previous()));
         let span = fn_span.merge(&end_span);
 
@@ -855,17 +784,7 @@ impl Parser {
         }
 
         loop {
-            let name_idx = self.current;
-            let name = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind {
-                ident_name.clone()
-            } else {
-                return Err(ParseError::UnexpectedToken {
-                    expected: "parameter name".to_string(),
-                    got: self.tokens[name_idx].kind.clone(),
-                    span: Span::from_token(&self.tokens[name_idx]),
-                });
-            };
-            self.current += 1; // consume identifier
+            let name = self.expect_ident("parameter name")?;
 
             self.expect(TokenKind::Colon)?;
             let ty = self.parse_type()?;
@@ -956,7 +875,7 @@ impl Parser {
                 self.expect(TokenKind::Semicolon)?;
 
                 // Parse size
-                let size_token = self.peek();
+                let size_token = self.peek().clone();
                 let (size, len_name) = if let TokenKind::Integer(size_val) = &size_token.kind {
                     let val = *size_val;
                     self.advance();
@@ -966,15 +885,16 @@ impl Parser {
                         ));
                     }
                     (val as usize, None)
-                } else if let TokenKind::Ident(name) = &size_token.kind {
-                    let name = name.clone();
-                    self.advance();
-                    (0, Some(name))
+                } else if matches!(size_token.kind, TokenKind::Ident(_)) {
+                    (
+                        0,
+                        Some(self.expect_ident("integer literal or const name for array size")?),
+                    )
                 } else {
                     return Err(ParseError::UnexpectedToken {
                         expected: "integer literal or const name for array size".to_string(),
                         got: size_token.kind.clone(),
-                        span: Span::from_token(size_token),
+                        span: Span::from_token(&size_token),
                     });
                 };
 
@@ -1205,17 +1125,7 @@ impl Parser {
         if is_const {
             self.advance();
         }
-        let name_idx = self.current;
-        let name = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind {
-            ident_name.clone()
-        } else {
-            return Err(ParseError::UnexpectedToken {
-                expected: "type parameter name".to_string(),
-                got: self.tokens[name_idx].kind.clone(),
-                span: Span::from_token(&self.tokens[name_idx]),
-            });
-        };
-        self.current += 1; // consume identifier
+        let name = self.expect_ident("type parameter name")?;
 
         if is_const {
             self.expect(TokenKind::Colon)?;
@@ -1236,17 +1146,7 @@ impl Parser {
         if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Colon) {
             self.advance(); // consume :
             loop {
-                let bound_idx = self.current;
-                let bound = if let TokenKind::Ident(ref bound_name) = self.tokens[bound_idx].kind {
-                    bound_name.clone()
-                } else {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "trait bound name".to_string(),
-                        got: self.tokens[bound_idx].kind.clone(),
-                        span: Span::from_token(&self.tokens[bound_idx]),
-                    });
-                };
-                self.current += 1;
+                let bound = self.expect_ident("trait bound name")?;
                 bounds.push(bound);
 
                 if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Plus) {
@@ -1267,18 +1167,7 @@ impl Parser {
     fn parse_struct_decl(&mut self) -> Result<StructDecl, ParseError> {
         let struct_span = Span::from_token(self.expect(TokenKind::Struct)?);
 
-        // Name
-        let name_idx = self.current;
-        let name = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind {
-            ident_name.clone()
-        } else {
-            return Err(ParseError::UnexpectedToken {
-                expected: "struct name".to_string(),
-                got: self.tokens[name_idx].kind.clone(),
-                span: Span::from_token(&self.tokens[name_idx]),
-            });
-        };
-        self.current += 1; // consume identifier
+        let name = self.expect_ident("struct name")?;
 
         // Parse generic parameters
         let generics = self.parse_generic_params()?;
@@ -1288,18 +1177,7 @@ impl Parser {
         let mut fields = Vec::new();
         while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
             let field_doc = self.take_doc();
-            let field_name_idx = self.current;
-            let field_name =
-                if let TokenKind::Ident(ref ident_name) = self.tokens[field_name_idx].kind {
-                    ident_name.clone()
-                } else {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "field name".to_string(),
-                        got: self.tokens[field_name_idx].kind.clone(),
-                        span: Span::from_token(&self.tokens[field_name_idx]),
-                    });
-                };
-            self.current += 1; // consume identifier
+            let field_name = self.expect_ident("field name")?;
 
             self.expect(TokenKind::Colon)?;
             let ty = self.parse_type()?;
@@ -1334,18 +1212,7 @@ impl Parser {
     fn parse_enum_decl(&mut self) -> Result<EnumDecl, ParseError> {
         let enum_span = Span::from_token(self.expect(TokenKind::Enum)?);
 
-        // Name
-        let name_idx = self.current;
-        let name = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind {
-            ident_name.clone()
-        } else {
-            return Err(ParseError::UnexpectedToken {
-                expected: "enum name".to_string(),
-                got: self.tokens[name_idx].kind.clone(),
-                span: Span::from_token(&self.tokens[name_idx]),
-            });
-        };
-        self.current += 1; // consume identifier
+        let name = self.expect_ident("enum name")?;
 
         // Parse generic parameters
         let generics = self.parse_generic_params()?;
@@ -1355,18 +1222,8 @@ impl Parser {
         let mut variants = Vec::new();
         while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
             let variant_doc = self.take_doc();
-            let variant_name_idx = self.current;
-            let variant_name =
-                if let TokenKind::Ident(ref ident_name) = self.tokens[variant_name_idx].kind {
-                    ident_name.clone()
-                } else {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "variant name".to_string(),
-                        got: self.tokens[variant_name_idx].kind.clone(),
-                        span: Span::from_token(&self.tokens[variant_name_idx]),
-                    });
-                };
-            self.current += 1; // consume identifier
+            let variant_name = self.expect_ident("variant name")?;
+            let variant_span = Span::from_token(self.previous());
 
             // Check for tuple variant (Type1, Type2) or struct variant { field: Type }
             let (payload_types, named_fields) =
@@ -1395,19 +1252,7 @@ impl Parser {
                         if !self.is_at_end() && matches!(self.peek().kind, TokenKind::RBrace) {
                             break;
                         }
-                        let field_name_idx = self.current;
-                        let field_name = if let TokenKind::Ident(ref ident_name) =
-                            self.tokens[field_name_idx].kind
-                        {
-                            ident_name.clone()
-                        } else {
-                            return Err(ParseError::UnexpectedToken {
-                                expected: "field name".to_string(),
-                                got: self.tokens[field_name_idx].kind.clone(),
-                                span: Span::from_token(&self.tokens[field_name_idx]),
-                            });
-                        };
-                        self.current += 1; // consume identifier
+                        let field_name = self.expect_ident("field name")?;
                         self.expect(TokenKind::Colon)?;
                         let field_type = self.parse_type()?;
                         fields.push((field_name, field_type));
@@ -1424,7 +1269,6 @@ impl Parser {
                     (Vec::new(), None)
                 };
 
-            let variant_span = Span::from_token(&self.tokens[variant_name_idx]);
             variants.push(EnumVariant {
                 doc: variant_doc,
                 name: variant_name,
@@ -1455,18 +1299,7 @@ impl Parser {
     fn parse_type_alias(&mut self) -> Result<TypeAliasDecl, ParseError> {
         let type_span = Span::from_token(self.expect(TokenKind::Type)?);
 
-        // Name
-        let name_idx = self.current;
-        let name = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind {
-            ident_name.clone()
-        } else {
-            return Err(ParseError::UnexpectedToken {
-                expected: "type alias name".to_string(),
-                got: self.tokens[name_idx].kind.clone(),
-                span: Span::from_token(&self.tokens[name_idx]),
-            });
-        };
-        self.current += 1; // consume identifier
+        let name = self.expect_ident("type alias name")?;
 
         // Parse generic parameters
         let generics = self.parse_generic_params()?;
@@ -1590,21 +1423,7 @@ impl Parser {
         let end_span = body
             .statements
             .last()
-            .map(|s| match s {
-                Stmt::Let(s) => s.span,
-                Stmt::Return(s) => s.span,
-                Stmt::Break(s) => s.span,
-                Stmt::Continue(s) => s.span,
-                Stmt::Expr(s) => s.expr.span(),
-                Stmt::Defer(s) => s.span,
-                Stmt::Spawn(s) => s.span,
-                Stmt::Select(s) => s.span,
-                Stmt::If(s) => s.span,
-                Stmt::While(s) => s.span,
-                Stmt::Loop(s) => s.span,
-                Stmt::For(s) => s.span,
-                Stmt::UnsafeBlock(s) => s.span,
-            })
+            .map(stmt_end_span)
             .unwrap_or(while_token_span);
         let span = while_token_span.merge(&end_span);
 
@@ -1618,21 +1437,7 @@ impl Parser {
         let end_span = body
             .statements
             .last()
-            .map(|s| match s {
-                Stmt::Let(s) => s.span,
-                Stmt::Return(s) => s.span,
-                Stmt::Break(s) => s.span,
-                Stmt::Continue(s) => s.span,
-                Stmt::Expr(s) => s.expr.span(),
-                Stmt::Defer(s) => s.span,
-                Stmt::Spawn(s) => s.span,
-                Stmt::Select(s) => s.span,
-                Stmt::If(s) => s.span,
-                Stmt::While(s) => s.span,
-                Stmt::Loop(s) => s.span,
-                Stmt::For(s) => s.span,
-                Stmt::UnsafeBlock(s) => s.span,
-            })
+            .map(stmt_end_span)
             .unwrap_or(loop_token_span);
         let span = loop_token_span.merge(&end_span);
 
@@ -1642,18 +1447,7 @@ impl Parser {
     fn parse_for_stmt(&mut self) -> Result<ForStmt, ParseError> {
         let for_token_span = Span::from_token(self.expect(TokenKind::For)?);
 
-        // Parse variable name
-        let var_name_idx = self.current;
-        let var_name = if let TokenKind::Ident(ref ident_name) = self.tokens[var_name_idx].kind {
-            ident_name.clone()
-        } else {
-            return Err(ParseError::UnexpectedToken {
-                expected: "variable name".to_string(),
-                got: self.tokens[var_name_idx].kind.clone(),
-                span: Span::from_token(&self.tokens[var_name_idx]),
-            });
-        };
-        self.current += 1; // consume identifier
+        let var_name = self.expect_ident("variable name")?;
 
         // Expect "in" keyword (we'll check for it as an identifier for now)
         let in_idx = self.current;
@@ -1683,21 +1477,7 @@ impl Parser {
         let end_span = body
             .statements
             .last()
-            .map(|s| match s {
-                Stmt::Let(s) => s.span,
-                Stmt::Return(s) => s.span,
-                Stmt::Break(s) => s.span,
-                Stmt::Continue(s) => s.span,
-                Stmt::Expr(s) => s.expr.span(),
-                Stmt::Defer(s) => s.span,
-                Stmt::Spawn(s) => s.span,
-                Stmt::Select(s) => s.span,
-                Stmt::If(s) => s.span,
-                Stmt::While(s) => s.span,
-                Stmt::Loop(s) => s.span,
-                Stmt::For(s) => s.span,
-                Stmt::UnsafeBlock(s) => s.span,
-            })
+            .map(stmt_end_span)
             .unwrap_or(for_token_span);
         let span = for_token_span.merge(&end_span);
 
@@ -1732,21 +1512,7 @@ impl Parser {
                 &body
                     .statements
                     .last()
-                    .map(|s| match s {
-                        Stmt::Let(s) => s.span,
-                        Stmt::Return(s) => s.span,
-                        Stmt::Break(s) => s.span,
-                        Stmt::Continue(s) => s.span,
-                        Stmt::Expr(s) => s.expr.span(),
-                        Stmt::Defer(s) => s.span,
-                        Stmt::Spawn(s) => s.span,
-                        Stmt::Select(s) => s.span,
-                        Stmt::If(s) => s.span,
-                        Stmt::While(s) => s.span,
-                        Stmt::Loop(s) => s.span,
-                        Stmt::For(s) => s.span,
-                        Stmt::UnsafeBlock(s) => s.span,
-                    })
+                    .map(stmt_end_span)
                     .unwrap_or(pattern.span()),
             );
             arms.push(MatchArm {
@@ -1987,19 +1753,7 @@ impl Parser {
                     self.advance(); // consume identifier
                     self.advance(); // consume first :
                     self.advance(); // consume second :
-                    let variant_name_idx = self.current;
-                    let variant_name = if let TokenKind::Ident(ref ident_name) =
-                        self.tokens[variant_name_idx].kind
-                    {
-                        ident_name.clone()
-                    } else {
-                        return Err(ParseError::UnexpectedToken {
-                            expected: "variant name".to_string(),
-                            got: self.tokens[variant_name_idx].kind.clone(),
-                            span: Span::from_token(&self.tokens[variant_name_idx]),
-                        });
-                    };
-                    self.advance();
+                    let variant_name = self.expect_ident("variant name")?;
 
                     // Parse sub-patterns if present (tuple or struct variant)
                     let (sub_patterns, named_fields) = if !self.is_at_end()
@@ -2047,19 +1801,8 @@ impl Parser {
                                 }
                                 continue;
                             }
-                            let field_name_idx = self.current;
-                            let field_name = if let TokenKind::Ident(ref ident_name) =
-                                self.tokens[field_name_idx].kind
-                            {
-                                ident_name.clone()
-                            } else {
-                                return Err(ParseError::UnexpectedToken {
-                                    expected: "field name".to_string(),
-                                    got: self.tokens[field_name_idx].kind.clone(),
-                                    span: Span::from_token(&self.tokens[field_name_idx]),
-                                });
-                            };
-                            self.current += 1; // consume identifier
+                            let field_span = Span::from_token(self.peek());
+                            let field_name = self.expect_ident("field name")?;
                             let field_pattern = if !self.is_at_end()
                                 && matches!(self.peek().kind, TokenKind::Colon)
                             {
@@ -2073,7 +1816,7 @@ impl Parser {
                             {
                                 Pattern::Binding {
                                     name: field_name.clone(),
-                                    span: Span::from_token(&self.tokens[field_name_idx]),
+                                    span: field_span,
                                 }
                             } else {
                                 return Err(ParseError::UnexpectedToken {
@@ -2171,41 +1914,13 @@ impl Parser {
             else_blk
                 .statements
                 .last()
-                .map(|s| match s {
-                    Stmt::Let(s) => s.span,
-                    Stmt::Return(s) => s.span,
-                    Stmt::Break(s) => s.span,
-                    Stmt::Continue(s) => s.span,
-                    Stmt::Expr(s) => s.expr.span(),
-                    Stmt::Defer(s) => s.span,
-                    Stmt::Spawn(s) => s.span,
-                    Stmt::Select(s) => s.span,
-                    Stmt::If(s) => s.span,
-                    Stmt::While(s) => s.span,
-                    Stmt::Loop(s) => s.span,
-                    Stmt::For(s) => s.span,
-                    Stmt::UnsafeBlock(s) => s.span,
-                })
+                .map(stmt_end_span)
                 .unwrap_or(if_token_span)
         } else {
             then_block
                 .statements
                 .last()
-                .map(|s| match s {
-                    Stmt::Let(s) => s.span,
-                    Stmt::Return(s) => s.span,
-                    Stmt::Break(s) => s.span,
-                    Stmt::Continue(s) => s.span,
-                    Stmt::Expr(s) => s.expr.span(),
-                    Stmt::Defer(s) => s.span,
-                    Stmt::Spawn(s) => s.span,
-                    Stmt::Select(s) => s.span,
-                    Stmt::If(s) => s.span,
-                    Stmt::While(s) => s.span,
-                    Stmt::Loop(s) => s.span,
-                    Stmt::For(s) => s.span,
-                    Stmt::UnsafeBlock(s) => s.span,
-                })
+                .map(stmt_end_span)
                 .unwrap_or(if_token_span)
         };
         let span = if_token_span.merge(&end_span);
@@ -2252,18 +1967,8 @@ impl Parser {
         };
 
         let (name, name_span) = if patterns.is_none() {
-            let name_idx = self.current;
-            let name_span = Span::from_token(&self.tokens[name_idx]);
-            let name_val = if let TokenKind::Ident(ref ident_name) = self.tokens[name_idx].kind {
-                ident_name.clone()
-            } else {
-                return Err(ParseError::UnexpectedToken {
-                    expected: "variable name or tuple pattern".to_string(),
-                    got: self.tokens[name_idx].kind.clone(),
-                    span: Span::from_token(&self.tokens[name_idx]),
-                });
-            };
-            self.current += 1; // consume identifier manually
+            let name_span = Span::from_token(self.peek());
+            let name_val = self.expect_ident("variable name or tuple pattern")?;
             (name_val, name_span)
         } else {
             (String::new(), Span::default())
@@ -2321,17 +2026,19 @@ impl Parser {
     }
 
     fn parse_break_stmt(&mut self) -> Result<BreakStmt, ParseError> {
-        let break_token_span = Span::from_token(self.expect(TokenKind::Break)?);
+        let start = Span::from_token(self.expect(TokenKind::Break)?);
         self.expect(TokenKind::Semicolon)?;
-        let span = break_token_span.merge(&Span::from_token(self.previous()));
-        Ok(BreakStmt { span })
+        Ok(BreakStmt {
+            span: start.merge(&Span::from_token(self.previous())),
+        })
     }
 
     fn parse_continue_stmt(&mut self) -> Result<ContinueStmt, ParseError> {
-        let continue_token_span = Span::from_token(self.expect(TokenKind::Continue)?);
+        let start = Span::from_token(self.expect(TokenKind::Continue)?);
         self.expect(TokenKind::Semicolon)?;
-        let span = continue_token_span.merge(&Span::from_token(self.previous()));
-        Ok(ContinueStmt { span })
+        Ok(ContinueStmt {
+            span: start.merge(&Span::from_token(self.previous())),
+        })
     }
 
     fn parse_defer_stmt(&mut self) -> Result<DeferStmt, ParseError> {
@@ -2357,21 +2064,7 @@ impl Parser {
         let end_span = body
             .statements
             .last()
-            .map(|s| match s {
-                Stmt::Let(s) => s.span,
-                Stmt::Return(s) => s.span,
-                Stmt::Break(s) => s.span,
-                Stmt::Continue(s) => s.span,
-                Stmt::Expr(s) => s.expr.span(),
-                Stmt::Defer(s) => s.span,
-                Stmt::Spawn(s) => s.span,
-                Stmt::Select(s) => s.span,
-                Stmt::If(s) => s.span,
-                Stmt::While(s) => s.span,
-                Stmt::Loop(s) => s.span,
-                Stmt::For(s) => s.span,
-                Stmt::UnsafeBlock(s) => s.span,
-            })
+            .map(stmt_end_span)
             .unwrap_or(spawn_token_span);
         let span = spawn_token_span.merge(&end_span);
 
@@ -2390,18 +2083,7 @@ impl Parser {
         while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
             if matches!(self.peek().kind, TokenKind::Let) {
                 self.advance();
-                let name_tok = self.peek();
-                let binding = if let TokenKind::Ident(name) = &name_tok.kind {
-                    let n = name.clone();
-                    self.advance();
-                    n
-                } else {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "binding name".to_string(),
-                        got: name_tok.kind.clone(),
-                        span: Span::from_token(name_tok),
-                    });
-                };
+                let binding = self.expect_ident("binding name")?;
                 self.expect(TokenKind::Equals)?;
                 let recv = self.parse_recv_expr()?;
                 self.expect(TokenKind::Arrow)?;
@@ -2534,21 +2216,7 @@ impl Parser {
         let end_span = body
             .statements
             .last()
-            .map(|s| match s {
-                Stmt::Let(s) => s.span,
-                Stmt::Return(s) => s.span,
-                Stmt::Break(s) => s.span,
-                Stmt::Continue(s) => s.span,
-                Stmt::Expr(s) => s.expr.span(),
-                Stmt::Defer(s) => s.span,
-                Stmt::Spawn(s) => s.span,
-                Stmt::Select(s) => s.span,
-                Stmt::If(s) => s.span,
-                Stmt::While(s) => s.span,
-                Stmt::Loop(s) => s.span,
-                Stmt::For(s) => s.span,
-                Stmt::UnsafeBlock(s) => s.span,
-            })
+            .map(stmt_end_span)
             .unwrap_or(unsafe_token_span);
         let span = unsafe_token_span.merge(&end_span);
 
@@ -2637,255 +2305,117 @@ impl Parser {
         }
     }
 
-    fn parse_logical_or(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_logical_and()?;
-
+    fn parse_binop_loop(
+        &mut self,
+        mut next: impl FnMut(&mut Self) -> Result<Expr, ParseError>,
+        mut classify: impl FnMut(&TokenKind) -> Option<BinOp>,
+    ) -> Result<Expr, ParseError> {
+        let mut expr = next(self)?;
         loop {
-            let op_idx = self.current;
             if self.is_at_end() {
                 break;
             }
-
-            if matches!(self.tokens[op_idx].kind, TokenKind::OrOr) {
-                self.current += 1; // consume ||
-                let right = self.parse_logical_and()?;
-                let span = expr.span().merge(&right.span());
-                expr = Expr::BinOp(BinOpExpr {
-                    id: ExprId::UNASSIGNED,
-                    op: BinOp::Or,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                    span,
-                });
-            } else {
+            let Some(op) = classify(&self.tokens[self.current].kind) else {
                 break;
-            }
+            };
+            self.current += 1;
+            let right = next(self)?;
+            let span = expr.span().merge(&right.span());
+            expr = Expr::BinOp(BinOpExpr {
+                id: ExprId::UNASSIGNED,
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+                span,
+            });
         }
-
         Ok(expr)
+    }
+
+    fn parse_logical_or(&mut self) -> Result<Expr, ParseError> {
+        self.parse_binop_loop(
+            |parser| parser.parse_logical_and(),
+            |kind| match kind {
+                TokenKind::OrOr => Some(BinOp::Or),
+                _ => None,
+            },
+        )
     }
 
     fn parse_logical_and(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_comparison()?;
-
-        loop {
-            let op_idx = self.current;
-            if self.is_at_end() {
-                break;
-            }
-
-            if matches!(self.tokens[op_idx].kind, TokenKind::AndAnd) {
-                self.current += 1; // consume &&
-                let right = self.parse_comparison()?;
-                let span = expr.span().merge(&right.span());
-                expr = Expr::BinOp(BinOpExpr {
-                    id: ExprId::UNASSIGNED,
-                    op: BinOp::And,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                    span,
-                });
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
+        self.parse_binop_loop(
+            |parser| parser.parse_comparison(),
+            |kind| match kind {
+                TokenKind::AndAnd => Some(BinOp::And),
+                _ => None,
+            },
+        )
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_equality()?;
-
-        loop {
-            let op_idx = self.current;
-            if self.is_at_end() {
-                break;
-            }
-
-            let op = match self.tokens[op_idx].kind {
+        self.parse_binop_loop(
+            |parser| parser.parse_equality(),
+            |kind| match kind {
                 TokenKind::Less => Some(BinOp::Lt),
                 TokenKind::Greater => Some(BinOp::Gt),
                 TokenKind::LessEqual => Some(BinOp::Le),
                 TokenKind::GreaterEqual => Some(BinOp::Ge),
                 _ => None,
-            };
-
-            if let Some(bin_op) = op {
-                self.current += 1; // consume operator
-                let right = self.parse_equality()?;
-                let span = expr.span().merge(&right.span());
-                expr = Expr::BinOp(BinOpExpr {
-                    id: ExprId::UNASSIGNED,
-                    op: bin_op,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                    span,
-                });
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
+            },
+        )
     }
 
     fn parse_equality(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_bitwise_or()?;
-
-        loop {
-            let op_idx = self.current;
-            if self.is_at_end() {
-                break;
-            }
-
-            let op = match self.tokens[op_idx].kind {
+        self.parse_binop_loop(
+            |parser| parser.parse_bitwise_or(),
+            |kind| match kind {
                 TokenKind::EqualsEquals => Some(BinOp::Eq),
                 TokenKind::NotEquals => Some(BinOp::Ne),
                 _ => None,
-            };
-
-            if let Some(bin_op) = op {
-                self.current += 1; // consume operator
-                let right = self.parse_bitwise_or()?;
-                let span = expr.span().merge(&right.span());
-                expr = Expr::BinOp(BinOpExpr {
-                    id: ExprId::UNASSIGNED,
-                    op: bin_op,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                    span,
-                });
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
+            },
+        )
     }
 
     fn parse_bitwise_or(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_bitwise_xor()?;
-
-        loop {
-            let op_idx = self.current;
-            if self.is_at_end() {
-                break;
-            }
-
-            if matches!(self.tokens[op_idx].kind, TokenKind::Pipe) {
-                self.current += 1; // consume |
-                let right = self.parse_bitwise_xor()?;
-                let span = expr.span().merge(&right.span());
-                expr = Expr::BinOp(BinOpExpr {
-                    id: ExprId::UNASSIGNED,
-                    op: BinOp::BitOr,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                    span,
-                });
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
+        self.parse_binop_loop(
+            |parser| parser.parse_bitwise_xor(),
+            |kind| match kind {
+                TokenKind::Pipe => Some(BinOp::BitOr),
+                _ => None,
+            },
+        )
     }
 
     fn parse_bitwise_xor(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_bitwise_and()?;
-
-        loop {
-            let op_idx = self.current;
-            if self.is_at_end() {
-                break;
-            }
-
-            if matches!(self.tokens[op_idx].kind, TokenKind::Caret) {
-                self.current += 1; // consume ^
-                let right = self.parse_bitwise_and()?;
-                let span = expr.span().merge(&right.span());
-                expr = Expr::BinOp(BinOpExpr {
-                    id: ExprId::UNASSIGNED,
-                    op: BinOp::BitXor,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                    span,
-                });
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
+        self.parse_binop_loop(
+            |parser| parser.parse_bitwise_and(),
+            |kind| match kind {
+                TokenKind::Caret => Some(BinOp::BitXor),
+                _ => None,
+            },
+        )
     }
 
     fn parse_bitwise_and(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_shift()?;
-
-        loop {
-            let op_idx = self.current;
-            if self.is_at_end() {
-                break;
-            }
-
-            // Disambiguate & (bitwise AND) from & (reference operator)
-            // & is bitwise AND if it's between two expressions (binary operator)
-            // & is reference if it's before an identifier/expression (unary operator)
-            // Since we're in parse_bitwise_and, we've already parsed the left expression,
-            // so if we see & here, it must be bitwise AND (binary operator)
-            if matches!(self.tokens[op_idx].kind, TokenKind::Ampersand) {
-                // In this context, & is always bitwise AND because we're parsing a binary expression
-                // The left side is already parsed, so this is a binary operator
-                self.current += 1; // consume &
-                let right = self.parse_shift()?;
-                let span = expr.span().merge(&right.span());
-                expr = Expr::BinOp(BinOpExpr {
-                    id: ExprId::UNASSIGNED,
-                    op: BinOp::BitAnd,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                    span,
-                });
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
+        // The left expression is already parsed, so '&' is bitwise AND.
+        self.parse_binop_loop(
+            |parser| parser.parse_shift(),
+            |kind| match kind {
+                TokenKind::Ampersand => Some(BinOp::BitAnd),
+                _ => None,
+            },
+        )
     }
 
     fn parse_shift(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_additive()?;
-
-        loop {
-            let op_idx = self.current;
-            if self.is_at_end() {
-                break;
-            }
-
-            let op = match self.tokens[op_idx].kind {
+        self.parse_binop_loop(
+            |parser| parser.parse_additive(),
+            |kind| match kind {
                 TokenKind::ShiftLeft => Some(BinOp::ShiftLeft),
                 TokenKind::ShiftRight => Some(BinOp::ShiftRight),
                 _ => None,
-            };
-
-            if let Some(bin_op) = op {
-                self.current += 1; // consume operator
-                let right = self.parse_additive()?;
-                let span = expr.span().merge(&right.span());
-                expr = Expr::BinOp(BinOpExpr {
-                    id: ExprId::UNASSIGNED,
-                    op: bin_op,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                    span,
-                });
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
+            },
+        )
     }
 
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
@@ -3187,67 +2717,26 @@ impl Parser {
     }
 
     fn parse_additive(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_multiplicative()?;
-
-        loop {
-            let op_idx = self.current;
-            if self.is_at_end()
-                || !matches!(self.tokens[op_idx].kind, TokenKind::Plus | TokenKind::Minus)
-            {
-                break;
-            }
-            let op = match self.tokens[op_idx].kind {
-                TokenKind::Plus => BinOp::Add,
-                TokenKind::Minus => BinOp::Sub,
-                _ => unreachable!(),
-            };
-            self.current += 1; // consume operator
-            let right = self.parse_multiplicative()?;
-            let span = expr.span().merge(&right.span());
-            expr = Expr::BinOp(BinOpExpr {
-                id: ExprId::UNASSIGNED,
-                op,
-                left: Box::new(expr),
-                right: Box::new(right),
-                span,
-            });
-        }
-
-        Ok(expr)
+        self.parse_binop_loop(
+            |parser| parser.parse_multiplicative(),
+            |kind| match kind {
+                TokenKind::Plus => Some(BinOp::Add),
+                TokenKind::Minus => Some(BinOp::Sub),
+                _ => None,
+            },
+        )
     }
 
     fn parse_multiplicative(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_unary()?;
-
-        loop {
-            let op_idx = self.current;
-            if self.is_at_end()
-                || !matches!(
-                    self.tokens[op_idx].kind,
-                    TokenKind::Star | TokenKind::Slash | TokenKind::Percent
-                )
-            {
-                break;
-            }
-            let op = match self.tokens[op_idx].kind {
-                TokenKind::Star => BinOp::Mul,
-                TokenKind::Slash => BinOp::Div,
-                TokenKind::Percent => BinOp::Rem,
-                _ => unreachable!(),
-            };
-            self.current += 1; // consume operator
-            let right = self.parse_unary()?;
-            let span = expr.span().merge(&right.span());
-            expr = Expr::BinOp(BinOpExpr {
-                id: ExprId::UNASSIGNED,
-                op,
-                left: Box::new(expr),
-                right: Box::new(right),
-                span,
-            });
-        }
-
-        Ok(expr)
+        self.parse_binop_loop(
+            |parser| parser.parse_unary(),
+            |kind| match kind {
+                TokenKind::Star => Some(BinOp::Mul),
+                TokenKind::Slash => Some(BinOp::Div),
+                TokenKind::Percent => Some(BinOp::Rem),
+                _ => None,
+            },
+        )
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
@@ -3284,19 +2773,9 @@ impl Parser {
                 self.advance(); // consume second :
 
                 // Parse function name
-                let func_name_idx = self.current;
-                let func_name = if let TokenKind::Ident(ref name) = self.tokens[func_name_idx].kind
-                {
-                    name.clone()
-                } else {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "function name".to_string(),
-                        got: self.tokens[func_name_idx].kind.clone(),
-                        span: Span::from_token(&self.tokens[func_name_idx]),
-                    });
-                };
-                let callee_span = span.merge(&Span::from_token(&self.tokens[func_name_idx]));
-                self.advance(); // consume function name
+                let func_span = Span::from_token(self.peek());
+                let func_name = self.expect_ident("function name")?;
+                let callee_span = span.merge(&func_span);
 
                 // Parse arguments
                 self.expect(TokenKind::LParen)?;
@@ -3515,20 +2994,8 @@ impl Parser {
                     self.advance(); // consume first :
                     self.advance(); // consume second :
 
-                    let variant_name_idx = self.current;
-                    let variant_span = Span::from_token(&self.tokens[variant_name_idx]);
-                    let variant_name = if let TokenKind::Ident(ref ident_name) =
-                        self.tokens[variant_name_idx].kind
-                    {
-                        ident_name.clone()
-                    } else {
-                        return Err(ParseError::UnexpectedToken {
-                            expected: "variant name".to_string(),
-                            got: self.tokens[variant_name_idx].kind.clone(),
-                            span: variant_span,
-                        });
-                    };
-                    self.advance(); // consume variant name
+                    let variant_span = Span::from_token(self.peek());
+                    let variant_name = self.expect_ident("variant name")?;
 
                     // Check for tuple variant Enum::Variant(expr1, expr2) or struct variant Enum::Variant { field: expr }
                     let (args, named_fields) = if !self.is_at_end()
@@ -3558,19 +3025,7 @@ impl Parser {
                             if !self.is_at_end() && matches!(self.peek().kind, TokenKind::RBrace) {
                                 break;
                             }
-                            let field_name_idx = self.current;
-                            let field_name = if let TokenKind::Ident(ref ident_name) =
-                                self.tokens[field_name_idx].kind
-                            {
-                                ident_name.clone()
-                            } else {
-                                return Err(ParseError::UnexpectedToken {
-                                    expected: "field name".to_string(),
-                                    got: self.tokens[field_name_idx].kind.clone(),
-                                    span: Span::from_token(&self.tokens[field_name_idx]),
-                                });
-                            };
-                            self.current += 1; // consume identifier
+                            let field_name = self.expect_ident("field name")?;
                             self.expect(TokenKind::Colon)?;
                             let field_value = self.parse_expr()?;
                             fields.push((field_name, field_value));
@@ -3613,20 +3068,8 @@ impl Parser {
                         self.advance(); // consume module name
                         self.advance(); // consume first :
                         self.advance(); // consume second :
-                        let func_name_idx = self.current;
-                        let func_name = if let TokenKind::Ident(ref func_name_str) =
-                            self.tokens[func_name_idx].kind
-                        {
-                            func_name_str.clone()
-                        } else {
-                            return Err(ParseError::UnexpectedToken {
-                                expected: "function name".to_string(),
-                                got: self.tokens[func_name_idx].kind.clone(),
-                                span: Span::from_token(&self.tokens[func_name_idx]),
-                            });
-                        };
-                        let func_span = Span::from_token(&self.tokens[func_name_idx]);
-                        self.advance(); // consume function name
+                        let func_span = Span::from_token(self.peek());
+                        let func_name = self.expect_ident("function name")?;
                         (
                             format!("{}::{}", module_name, func_name),
                             module_span.merge(&func_span),
@@ -3721,19 +3164,7 @@ impl Parser {
 
                     let mut fields = Vec::new();
                     while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
-                        let field_name_idx = self.current;
-                        let field_name = if let TokenKind::Ident(ref ident_name) =
-                            self.tokens[field_name_idx].kind
-                        {
-                            ident_name.clone()
-                        } else {
-                            return Err(ParseError::UnexpectedToken {
-                                expected: "field name".to_string(),
-                                got: self.tokens[field_name_idx].kind.clone(),
-                                span: Span::from_token(&self.tokens[field_name_idx]),
-                            });
-                        };
-                        self.current += 1; // consume identifier
+                        let field_name = self.expect_ident("field name")?;
 
                         self.expect(TokenKind::Colon)?;
                         let value_expr = self.parse_expr()?;
@@ -3770,19 +3201,7 @@ impl Parser {
                         self.advance(); // consume module name
                         self.advance(); // consume first :
                         self.advance(); // consume second :
-                        let item_name_idx = self.current;
-                        let item_name = if let TokenKind::Ident(ref item_name_str) =
-                            self.tokens[item_name_idx].kind
-                        {
-                            item_name_str.clone()
-                        } else {
-                            return Err(ParseError::UnexpectedToken {
-                                expected: "item name".to_string(),
-                                got: self.tokens[item_name_idx].kind.clone(),
-                                span: Span::from_token(&self.tokens[item_name_idx]),
-                            });
-                        };
-                        self.advance(); // consume item name
+                        let item_name = self.expect_ident("item name")?;
                         format!("{}::{}", module_name, item_name)
                     } else {
                         // Simple variable
@@ -3957,19 +3376,15 @@ impl Parser {
     }
 
     fn integer_type_keyword_name(kind: &TokenKind) -> Option<&'static str> {
-        match kind {
-            TokenKind::Int => Some("int"),
-            TokenKind::I8 => Some("i8"),
-            TokenKind::I16 => Some("i16"),
-            TokenKind::I32 => Some("i32"),
-            TokenKind::I64 => Some("i64"),
-            TokenKind::U16 => Some("u16"),
-            TokenKind::U32 => Some("u32"),
-            TokenKind::U64 => Some("u64"),
-            TokenKind::UInt => Some("uint"),
-            TokenKind::Ident(name) if name == "u8" => Some("u8"),
-            _ => None,
-        }
+        let spelling = if let TokenKind::Ident(name) = kind {
+            if name == "u8" { "u8" } else { return None }
+        } else {
+            crate::lexer::KEYWORDS
+                .iter()
+                .find(|(_, keyword)| keyword == kind)
+                .map(|(spelling, _)| *spelling)?
+        };
+        crate::integer_limits::integer_row_by_name(spelling).map(|row| row.name)
     }
 
     fn try_parse_integer_limit_expr(
@@ -4066,43 +3481,6 @@ impl Parser {
             got: self.tokens[self.current].kind.clone(),
             span: Span::from_token(&self.tokens[self.current]),
         })
-    }
-}
-
-// Helper trait for getting span from expressions
-trait HasSpan {
-    fn span(&self) -> Span;
-}
-
-impl HasSpan for Expr {
-    fn span(&self) -> Span {
-        match self {
-            Expr::Lit(e) => e.span,
-            Expr::BoolLiteral(e) => e.span,
-            Expr::FloatLiteral(e) => e.span,
-            Expr::Var(e) => e.span,
-            Expr::BinOp(e) => e.span,
-            Expr::UnOp(e) => e.span,
-            Expr::Ref(e) => e.span,
-            Expr::Send(e) => e.span,
-            Expr::Recv(e) => e.span,
-            Expr::Spawn(e) => e.span,
-            Expr::StructLit(e) => e.span,
-            Expr::FieldAccess(e) => e.span,
-            Expr::EnumLit(e) => e.span,
-            Expr::Match(e) => e.span,
-            Expr::Try(e) => e.span,
-            Expr::Call(e) => e.span,
-            Expr::MethodCall(e) => e.span,
-            Expr::StringLit(e) => e.span,
-            Expr::ArrayLiteral(e) => e.span,
-            Expr::TupleLit(e) => e.span,
-            Expr::Index(e) => e.span,
-            Expr::Cast(e) => e.span,
-            Expr::Assign(e) => e.span,
-            Expr::FnLiteral(e) => e.span,
-            Expr::TypeConst(e) => e.span,
-        }
     }
 }
 

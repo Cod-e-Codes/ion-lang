@@ -37,25 +37,31 @@ pub fn collect_stdlib_paths(project_root: &Path, manifest_paths: &[PathBuf]) -> 
         }
     }
 
-    let mut dir = project_root.to_path_buf();
-    loop {
-        push_unique(dir.join("stdlib"));
-        if !dir.pop() {
-            break;
-        }
+    for path in stdlib_ancestor_dirs(project_root) {
+        push_unique(path);
     }
 
     if let Ok(exe) = env::current_exe()
         && let Some(exe_dir) = exe.parent()
     {
-        push_unique(exe_dir.join("stdlib"));
-        let mut dir = exe_dir.to_path_buf();
-        while dir.pop() {
-            push_unique(dir.join("stdlib"));
+        for path in stdlib_ancestor_dirs(exe_dir) {
+            push_unique(path);
         }
     }
 
     paths
+}
+
+fn stdlib_ancestor_dirs(start: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut dir = start.to_path_buf();
+    loop {
+        dirs.push(dir.join("stdlib"));
+        if !dir.pop() {
+            break;
+        }
+    }
+    dirs
 }
 
 fn with_ion_extension(path: PathBuf) -> PathBuf {
@@ -128,8 +134,7 @@ fn normalize_path_display(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-/// Repo root for portable paths: directory containing `Cargo.toml`.
-pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
+fn find_ancestor_with_file(start: &Path, file_name: &str) -> Option<PathBuf> {
     let start = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
     let mut dir = if start.is_dir() {
         start
@@ -138,7 +143,7 @@ pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
     };
 
     loop {
-        if dir.join("Cargo.toml").is_file() {
+        if dir.join(file_name).is_file() {
             return Some(dir);
         }
         if !dir.pop() {
@@ -146,6 +151,11 @@ pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Repo root for portable paths: directory containing `Cargo.toml`.
+pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
+    find_ancestor_with_file(start, "Cargo.toml")
 }
 
 /// Source path for generated C banners: relative to cwd or repo root, never a home directory.
@@ -208,22 +218,7 @@ pub fn discover_import_config(from_file: &Path) -> (Vec<PathBuf>, Option<PathBuf
 
 /// Walk upward from `start` looking for `ion.toml`.
 pub fn find_project_root(start: &Path) -> Option<PathBuf> {
-    let start = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
-    let mut dir = if start.is_dir() {
-        start
-    } else {
-        start.parent()?.to_path_buf()
-    };
-
-    loop {
-        if dir.join("ion.toml").is_file() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
+    find_ancestor_with_file(start, "ion.toml")
 }
 
 #[cfg(test)]
