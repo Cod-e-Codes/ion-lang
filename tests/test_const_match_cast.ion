@@ -1,0 +1,23 @@
+const A: i32 = 1;
+
+const fn low() -> i8 {
+    return 300 as i8;
+}
+
+const fn pick(n: int) -> int {
+    return match n {
+        0 => {
+            10;
+        }
+        1..3 => {
+            20;
+        }
+        _ => {
+            30;
+        }
+    };
+}
+
+fn main() -> int {
+    return A + low() + pick(2);
+}

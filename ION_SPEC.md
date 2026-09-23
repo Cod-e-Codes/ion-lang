@@ -104,7 +104,7 @@ Examples: `main`, `Packet`, `_tmp1`, `read_file`.
 
 The following keywords are reserved and cannot be used as identifiers:
 
-`fn`, `let`, `mut`, `struct`, `enum`, `type`, `capability`, `impl`, `if`, `else`, `while`, `for`, `loop`, `match`, `select`, `defer`, `return`, `break`, `continue`, `spawn`, `channel`, `send`, `recv`, `true`, `false`, `import`, `as`, `pub`, `extern`, `unsafe`.
+`fn`, `let`, `mut`, `struct`, `enum`, `type`, `capability`, `impl`, `const`, `if`, `else`, `while`, `for`, `loop`, `match`, `select`, `defer`, `return`, `break`, `continue`, `spawn`, `scope`, `channel`, `protocol`, `endpoint`, `send`, `recv`, `true`, `false`, `import`, `as`, `pub`, `extern`, `unsafe`.
 
 Built-in type names `Box`, `Vec`, `String`, `Slice`, and `File` are tokenized as keywords for generic syntax (`Box<T>`, etc.) and builtin method qualification (`Slice::len`, `File::open`); they are not reserved as identifiers elsewhere.
 
@@ -272,7 +272,15 @@ top_decl         = struct_decl
                  | type_alias
                  | capability_decl
                  | impl_decl
+                 | protocol_decl
+                 | const_decl
                  | fn_decl ;
+
+protocol_decl    = "protocol" , identifier , "{" , { protocol_step } , "}" ;
+protocol_step    = ( "send" | "recv" ) , type_expr , ";"
+                 | "end" , ";" ;
+
+const_decl       = "const" , identifier , ":" , type_expr , "=" , expr , ";" ;
 ```
 
 Import string literals name a module file. Resolution is tooling-defined (see [§10.1](#101-project-build-ion-build)): file-relative paths (`./`, `../`), same-directory modules, stdlib search paths (`stdlib/io.ion`, `io.ion`), then project-root-relative paths. The import statement grammar is unchanged.
@@ -363,6 +371,7 @@ stmt             = let_stmt
                  | continue_stmt
                  | defer_stmt
                  | spawn_stmt
+                 | scope_stmt
                  | select_stmt
                  | unsafe_stmt
                  | ";" ;
@@ -392,6 +401,8 @@ continue_stmt    = "continue" , ";" ;
 defer_stmt       = "defer" , expr , ";" ;
 
 spawn_stmt       = "spawn" , block , ";" ;
+
+scope_stmt       = "scope" , block ;
 
 select_stmt      = "select" , "{" , { select_arm } , "}" ;
 select_arm       = [ "let" , identifier , "=" ] , recv_expr , "=>" , block
@@ -524,9 +535,10 @@ Each integer primitive exposes compile-time limits as `Type::MIN` and `Type::MAX
 
 Additional built-in generic types:
 
-- `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::unwrap()`). `Box::unwrap` moves `T` out and frees the allocation without dropping `T`.
+- `Box<T>` – heap-allocated `T` with owning semantics (`Box::new()`, `Box::new_in()`, `Box::unwrap()`). The allocation is an allocator header followed by `T`. The Ion pointer addresses `T`. `Box::unwrap` moves `T` out and frees the allocation without dropping `T`.
+- `Allocator` – `Copy` value of three function pointers and a `*u8` context. `heap()` is malloc, realloc, and free. `make_allocator` is legal only inside `unsafe`. `Vec`, `Box`, and `String` store a copy and use it on grow and drop. `Vec::new`, `Box::new`, and `String::new` use `heap()`.
 - `Sender<T>` and `Receiver<T>` – move-only handles for the two ends of a bounded MPSC channel
-- `JoinHandle` – move-only handle for a joinable `spawn` expression (not `Copy`; `Send`; drop detaches)
+- `JoinHandle<T>` – move-only handle for a joinable `spawn` expression. `T` is the block's return type and defaults to `void`. Not `Copy`. `Send` when `T` is `Send`. Drop detaches. `join` moves `T` out.
 - `File` – owned OS file handle (not `Send`; drop closes)
 - `Vec<T>` – growable heap-allocated vector (`Vec::new()`, `Vec::with_capacity()`, `Vec::push()`, `Vec::pop()`, `Vec::len()`, `Vec::capacity()`, `Vec::get()`, `Vec::get_ref()`, `Vec::set()`)
 - `String` – well-formed UTF-8 heap-allocated string (`String::new()`, `String::from()`, `String::from_utf8()`, `String::get()`, `String::push_str()`, `String::push_byte()`, `String::len()`)
@@ -682,9 +694,11 @@ fn(T1, T2) -> R
 
 Function types are **first-class**: they may be stored in variables, passed as arguments, and returned.
 
-**Fn literals** (capture-free only): an expression `fn(params) [-> R] { ... }` has type `fn(T1, T2, ...) -> R` matching its signature. The body may reference only parameters and locals declared inside the literal; any use of a binding from an outer scope is a compile-time error (`ClosureCapture`). Fn literals lower to plain C function pointers (each site gets a unique `static` function); there is no environment payload and no heap allocation.
+**Fn literals**: an expression `fn(params) [-> R] { ... }` that names no outer binding has type `fn(T1, T2, ...) -> R` and lowers to a `static` C function pointer.
 
-Named functions and capture-free fn literals may not capture references that would violate the no-escape rule (see Section 5.4). **Capturing closures** (literals that move owned state from outer scopes) are not implemented; use named functions with extra parameters, explicit context structs, or `spawn` for move-only thread capture.
+A literal that names an outer owned binding moves those bindings into a compiler-generated struct. The value is that struct. It is not coerced to `fn(...) -> R` and it is not a heap object. A call that moves a non-`Copy` capture consumes the closure. A call that only reads `Copy` captures, or that uses `&` or `&mut` on the closure's own fields, can run again. The closure is `Send` only when every capture is `Send`.
+
+A capture whose type is `&T` or `&mut T`, or a direct `&name` or `&mut name`, is `ClosureCapture`. Named functions and fn literals may not capture references that would violate the no-escape rule (see Section 5.4).
 
 #### 4.4 Type Inference
 
@@ -728,7 +742,7 @@ The inference engine is intentionally limited:
 #### 4.7 Control Flow Extensions
 
 - **`loop { ... }`**: infinite loop; use `break` to exit and `continue` for the next iteration.
-- **`for identifier in expr`**: iterates over `Vec<T>`, `[T; N]`, or `String`. Loop variable type is `T` for vectors and arrays, `u8` for strings (raw bytes).
+- **`for identifier in expr`**: iterates over `Vec<T>`, `[T; N]`, `String` (raw bytes as `u8`), or a value that implements `Iter<T>` (Section 8.1). The loop variable is an owned `T`. An `Iter<T>` value is moved into the loop. `next` returns `Option<T>`, never `&T`.
 - **`break`**: exits the innermost enclosing `while`, `loop`, or `for` loop.
 - **`continue`**: skips to the next iteration of the innermost enclosing `while`, `loop`, or `for` loop. In `for` loops, the step (index increment) still runs.
 - Both `break` and `continue` are compile errors outside of a loop body.
@@ -770,7 +784,7 @@ Rules:
 
 | Bound | Meaning (structural) |
 |-------|----------------------|
-| `Copy` | Type is copied rather than moved at the ownership level (primitives, references, function pointers). |
+| `Copy` | Copied rather than moved: primitives, references, function pointers, and tuples, arrays, structs, and enums whose fields or payloads are `Copy` and that have no `impl Drop`. `Box`, `Vec`, `String`, channels, `JoinHandle`, `File`, raw pointers, and protocol endpoints are not `Copy`. `Allocator` is `Copy`. |
 | `Eq` | Type supports `==` and `!=` with correct semantics (primitives, `String`, references, function pointers, arrays and tuples of `Eq` types, structs and enums whose fields or payloads are all `Eq`). |
 | `Send` | Type may cross thread boundaries (Section 7.3). |
 
@@ -780,7 +794,7 @@ At each monomorphization site (generic call, struct or enum construction, type-a
 
 #### 4.9 Const
 
-`const NAME: T = expr;` defines a const item. `const fn` is a function the compiler can evaluate. Both are limited to integers, bools, const calls, and `if` on those values. A failing evaluation is a compile error.
+`const NAME: T = expr;` defines a const item. `T` may be `bool` or any integer width when the value fits that width. `expr as Type` keeps the low bits of the destination width. `match` on `bool` and integers is allowed: literals, inclusive ranges `lo..hi`, `_`, bindings, and or-patterns. `const fn` may call other const functions and use `if`. Loops, `spawn`, `defer`, and `unsafe` are illegal in `const fn`. A failing evaluation is a compile error.
 
 `const_assert(expr);` fails compilation when `expr` is not `true`.
 
@@ -822,9 +836,11 @@ fn main() {
 
 #### 5.2 Copy and Move
 
-By default, Ion types are **move-only**. For a small subset of primitive types (e.g., `int`, `bool`, pointers), the implementation may treat moves as cheap copies, but the semantic model is still “move”.
+By default, Ion types are **move-only**. A `Copy` type is copied, and the original binding stays valid (Section 4.8).
 
-Whether a move is implemented as a copy is an implementation detail. The `Copy` bound on generic parameters (Section 4.8) names types that are copied rather than moved at the ownership level.
+A consuming call inside a binary operator, a unary operator, or an index expression marks that move. A place read (`x`, `s.f`, `a[i]`) stays a read.
+
+Whether a move of a non-`Copy` value is implemented as a byte copy is an implementation detail. The `Copy` bound on generic parameters (Section 4.8) names types that are copied rather than moved at the ownership level.
 
 After an `if` statement, ownership is merged from branches that can reach the following code. Branches that always `return`, `break`, or `continue` are omitted from the merge. If two fall-through paths disagree on whether a binding is still valid, the compiler reports an error.
 
@@ -835,8 +851,9 @@ Postfix `?` consumes its operand like a `match` scrutinee: the `Option` or `Resu
 After a `while`, `loop`, or `for` statement, ownership uses the same join lattice on structured edge snapshots (not a full CFG):
 
 - **Reentry** (back-edge): contributors are body fall-through and `continue`. A binding that is valid at loop entry must stay valid on every reentry contributor; otherwise the compiler reports an error at the loop.
-- **Exit** (after the loop): for `while`/`for`, contributors are the loop-head state (ordinary condition-false / zero-trip exit) plus every `break` snapshot; for `loop`, contributors are `break` snapshots only. Disagreeing exit contributors report an error at the loop exit join. A `return` inside a loop is checked normally and does not contribute to reentry or exit joins.
-- After a loop that exits only via `break` after moving a binding, that binding is moved for later code (use-after-move remains an error).
+- **Exit** (after the loop): for `while`/`for`, contributors are the loop-head state (ordinary condition-false / zero-trip exit) plus every `break` snapshot; for `loop`, contributors are `break` snapshots only. When those contributors disagree on whether a binding is still valid, the binding is moved after the loop. Each exit that still owns the value drops it on that exit. A later use is `UseAfterMove`. Contributors that agree stay as they are. A `return` inside a loop is checked normally and does not contribute to reentry or exit joins.
+- A block stops at the first `return`, `break`, or `continue`. Statements after that are unreachable and are not a reentry edge.
+- A `while` whose body falls through is still a reentry edge. The compiler does not prove that the condition stays false.
 
 Beta limitations that remain are precision under-approximations of this join model, not a second ownership thesis. Section 11 exclusions reject features that would force GC, richer lifetimes, or heavy runtime machinery; they are separate from checker precision.
 
@@ -867,11 +884,11 @@ The following borrowing rules apply:
   - Any number of `&T` borrows, and **no** `&mut T` borrows, or
   - Exactly one `&mut T` borrow, and **no** `&T` borrows.
 - Borrows are restricted to the lexical scope of the function in which they are created (see 5.4).
-- While a lasting borrow of the whole owner is active, that variable cannot be used directly: no reads, assignment, or moves. This applies to copy types (e.g. `int`) as well as move-only types. A lasting borrow stays live until the last use of every binding that holds it. A copy (`let c = a`), a field or index reborrow (`let d = &mut a.x`, `let d = &mut a[i]`), a tuple or `match` result that yields the reference, an assignment (`c = a`), an enum value (`Option::Some(a)`), and a struct literal (`Hold { v: a }`) are carriers of that same loan. Creating the reference inside that value is the same loan (`Hold { v: &mut s }`, `Option::Some(&mut s)`, `(&mut s.x, 1)`, or a `match` arm that yields `&mut s.x`). The loan is live everywhere the value that holds the pointer is live. A `match` arm that stores that reference in a local and then yields the local keeps the loan on the match result. An enum, struct, or array that holds the reference keeps the loan until that binding leaves scope. A nested block does not end an outer loan while any of those bindings is used again later in the outer block. A use inside a loop covers the whole loop. Ephemeral borrows in call arguments stay on that call. A `match` arm that binds a reference payload binds the pointer. It does not copy or drop the referent. A field whose type is already a reference is that pointer. Passing it to a function does not take its address again.
+- While a lasting borrow of the whole owner is active, that variable cannot be used directly: no reads, assignment, or moves. This applies to copy types (e.g. `int`) as well as move-only types. A lasting borrow stays live until the last use of every binding that holds it. A copy (`let c = a`), a field or index reborrow (`let d = &mut a.x`, `let d = &mut a[i]`), a tuple or `match` result that yields the reference, an assignment (`c = a`), an enum value (`Option::Some(a)`), and a struct literal (`Hold { v: a }`) are carriers of that same loan. Creating the reference inside that value is the same loan (`Hold { v: &mut s }`, `Option::Some(&mut s)`, `(&mut s.x, 1)`, or a `match` arm that yields `&mut s.x`). The loan is live everywhere the value that holds the pointer is live. A `match` arm that stores that reference in a local and then yields the local keeps the loan on the match result. An enum, struct, or array that holds the reference keeps the loan until that binding leaves scope. A nested block does not end an outer loan while any of those bindings is used again later in the outer block. A use inside a loop covers the whole loop. A carrier used only in one arm of an `if` is not live in the other arm. A loan still held by a binding after the `if` stays live. Ephemeral borrows in call arguments stay on that call. A `match` arm that binds a reference payload binds the pointer. It does not copy or drop the referent. A field whose type is already a reference is that pointer. Passing it to a function does not take its address again.
 
 **Field and subpath borrows**
 
-`s.x` and `s.y` are different places, so `let a = &mut s.x; let b = &mut s.y` is allowed while both borrows are live. Nested paths conflict when they share a field prefix: `s.a.b` conflicts with `s.a.c` and with `s.a`. Index and slice paths borrow the whole owner. A borrow of the whole owner conflicts with every path into that owner. Multiple shared `&` paths remain allowed. Ephemeral `&` / `&mut` in call arguments are checked at the call and do not register a lasting borrow.
+`s.x` and `s.y` are different places, so `let a = &mut s.x; let b = &mut s.y` is allowed while both borrows are live. Nested paths conflict when they share a field prefix: `s.a.b` conflicts with `s.a.c` and with `s.a`. A literal index is its own path segment, so `&mut a[0]` and `&mut a[1]` do not conflict. A non-literal index borrows the whole owner. `&mut a` conflicts with `&mut a[0]`. Call arguments use the same rule, so `both(&mut a[0], &mut a[0])` conflicts and `both(&mut a[0], &mut a[1])` does not. Slice paths borrow the whole owner. A borrow of the whole owner conflicts with every path into that owner. Multiple shared `&` paths remain allowed. Ephemeral `&` / `&mut` in call arguments are checked at the call and do not register a lasting borrow.
 
 #### 5.4 No-Escape Rule (Formal)
 
@@ -920,7 +937,7 @@ fn make_printer(x: &int) -> fn() {
 }
 ```
 
-Capturing closures are not implemented; the compiler rejects any outer binding referenced from a fn literal body.
+A reference capture is `ClosureCapture`. An owned outer binding moves into the closure value (Section 4.3).
 
 **Example (valid – borrow within function):**
 
@@ -1045,18 +1062,20 @@ Functions may be declared `extern "C"`. Linkage other than `"C"` is a compile-ti
 
 #### 7.1 Threads and `spawn`
 
-`spawn { ... };` as a statement creates a new OS thread and detaches it. The same form used as an expression yields a builtin `JoinHandle`:
+`spawn { ... };` as a statement creates a new OS thread and detaches it. The same form used as an expression yields `JoinHandle<T>`:
 
 ```ion
 spawn {
     // body
 };
 
-let h: JoinHandle = spawn {
-    // body
+let h: JoinHandle<int> = spawn {
+    return 7;
 };
-join(h);
+let n: int = join(h);
 ```
+
+`T` is the type of `return` in the block and defaults to `void`. A non-void `T` must be `Send`. The thread writes `T` into heap storage. `join` moves `T` out and frees that storage. `join` on `JoinHandle<void>` waits and returns nothing.
 
 The block may capture **owned values** from the enclosing scope **by move** only. Capturing references is disallowed:
 
@@ -1075,7 +1094,9 @@ fn main() {
 
 Attempting to use `v` after `spawn` is a compile-time error.
 
-`JoinHandle` is not `Copy` and is `Send`. Dropping an unused handle detaches the thread (`ion_thread_detach`). `join(handle)` waits for the thread and consumes the handle. Statement `spawn { };` does not produce a handle.
+`JoinHandle<T>` is not `Copy`. It is `Send` when `T` is `Send`. Dropping an unused handle detaches the thread (`ion_thread_detach`). `join(handle)` waits for the thread, moves `T` out, and consumes the handle. Statement `spawn { };` outside `scope` does not produce a handle.
+
+`scope { ... }` joins every `JoinHandle` still owned in that block, in reverse creation order, and drops a `void` result. A handle moved out of the scope is not joined there. A statement `spawn` inside `scope` is joinable. A child must not wait on its parent.
 
 #### 7.2 Channels
 
@@ -1134,7 +1155,9 @@ The `Send` property marks types that are safe to transfer to another thread by v
 - `SendResult<T>` is `Send` if `T: Send`.
 - `TrySendResult<T>` and `TryRecvResult<T>` are `Send` if `T: Send`.
 - `(T1, T2, ...)` is `Send` if every element type is `Send`.
-- `JoinHandle` is `Send`.
+- `JoinHandle<T>` is `Send` when `T` is `Send`.
+- `Allocator` is `Send`.
+- A protocol endpoint is `Send` when every payload is `Send`.
 - `File` is **not** `Send`.
 - Any type containing a reference (`&T`, `&mut T`) is **not** `Send`.
 
@@ -1148,6 +1171,26 @@ The compiler checks `Send` when:
 - Sending a value into a channel whose receiver may be on another thread.
 
 Any attempt to move a non-`Send` type across threads is a compile-time error.
+
+#### 7.4 Protocol endpoints
+
+`channel<T>()` and `clone_sender` stay the untyped MPSC bag. A protocol is a second endpoint that cannot be cloned:
+
+```ion
+protocol Ping {
+    send int;
+    recv bool;
+    end;
+}
+
+let (client, server) = endpoint<Ping>();
+let client1 = send(client, 7);
+let (n, server1) = recv(server);
+```
+
+`send` and `recv` consume the endpoint and return it at the next step. `recv` returns `(payload, next endpoint)`. The other end is the dual: send and recv are swapped. After the last step, another `send` or `recv` is an error. Drop before `end` is allowed. There is no clone.
+
+Each direction is one existing channel of a compiler-generated message struct. The two ends are crossed because a channel is unidirectional. Payload types must be `Copy` and `Send`. The endpoint is not `Copy`.
 
 ### 8. Standard Library Overview
 
@@ -1174,7 +1217,9 @@ Semantics follow the conventional meaning:
 
 These enums follow standard ownership rules (payloads are moved in and out).
 
-Postfix `?` is visible sugar for `match` plus `return` on these two enums only (identified by **enum type name** and the variant shapes above). It is not legal on `&Option<T>`, `&Result<T, E>`, or other enums such as `ReadResult`, `SetResult`, `SendResult`, `TrySendResult`, or `TryRecvResult`. There is no `From` / `FromResidual`, no `Try` trait, and no error-set widening.
+Postfix `?` is visible sugar for `match` plus `return`. `Option` and `Result` keep the rules above, including the same `E` and no conversion between error types. There is no `From` / `FromResidual` and no `Try` capability.
+
+Another owned enum is eligible when it has one success variant: the variant named `Ok` or `Some` with exactly one positional payload, or, when those names are absent, the single variant that has a payload. Every other variant returns unchanged. The function's return type must be that same enum. `ReadResult { Ok(String); Err(int); }` and `Parse { Done(int); Bad; Empty; }` qualify. `SetResult { Ok; OutOfBounds; }` does not, because `Ok` has no payload. A bare error enum does not. Two payload variants and no `Ok` or `Some` stay an error. Named fields make the enum ineligible. It is not legal on `&Option<T>`, `&Result<T, E>`, or a reference to any other enum. Channel result enums stay ineligible when they do not have that one success variant.
 
 ```ion
 // Result<T, E> in a function that returns Result<U, E>  (U may differ; E must be equal)
@@ -1194,7 +1239,17 @@ let x: T = match expr {
 };
 ```
 
-`?` is postfix, same tier as `.field`, `[index]`, and call. `Option?` is only legal in a function or fn literal whose return type is `Option<_>`. `Result?` is only legal when the return type is `Result<_, E>` with the same `E`. Mixing `Option` and `Result` is a type error. `?` is a compile error inside `spawn` bodies (spawn lowers to a different C function). Propagating `Option<&T>` still hits `ReferenceEscape` on return.
+`?` is postfix, same tier as `.field`, `[index]`, and call. `Option?` is only legal in a function or fn literal whose return type is `Option<_>`. `Result?` is only legal when the return type is `Result<_, E>` with the same `E`. For any other eligible enum, the function must return that same enum. Mixing `Option` and `Result` is a type error. `?` is a compile error inside `spawn` bodies (spawn lowers to a different C function). Propagating `Option<&T>` still hits `ReferenceEscape` on return.
+
+`stdlib/iter.ion` declares:
+
+```ion
+capability Iter<T> {
+    fn next(self: &mut Self) -> Option<T>;
+}
+```
+
+`for x in iter` on a type that implements `Iter<T>` moves the iterator and loops on `next` until `None`. `T` is the impl's payload. `next` returns an owned value, never `&T`. The built-in desugar for `Vec<T>`, `String`, and `[T; N]` does not use this capability.
 
 `stdlib/option.ion` and `stdlib/result.ion` add capture-free helpers. Import them explicitly (`import "stdlib/option.ion" as option`). `Option` in `option.ion` is the same enum shape programs already declare; do not declare it again in a file that imports `option.ion` or a module that imports it (`string.ion`, `map.ion`).
 
@@ -1429,9 +1484,10 @@ pub fn insert<K: Hash + Eq, V>(map: &mut HashMap<K, V>, key: K, value: V);
 pub fn remove<K: Hash + Eq, V>(map: &mut HashMap<K, V>, key: K) -> Option<V>;
 pub fn len<K, V>(map: &HashMap<K, V>) -> int;
 pub fn for_each<K, V>(map: &mut HashMap<K, V>, f: fn(&V) -> int);
+pub fn into_iter<K, V>(map: HashMap<K, V>) -> MapIter<K, V>;
 ```
 
-`new` allocates 16 empty slots. `len` is the number of full slots. `used` counts full slots and tombstones. `insert` doubles the table when `used * 2 >= cap`. `grow` moves live full slots into the new vector and drops the previous slot vector. Tombstones are not copied. Probes in `insert` and `remove` borrow a slot with `Vec::get_ref` (`Empty`, `Tomb`, or `Full`, and `==` on the key). That borrow ends before any `Vec::set` or moving `Vec::get` on the same vector. `Vec::set` runs only for the index that receives a new pair or a tombstone. A replaced `V` is still dropped by `Vec::set`. `remove` uses `Vec::get` only on the matching index, because that move is the returned `V`, and leaves a tombstone so later probes still see keys past the hole. `for_each` calls `f` with a borrow of `V` from `get_ref` and does not write the slot back. That borrow does not escape the call. Keys are `Hash + Eq`. They do not have to be `Copy`: `==` reads both keys, and `hash` borrows. User structs are not `Copy`. Integer keys and `String` use the compiler `Hash` impl. A field of `&mut HashMap` is already `&mut Vec`, so slot access passes `map.slots` to `Vec::get_ref`, `Vec::get`, and `Vec::set`. Occupied slots are dropped with the map because the slot vector owns them. `HashMap<K, V>` is `Send` when `K` and `V` are `Send`.
+`new` allocates 16 empty slots. `len` is the number of full slots. `used` counts full slots and tombstones. `insert` doubles the table when `used * 2 >= cap`. `grow` moves live full slots into the new vector and drops the previous slot vector. Tombstones are not copied. Probes in `insert` and `remove` borrow a slot with `Vec::get_ref` (`Empty`, `Tomb`, or `Full`, and `==` on the key). That borrow ends before any `Vec::set` or moving `Vec::get` on the same vector. `Vec::set` runs only for the index that receives a new pair or a tombstone. A replaced `V` is still dropped by `Vec::set`. `remove` uses `Vec::get` only on the matching index, because that move is the returned `V`, and leaves a tombstone so later probes still see keys past the hole. `for_each` calls `f` with a borrow of `V` from `get_ref` and does not write the slot back. That borrow does not escape the call. `into_iter` consumes the map. `MapIter` implements `Iter<(K, V)>` and `next` pops slots until it yields an owned pair or `None`. Keys are `Hash + Eq`. They do not have to be `Copy`: `==` reads both keys, and `hash` borrows. User structs are not `Copy` unless every field is `Copy` and the struct has no `impl Drop`. Integer keys and `String` use the compiler `Hash` impl. A field of `&mut HashMap` is already `&mut Vec`, so slot access passes `map.slots` to `Vec::get_ref`, `Vec::get`, and `Vec::set`. Occupied slots are dropped with the map because the slot vector owns them. `HashMap<K, V>` is `Send` when `K` and `V` are `Send`.
 
 #### 8.11 Math, path, env, and time
 
@@ -1589,11 +1645,11 @@ stronger contract.
 - String `for...in` iterates bytes (`u8`), not Unicode code points or graphemes
 - `if`/`else` merge: ownership after an `if` is merged from branches that can fall through to the following code. A move in a branch that always `return`s, `break`s, or `continue`s does not block use after the `if`. If two fall-through paths disagree (one moved, one valid), it is still an error.
 - Match arms that fall through join ownership the same way. Nested unstructured leftovers (for example a `let` whose initializer is a fully diverging match) stay AST-structured analysis without a CFG rewrite.
-- Loop ownership uses structured reentry/exit joins (Section 5.2). Remaining conservatism is AST-structured analysis without a full CFG (for example nested unstructured control flow may still under-approximate). For read-only scans over an owned `Vec<T>`, prefer `Vec::get_ref` (Section 8.2) or index/handle helpers; `Vec::get` move-out still requires consume-once or put-back per iteration when the body reenters.
+- Loop ownership uses structured reentry/exit joins (Section 5.2). A `while` whose body falls through is still a reentry edge. Proving that the condition will not be true again needs value-sensitive analysis, and that stays rejected. Remaining conservatism is AST-structured analysis without a full CFG (for example nested unstructured control flow may still under-approximate). A use inside a loop covers the whole loop. For read-only scans over an owned `Vec<T>`, prefer `Vec::get_ref` (Section 8.2) or index/handle helpers; `Vec::get` move-out still requires consume-once or put-back per iteration when the body reenters.
 - Match guards on the same variant are lowered to a single `switch` case with sequential `if` checks
 - LSP go-to-definition for built-in methods (`Vec::push`, `String::len`, etc.) has no target (signature hover only)
 - LSP go-to-definition for type names in type annotations (no source spans on `Type` AST nodes)
-- Function types: capture-free fn literals implemented; no capturing closures, no generic `fn(T) -> R` type parameters, no method values as fn pointers
+- Function types: a capture-free fn literal is a function pointer. A literal that moves owned outer bindings is a closure value and is not a function pointer. A reference capture is `ClosureCapture`. There are no generic `fn(T) -> R` type parameters and no method values as fn pointers.
 - Tooling: IR lowering copies types and resolved method callees from the type checker (`TypeInfo`). Codegen reads those fields. It does not re-infer expression types or reclassify method receivers. A missing type, a missing resolved method, or a `METHOD::` callee after a successful check is a compiler bug, not a fallback to `int`.
 
 ### 11. Future Work (Non-Normative)
@@ -1603,8 +1659,7 @@ The following features are **not planned** for the current compiler:
 - Asynchronous/await syntax and futures.
 - Trait objects, blanket impls, and capability inheritance.
 - Macros and compile-time metaprogramming.
-- Advanced iterator pipelines and zero-cost abstractions beyond the basics.
-- Capturing closures (fn literals that move owned environment from outer scopes).
+- Iterator pipelines and iterators that yield references.
 
 Any such addition must:
 

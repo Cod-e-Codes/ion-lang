@@ -114,6 +114,7 @@ fn validate_expr(expr: &Expr, program: &Program) -> Result<(), String> {
             Ok(())
         }
         Expr::FieldAccess(access) => validate_expr(&access.base, program),
+        Expr::Cast(cast) => validate_expr(&cast.expr, program),
         Expr::Match(match_expr) => {
             validate_expr(&match_expr.expr, program)?;
             for arm in &match_expr.arms {
@@ -169,13 +170,10 @@ fn eval_items(program: &Program) -> Result<HashMap<String, Value>, String> {
 }
 
 fn check_const_type(ty: &Type, value: &Value, name: &str) -> Result<(), String> {
-    if matches!(
-        (ty, value),
-        (Type::Int, Value::Int(_)) | (Type::Bool, Value::Bool(_))
-    ) {
-        Ok(())
-    } else {
-        Err(format!("const '{name}' does not match its type"))
+    match value {
+        Value::Bool(_) if matches!(ty, Type::Bool) => Ok(()),
+        Value::Int(n) if crate::integer_limits::integer_value_fits(ty, *n) => Ok(()),
+        _ => Err(format!("const '{name}' does not match its type")),
     }
 }
 
@@ -220,7 +218,113 @@ fn eval_expr(
             }
             eval_block_value(&func.body, program, &mut local)
         }
+        Expr::Cast(cast) => eval_cast(&cast.expr, &cast.target_type, program, env),
+        Expr::Match(match_expr) => eval_match(match_expr, program, env),
         _ => Err("expression is not allowed in a const context".to_string()),
+    }
+}
+
+fn eval_cast(
+    expr: &Expr,
+    target: &Type,
+    program: &Program,
+    env: &HashMap<String, Value>,
+) -> Result<Value, String> {
+    let value = eval_expr(expr, program, env)?;
+    match value {
+        Value::Int(n) if crate::integer_limits::integer_row(target).is_some() => {
+            let low = crate::integer_limits::integer_low_bits(n, target)
+                .ok_or_else(|| "const cast target is not an integer".to_string())?;
+            Ok(Value::Int(low))
+        }
+        Value::Bool(b) if matches!(target, Type::Bool) => Ok(Value::Bool(b)),
+        Value::Int(n) if matches!(target, Type::Bool) => Ok(Value::Bool(n != 0)),
+        Value::Bool(b) if crate::integer_limits::integer_row(target).is_some() => {
+            let low = crate::integer_limits::integer_low_bits(i64::from(b), target)
+                .ok_or_else(|| "const cast target is not an integer".to_string())?;
+            Ok(Value::Int(low))
+        }
+        _ => Err("const cast is only defined for integers and bool".to_string()),
+    }
+}
+
+fn eval_match(
+    match_expr: &MatchExpr,
+    program: &Program,
+    env: &HashMap<String, Value>,
+) -> Result<Value, String> {
+    let scrutinee = eval_expr(&match_expr.expr, program, env)?;
+    for arm in &match_expr.arms {
+        if let Some(guard) = &arm.guard {
+            if !pattern_matches(&arm.pattern, &scrutinee)? {
+                continue;
+            }
+            let Value::Bool(true) = eval_expr(guard, program, env)? else {
+                continue;
+            };
+        } else if !pattern_matches(&arm.pattern, &scrutinee)? {
+            continue;
+        }
+        let mut local = env.clone();
+        bind_pattern(&arm.pattern, &scrutinee, &mut local)?;
+        return eval_value_block(&arm.body, program, &mut local);
+    }
+    Err("const match was not exhaustive".to_string())
+}
+
+fn eval_value_block(
+    block: &Block,
+    program: &Program,
+    env: &mut HashMap<String, Value>,
+) -> Result<Value, String> {
+    if let [Stmt::Expr(expr)] = block.statements.as_slice() {
+        return eval_expr(&expr.expr, program, env);
+    }
+    eval_block_value(block, program, env)
+}
+
+fn pattern_matches(pattern: &Pattern, value: &Value) -> Result<bool, String> {
+    match pattern {
+        Pattern::Wildcard { .. } | Pattern::Binding { .. } => Ok(true),
+        Pattern::Lit { lit, .. } => Ok(match (lit, value) {
+            (PatLit::Int(n), Value::Int(v)) => n == v,
+            (PatLit::Bool(b), Value::Bool(v)) => b == v,
+            _ => false,
+        }),
+        Pattern::Range { lo, hi, .. } => match value {
+            Value::Int(n) => Ok(*n >= *lo && *n <= *hi),
+            _ => Ok(false),
+        },
+        Pattern::Or { alts, .. } => {
+            for alt in alts {
+                if pattern_matches(alt, value)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Err("const match pattern is not a literal, range, or wildcard".to_string()),
+    }
+}
+
+fn bind_pattern(
+    pattern: &Pattern,
+    value: &Value,
+    env: &mut HashMap<String, Value>,
+) -> Result<(), String> {
+    match pattern {
+        Pattern::Binding { name, .. } => {
+            env.insert(name.clone(), value.clone());
+            Ok(())
+        }
+        Pattern::Or { alts, .. } => {
+            for alt in alts {
+                bind_pattern(alt, value, env)?;
+            }
+            Ok(())
+        }
+        Pattern::Wildcard { .. } | Pattern::Lit { .. } | Pattern::Range { .. } => Ok(()),
+        _ => Ok(()),
     }
 }
 
@@ -437,6 +541,7 @@ fn resolve_block(
             Stmt::UnsafeBlock(unsafe_stmt) => {
                 resolve_block(&mut unsafe_stmt.body, values, const_params)?
             }
+            Stmt::Scope(scope_stmt) => resolve_block(&mut scope_stmt.body, values, const_params)?,
             Stmt::Spawn(spawn) => resolve_block(&mut spawn.body, values, const_params)?,
             _ => {}
         }
@@ -493,6 +598,7 @@ fn fold_block(block: &mut Block, values: &HashMap<String, Value>, const_params: 
             Stmt::UnsafeBlock(unsafe_stmt) => {
                 fold_block(&mut unsafe_stmt.body, values, const_params)
             }
+            Stmt::Scope(scope_stmt) => fold_block(&mut scope_stmt.body, values, const_params),
             Stmt::Defer(defer_stmt) => fold_expr(&mut defer_stmt.expr, values, const_params),
             _ => {}
         }
@@ -643,6 +749,9 @@ fn collect_const_calls(
             }
             Stmt::UnsafeBlock(unsafe_stmt) => {
                 collect_const_calls(&unsafe_stmt.body, templates, type_info, additions, record)?
+            }
+            Stmt::Scope(scope_stmt) => {
+                collect_const_calls(&scope_stmt.body, templates, type_info, additions, record)?
             }
             _ => {}
         }

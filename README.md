@@ -14,15 +14,16 @@ Ion is a systems programming language with:
 
 Brief summary; see [ION_SPEC.md](ION_SPEC.md) for the full language reference.
 
-- **Ownership**: move by default; single owner per value; use-after-move is a compile error
-- **Borrowing**: `&T` and `&mut T` are stack-local. A field declared as a reference is rejected, and references cannot be returned, sent on a channel, or passed to `spawn`. Disjoint fields (`s.x` and `s.y`) may be borrowed together. A lasting borrow stays live until the last use of every binding that holds it.
-- **Types**: primitives, structs, enums (tuple and struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String` (well-formed UTF-8; `push_byte` is ASCII-only)
-- **Control flow**: `if`/`while` (bool conditions), `loop { }`, `break`/`continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`), `match` (guards, literals, ranges, or-patterns, struct patterns, `@`, field pun, one tuple `..`), postfix `?` on owned `Option`/`Result`, `defer`
-- **Capabilities**: `capability` and `impl` add methods on a struct or enum. `Copy`, `Eq`, and `Send` stay structural. `impl Drop` runs once before field and resource drops.
-- **Const**: `const` items, `const fn`, `const` parameters, and `const_assert`
-- **Concurrency**: `channel<T>()` / `channel<T>(cap)` returns `(Sender<T>, Receiver<T>)`; `clone_sender(&tx)`; `send(&tx, v) -> SendResult<T>` and `recv(&mut rx) -> Option<T>`; `spawn { ... }` with structural `Send`
+- **Ownership**: move by default; single owner per value; use-after-move is a compile error. Primitives, references, function pointers, and aggregates of `Copy` fields with no `impl Drop` are `Copy`.
+- **Borrowing**: `&T` and `&mut T` are stack-local. A field declared as a reference is rejected, and references cannot be returned, sent on a channel, or passed to `spawn`. Disjoint fields (`s.x` and `s.y`) may be borrowed together. A literal index is its own path. A lasting borrow stays live until the last use of every binding that holds it. A use in one `if` arm does not cover the other arm.
+- **Types**: primitives, structs, enums (tuple and struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String` (well-formed UTF-8; `push_byte` is ASCII-only), `Allocator`
+- **Control flow**: `if`/`while` (bool conditions), `loop { }`, `break`/`continue`, `for x in expr` over `Vec<T>`, `[T; N]`, `String` (bytes as `u8`), or `Iter<T>`, `match` (guards, literals, ranges, or-patterns, struct patterns, `@`, field pun, one tuple `..`), postfix `?` on owned `Option`/`Result` and on an owned enum with one success variant, `defer`, `scope`
+- **Capabilities**: `capability` and `impl` add methods on a struct or enum. `Copy`, `Eq`, and `Send` stay structural. `impl Drop` runs once before field and resource drops. `Iter<T>` is the library iterator capability.
+- **Const**: `const` items, `const fn`, `const` parameters, and `const_assert`. Integer widths, low-bit `as`, and `match` on `bool` and integers are allowed.
+- **Concurrency**: `channel<T>()` / `channel<T>(cap)` returns `(Sender<T>, Receiver<T>)`; `clone_sender(&tx)`; `send(&tx, v) -> SendResult<T>` and `recv(&mut rx) -> Option<T>`; `spawn` yields `JoinHandle<T>`; `scope` joins handles still owned in the block; `endpoint<Name>()` is a unique protocol endpoint
+- **Closures**: a capture-free fn literal is a function pointer. A literal that names an outer owned binding is a move closure, not a function pointer. A reference capture is rejected.
 - **FFI**: `extern "C"` blocks, raw pointers `*T`, calls require `unsafe`
-- **Stdlib**: `stdlib/option.ion`, `stdlib/result.ion`, `stdlib/string.ion`, `stdlib/hash.ion`, `stdlib/map.ion`, `stdlib/math.ion`, `stdlib/path.ion`, `stdlib/env.ion`, `stdlib/time.ion`, `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, and `stdlib/handle.ion`
+- **Stdlib**: `stdlib/option.ion`, `stdlib/result.ion`, `stdlib/string.ion`, `stdlib/hash.ion`, `stdlib/map.ion`, `stdlib/iter.ion`, `stdlib/math.ion`, `stdlib/path.ion`, `stdlib/env.ion`, `stdlib/time.ion`, `stdlib/io.ion`, `stdlib/fmt.ion`, `stdlib/fs.ion`, and `stdlib/handle.ion`
 
 Known limitations: [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations).
 

@@ -1,0 +1,13 @@
+import "stdlib/map.ion" as map;
+
+fn main() -> int {
+    let mut m: HashMap<int, int> = map::new();
+    map::insert(&mut m, 1, 10);
+    map::insert(&mut m, 2, 20);
+    let mut sum: int = 0;
+    for pair in map::into_iter(m) {
+        let (k, v) = pair;
+        sum = sum + k + v;
+    }
+    return sum;
+}

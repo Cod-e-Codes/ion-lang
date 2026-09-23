@@ -25,7 +25,8 @@ fn mangle_type_component(ty: &Type) -> String {
         Type::String => "String".to_string(),
         Type::Str => "str".to_string(),
         Type::File => "File".to_string(),
-        Type::JoinHandle => "JoinHandle".to_string(),
+        Type::Allocator => "Allocator".to_string(),
+        Type::JoinHandle { .. } => "JoinHandle".to_string(),
         Type::Struct(name) | Type::Enum(name) => name.clone(),
         Type::Vec { elem_type } => format!("Vec_{}", mangle_type_component(elem_type)),
         Type::Box { inner } => format!("Box_{}", mangle_type_component(inner)),
@@ -79,7 +80,12 @@ pub(crate) fn ret_val_decl(resolved: &Type) -> RetValDecl {
             ty: type_to_c_impl(resolved),
             init: "0".to_string(),
         },
-        Type::Struct(_) | Type::Enum(_) => RetValDecl::Value {
+        Type::Struct(_)
+        | Type::Enum(_)
+        | Type::JoinHandle { .. }
+        | Type::File
+        | Type::Allocator
+        | Type::Endpoint { .. } => RetValDecl::Value {
             ty: type_to_c_impl(resolved),
             init: "{0}".to_string(),
         },
@@ -343,8 +349,10 @@ pub(crate) fn type_to_c_impl(ty: &Type) -> String {
         }
         Type::Tuple { elements } => tuple_type_name(elements),
         Type::Fn { .. } => fn_type_to_c_ptr(ty),
-        Type::JoinHandle => "ion_thread_t".to_string(),
+        Type::JoinHandle { .. } => "ion_thread_t".to_string(),
         Type::File => "ion_file_t".to_string(),
+        Type::Allocator => "ion_alloc_t".to_string(),
+        Type::Endpoint { .. } => "ion_endpoint_t".to_string(),
     }
 }
 

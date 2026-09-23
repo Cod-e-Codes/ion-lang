@@ -1,0 +1,34 @@
+enum Parse {
+    Done(int);
+    Bad;
+    Empty;
+}
+
+fn step(n: int) -> Parse {
+    if n < 0 {
+        return Parse::Bad;
+    }
+    if n == 0 {
+        return Parse::Empty;
+    }
+    return Parse::Done(n);
+}
+
+fn take(n: int) -> Parse {
+    let v: int = step(n)?;
+    return Parse::Done(v + 1);
+}
+
+fn main() -> int {
+    match take(4) {
+        Parse::Done(v) => {
+            return v;
+        }
+        Parse::Bad => {
+            return 1;
+        }
+        Parse::Empty => {
+            return 2;
+        }
+    }
+}

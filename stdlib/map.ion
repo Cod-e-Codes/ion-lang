@@ -1,5 +1,6 @@
 import "option.ion" as option;
 import "hash.ion" as hash;
+import "iter.ion" as iter;
 
 pub enum Slot<K, V> {
     Empty;
@@ -227,3 +228,42 @@ pub fn for_each<K, V>(map: &mut HashMap<K, V>, f: fn(&V) -> int) {
         i = i + 1;
     }
 }
+
+pub struct MapIter<K, V> {
+    slots: Vec<Slot<K, V>>;
+    len: int;
+    used: int;
+    cap: int;
+}
+
+impl<K, V> Iter<(K, V)> for MapIter<K, V> {
+    fn next(self: &mut MapIter<K, V>) -> Option<(K, V)> {
+        loop {
+            let taken: Option<Slot<K, V>> = Vec::pop(self.slots);
+            match taken {
+                Option::None => {
+                    return Option::None;
+                }
+                Option::Some(slot) => {
+                    match slot {
+                        Slot::Full { key: k, value: v } => {
+                            return Option::Some((k, v));
+                        }
+                        Slot::Empty => {}
+                        Slot::Tomb => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn into_iter<K, V>(map: HashMap<K, V>) -> MapIter<K, V> {
+    return MapIter {
+        slots: map.slots,
+        len: map.len,
+        used: map.used,
+        cap: map.cap,
+    };
+}
+

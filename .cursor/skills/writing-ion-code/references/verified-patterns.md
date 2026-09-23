@@ -58,7 +58,7 @@ fn f1(x: int) -> Result<int, MyError> {
 }
 ```
 
-Postfix `?` is match-plus-return sugar on owned `Option<T>` / `Result<T, E>` only (same `E`; no `From`). `Option?` needs an `Option<_>` return type; `Result?` needs `Result<_, E>`. Not legal on `ReadResult`, `SetResult`, or inside `spawn` ([tests/test_try_result_ok.ion](../../../../tests/test_try_result_ok.ion), [tests/test_try_option.ion](../../../../tests/test_try_option.ion)):
+Postfix `?` is match-plus-return sugar on owned `Option<T>` / `Result<T, E>` (same `E`; no `From`) and on another owned enum with one success variant when the function returns that same enum. `ReadResult { Ok(String); Err(int); }` qualifies. `SetResult` and a bare error enum do not. Not legal on a reference or inside `spawn` ([tests/test_try_result_ok.ion](../../../../tests/test_try_result_ok.ion), [tests/test_try_readresult.ion](../../../../tests/test_try_readresult.ion)):
 
 ```ion
 fn wrap(r: Result<int, int>) -> Result<int, int> {
@@ -346,7 +346,7 @@ fn read_len(v: &Vec<int>) -> int {
 }
 ```
 
-`let a = &mut s.x; let b = &mut s.y` is allowed. `s.a.b` conflicts with `s.a.c` and with `s.a`. A lasting borrow stays live until the last use of every binding that holds it. A copy, field or index reborrow, tuple, `match` result, assignment, enum value, or struct literal that stores the reference carries that loan. A reference created inside that value (`Hold { v: &mut s }`, `Option::Some(&mut s)`, `(&mut s.x, 1)`, or a `match` arm that yields `&mut s.x`) is the same loan. A `match` arm that stores the reference in a local and then yields the local keeps that loan on the match result. An enum, struct, or array that holds it keeps the loan until that binding leaves scope. A nested block does not end an outer loan. Indexing still borrows the whole owner. Match on `&Struct` or `&mut Struct` reborrows fields. Copy fields bind as the value. Other fields bind as `&T` or `&mut T`. The arm does not move or drop the referent. A reference stored in an enum or struct binds as that reference. A field that is already a reference is passed as that pointer.
+`let a = &mut s.x; let b = &mut s.y` is allowed. `s.a.b` conflicts with `s.a.c` and with `s.a`. A lasting borrow stays live until the last use of every binding that holds it. A copy, field or index reborrow, tuple, `match` result, assignment, enum value, or struct literal that stores the reference carries that loan. A reference created inside that value (`Hold { v: &mut s }`, `Option::Some(&mut s)`, `(&mut s.x, 1)`, or a `match` arm that yields `&mut s.x`) is the same loan. A `match` arm that stores the reference in a local and then yields the local keeps that loan on the match result. An enum, struct, or array that holds it keeps the loan until that binding leaves scope. A nested block does not end an outer loan. A carrier used only in one `if` arm is not live in the other arm. A literal index is its own path, so `&mut a[0]` and `&mut a[1]` do not conflict. A non-literal index borrows the whole owner. Match on `&Struct` or `&mut Struct` reborrows fields. Copy fields bind as the value. Other fields bind as `&T` or `&mut T`. The arm does not move or drop the referent. A reference stored in an enum or struct binds as that reference. A field that is already a reference is passed as that pointer.
 
 ## defer
 
@@ -411,7 +411,7 @@ A move in an `if` branch that always `return`s does not block use after the `if`
 
 ## loop ownership joins
 
-A non-copy binding moved on a path that can reenter the loop (`continue` or body fall-through) is an error. Move then `break` or `return` is allowed; after `break`, the binding is moved for later code. Exit paths that disagree (for example one `break` moves and another does not, or a `while` condition-false exit stays valid while a `break` moves) error at the loop exit join.
+A non-copy binding moved on a path that can reenter the loop (`continue` or body fall-through) is an error. Move then `break` or `return` is allowed; after `break`, the binding is moved for later code. Exit paths that disagree do not error at the loop. Each exit that still owns the value drops it there, and the binding is moved after the loop, so a later use is `UseAfterMove`. A `while` whose body falls through is still a reentry edge.
 
 ## extern block
 

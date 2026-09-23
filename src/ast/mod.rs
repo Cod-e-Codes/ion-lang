@@ -22,10 +22,26 @@ pub struct Program {
     pub enums: Vec<EnumDecl>,
     pub type_aliases: Vec<TypeAliasDecl>,
     pub capabilities: Vec<CapabilityDecl>,
+    pub protocols: Vec<ProtocolDecl>,
     pub impls: Vec<ImplDecl>,
     pub functions: Vec<FnDecl>,
     pub consts: Vec<ConstDecl>,
     pub extern_blocks: Vec<ExternBlock>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProtocolStep {
+    Send(Type),
+    Recv(Type),
+}
+
+#[derive(Debug, Clone)]
+pub struct ProtocolDecl {
+    pub name: String,
+    pub steps: Vec<ProtocolStep>,
+    pub span: Span,
+    pub doc: Option<String>,
+    pub pub_: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +177,8 @@ pub struct CapabilityDecl {
     pub doc: Option<String>,
     pub pub_: bool,
     pub name: String,
+    /// `Iter<T>` declares `T` here. An impl supplies the argument.
+    pub generics: Vec<TypeParam>,
     pub methods: Vec<CapabilityMethod>,
     pub span: Span,
 }
@@ -169,6 +187,8 @@ pub struct CapabilityDecl {
 pub struct ImplDecl {
     pub capability: String,
     pub generics: Vec<TypeParam>,
+    /// Arguments in `impl Iter<int> for Counter`.
+    pub cap_args: Vec<Type>,
     /// Nominal struct or enum name the impl is for.
     pub type_name: String,
     pub target: Type,
@@ -291,10 +311,21 @@ pub enum Type {
         params: Vec<Type>,
         return_type: Box<Type>,
     },
-    /// Joinable spawn handle. Not Copy. Send. Drop detaches.
-    JoinHandle,
+    /// Joinable spawn handle. Not Copy. Send when `result` is Send. Drop detaches.
+    JoinHandle {
+        result: Box<Type>,
+    },
     /// Owned file. Not Send. Drop closes.
     File,
+    /// Copy allocator: function pointers plus a `*u8` context.
+    Allocator,
+    /// Unique protocol endpoint. Not Copy. Step `step` of `protocol`.
+    /// `dual` swaps send and recv. Drop before `end` is allowed.
+    Endpoint {
+        protocol: String,
+        step: usize,
+        dual: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -317,6 +348,7 @@ pub enum Stmt {
     Loop(LoopStmt),
     For(ForStmt),
     UnsafeBlock(UnsafeBlockStmt),
+    Scope(ScopeStmt),
 }
 
 #[derive(Debug, Clone)]
@@ -406,6 +438,12 @@ pub struct ForStmt {
 
 #[derive(Debug, Clone)]
 pub struct UnsafeBlockStmt {
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScopeStmt {
     pub body: Block,
     pub span: Span,
 }
@@ -603,6 +641,7 @@ pub(crate) fn number_stmt(stmt: &mut Stmt, next_id: &mut u32) {
             number_block(&mut s.body, next_id);
         }
         Stmt::UnsafeBlock(s) => number_block(&mut s.body, next_id),
+        Stmt::Scope(s) => number_block(&mut s.body, next_id),
     }
 }
 

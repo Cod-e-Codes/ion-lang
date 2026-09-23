@@ -1,0 +1,14 @@
+fn use_ref(r: &int) -> int {
+    return 1;
+}
+
+fn main() -> int {
+    let mut x: int = 1;
+    let r: &int = &x;
+    if false {
+        return use_ref(r);
+    } else {
+        x = 3;
+    }
+    return x;
+}

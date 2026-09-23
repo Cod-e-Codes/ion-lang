@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-09-23
+
+- **Language**: A consuming call inside `+`, a unary operator, or an index expression is a move. `Box::unwrap` in `sum + Box::unwrap(extra)` no longer leaves the box to be freed again at scope exit.
+- **Language**: `Copy` is structural for tuples, arrays, and structs or enums whose fields or payloads are `Copy` and that have no `impl Drop`. `Box`, `Vec`, `String`, channels, `JoinHandle`, `File`, raw pointers, and protocol endpoints stay non-`Copy`. `Allocator` is `Copy`. A struct of integers can be used after a copy.
+- **Language**: A literal index is its own borrow path. `&mut a[0]` and `&mut a[1]` do not conflict. A non-literal index still borrows the whole owner. The same literal in one call is `BorrowConflict`.
+- **Language**: Disagreeing loop exits do not error at the loop. The binding is moved after the loop, and a later use is `UseAfterMove`. Statements after `return`, `break`, or `continue` are not a reentry edge. A carrier used only in one `if` arm is not live in the other arm. A `while` whose body falls through is still a reentry edge.
+- **Language**: `const` accepts every integer width when the value fits, evaluates `as` with the low-bits rule, and evaluates `match` on `bool` and integers.
+- **Language**: Postfix `?` accepts an owned enum with one success variant. `Option` and `Result` keep the same rules, including the same `E`. `ReadResult` qualifies when the function returns `ReadResult`. `SetResult` and a bare error enum do not.
+- **Language**: `for` accepts `Iter<T>`. `stdlib/iter.ion` declares `next`. `stdlib/map.ion` adds a consuming `into_iter`. `for_each` stays. Iterators that yield references stay rejected.
+- **Language**: A fn literal that names an outer owned binding moves those bindings into a closure value. The value is not a function pointer. A reference capture stays `ClosureCapture`. Moving a non-`Copy` capture consumes the closure.
+- **Language**: A spawn expression is `JoinHandle<T>`. `join` moves `T` out. `scope` joins handles still owned in that block, in reverse creation order. Statement `spawn` outside `scope` still detaches.
+- **Language**: `protocol` and `endpoint<Name>()` add a unique endpoint. `send` and `recv` consume it and return the next step. The other end is the dual. Drop before `end` is allowed. Clone is not. Payloads must be `Copy` and `Send`.
+- **Runtime**: `Vec`, `String`, and `Box` store an `Allocator`. `ion_vec_t` and `ion_string_t` start with `ion_alloc_t`. A box allocation is that header followed by the value. `ion_box_free` steps back one header. `heap()` is malloc, realloc, and free. `Vec::new`, `Box::new`, and `String::new` still call `heap()`, so those Ion call sites are unchanged. `make_allocator` is `unsafe`. Channels and spawn context stay on malloc. This impacts every program that uses `Vec`, `String`, or `Box`: regenerate C and relink. C that treated `ion_box_alloc` as a bare `malloc` of `T` must be rewritten for the header.
+- **Runtime**: `ion_join_value` copies a non-void spawn result out of a malloc slot. `ion_endpoint_t` is a sender and a receiver. `endpoint<Name>()` creates two channels of `ion_proto_Name` and crosses them.
+- **Docs**: Spec sections 3, 4.8, 4.9, 5.2, 5.3, 7, 8.1, 10.3, and 11, plus ABI, BETA, README, bug hotspots, and the ownership and concurrency notes, match these rules.
+
 ## 0.3.4 - 2026-09-23
 
 - **Runtime**: Channel send and recv claim a slot with atomics and copy `elem_size` bytes on the success path. A pthread wait happens only when the buffer is full, empty, or disconnected, and only after the waiter is registered and the operation is retried. A successful operation notifies only when a waiter is registered. `ion_channel_send`, `ion_channel_recv`, `try_send`, `try_recv`, `select`, and the drop entry points keep the same status codes. This impacts every program that links the runtime: relink with this `ion_runtime.c`. Ion source is unchanged. Capacity, blocking, `SendResult`, `Option`, and select results are unchanged.

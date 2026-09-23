@@ -1,0 +1,10 @@
+fn hold(p: &mut int, q: &mut int) -> int {
+    return 0;
+}
+
+fn main() -> int {
+    let mut a: [int; 2] = [1, 2];
+    let p: &mut int = &mut a[0];
+    let q: &mut int = &mut a[1];
+    return hold(p, q);
+}

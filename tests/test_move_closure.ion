@@ -1,0 +1,7 @@
+fn main() -> int {
+    let n: int = 10;
+    let f = fn(x: int) -> int {
+        return x + n;
+    };
+    return f(0) + f(1);
+}

@@ -1,0 +1,9 @@
+enum MathError {
+    DivByZero;
+}
+
+fn main() -> MathError {
+    let e: MathError = MathError::DivByZero;
+    let _x: MathError = e?;
+    return MathError::DivByZero;
+}

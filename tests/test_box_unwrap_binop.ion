@@ -1,0 +1,7 @@
+// One unwrap inside + moves the box. The result is the unwrapped int.
+fn main() -> int {
+    let extra: Box<int> = Box::new(40);
+    let mut sum: int = 2;
+    sum = sum + Box::unwrap(extra);
+    return sum;
+}

@@ -1,6 +1,5 @@
 fn main() -> int {
     let n = 10;
-    // Cannot close over outer owned bindings; use a named function or extra parameter instead.
     let f: fn(int) -> int = fn(x: int) -> int {
         return x + n;
     };

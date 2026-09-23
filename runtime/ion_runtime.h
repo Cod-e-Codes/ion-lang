@@ -73,6 +73,13 @@ int ion_spawn_joinable(void *(*start_routine)(void *), void *arg,
 int ion_join(ion_thread_t *thread);
 
 /**
+ * Waits for the thread and writes its returned pointer to *out.
+ * The caller frees *out. The pointed-to value is the thread result.
+ * @return 0 on success, non-zero if the handle is not live or join fails
+ */
+int ion_join_value(ion_thread_t *thread, void **out);
+
+/**
  * Detaches a live handle so the thread is not joined. No-op if not live.
  */
 void ion_thread_detach(ion_thread_t *thread);
@@ -101,6 +108,15 @@ typedef struct {
   ion_channel_t *channel;
   size_t elem_size;
 } ion_receiver_t;
+
+/**
+ * Unique protocol endpoint. `tx` and `rx` are crossed with the other end.
+ * Drop closes both directions. Not copyable.
+ */
+typedef struct {
+  ion_sender_t tx;
+  ion_receiver_t rx;
+} ion_endpoint_t;
 
 /**
  * Creates a bounded MPSC (multi-producer, single-consumer) channel.
@@ -202,20 +218,63 @@ void ion_channel_sender_drop(ion_sender_t *sender);
 void ion_channel_receiver_drop(ion_receiver_t *receiver);
 
 // ============================================================================
-// Heap Allocation (for Box<T> and collections)
+// Allocator
 // ============================================================================
 
 /**
- * Allocates raw memory on the heap for Box<T>. Inline so the C compiler sees
- * malloc. Returns NULL on failure. Callers panic on NULL.
+ * Copy value of function pointers plus a context pointer.
+ * `ion_heap` is malloc/realloc/free. Containers store a copy and use it
+ * on grow and drop. Channels and spawn stay on malloc.
  */
-static inline void *ion_box_alloc(size_t size) { return malloc(size); }
+typedef struct ion_alloc {
+  void *(*alloc)(void *ctx, size_t size);
+  void *(*resize)(void *ctx, void *ptr, size_t size);
+  void (*dealloc)(void *ctx, void *ptr);
+  void *ctx;
+} ion_alloc_t;
+
+ion_alloc_t ion_heap(void);
+
+// ============================================================================
+// Heap Allocation (for Box<T> and collections)
+// ============================================================================
+
+static inline void *ion_box_alloc_in(ion_alloc_t alloc, size_t size) {
+  ion_alloc_t *header;
+  if (!alloc.alloc)
+    return NULL;
+  header = (ion_alloc_t *)alloc.alloc(alloc.ctx, sizeof(ion_alloc_t) + size);
+  if (!header)
+    return NULL;
+  *header = alloc;
+  return (void *)(header + 1);
+}
+
+/**
+ * Allocates raw memory for Box<T> with the heap allocator.
+ * The allocation is a Copy allocator header followed by the value.
+ * The returned pointer addresses the value. Returns NULL on failure.
+ */
+static inline void *ion_box_alloc(size_t size) {
+  return ion_box_alloc_in(ion_heap(), size);
+}
 
 /**
  * Frees memory previously allocated by ion_box_alloc. Inline so the C compiler
- * sees free.
+ * sees the allocator free.
  */
-static inline void ion_box_free(void *ptr) { free(ptr); }
+static inline void ion_box_free(void *ptr) {
+  ion_alloc_t *header;
+  ion_alloc_t alloc;
+  if (!ptr)
+    return;
+  header = ((ion_alloc_t *)ptr) - 1;
+  alloc = *header;
+  if (alloc.dealloc)
+    alloc.dealloc(alloc.ctx, header);
+  else
+    free(header);
+}
 
 // ============================================================================
 // Vec Type (Generic Vector)
@@ -226,6 +285,7 @@ static inline void ion_box_free(void *ptr) { free(ptr); }
  * The actual Vec type is monomorphized per element type (e.g., Vec_int)
  */
 typedef struct {
+  ion_alloc_t alloc;
   void *data;       // Pointer to element array
   size_t len;       // Number of elements
   size_t capacity;  // Allocated capacity
@@ -239,6 +299,11 @@ typedef struct {
  * @return Pointer to allocated vector, or NULL on failure
  */
 ion_vec_t *ion_vec_new(size_t elem_size);
+
+/**
+ * Creates an empty vector that grows and frees with `alloc`.
+ */
+ion_vec_t *ion_vec_new_in(ion_alloc_t alloc, size_t elem_size);
 
 /**
  * Creates a new vector with specified initial capacity.
@@ -264,7 +329,9 @@ static inline int ion_vec_reserve_one(ion_vec_t *vec) {
   if (vec->len < vec->capacity)
     return 0;
   new_capacity = vec->capacity == 0 ? 4 : vec->capacity * 2;
-  new_data = realloc(vec->data, vec->elem_size * new_capacity);
+  if (!vec->alloc.resize)
+    return -1;
+  new_data = vec->alloc.resize(vec->alloc.ctx, vec->data, vec->elem_size * new_capacity);
   if (!new_data)
     return -1;
   vec->data = new_data;
@@ -298,6 +365,7 @@ void ion_vec_free(ion_vec_t *vec);
  * String type - heap-allocated UTF-8 string
  */
 typedef struct {
+  ion_alloc_t alloc;
   uint8_t *data;
   size_t len;
   size_t capacity;
@@ -311,6 +379,11 @@ typedef struct {
 ion_string_t *ion_string_new(void);
 
 /**
+ * Creates an empty string that grows and frees with `alloc`.
+ */
+ion_string_t *ion_string_new_in(ion_alloc_t alloc);
+
+/**
  * Creates a heap-allocated string from a C string literal.
  * Allocates a new ion_string_t and copies the literal data.
  * lit[0..len) must be well-formed UTF-8 (RFC 3629).
@@ -320,6 +393,11 @@ ion_string_t *ion_string_new(void);
  * @return Pointer to allocated ion_string_t, or NULL on failure or invalid UTF-8
  */
 ion_string_t *ion_string_from_literal(const char *lit, size_t len);
+
+/**
+ * Same as ion_string_from_literal, using `alloc` for the string and its bytes.
+ */
+ion_string_t *ion_string_from_literal_in(ion_alloc_t alloc, const char *lit, size_t len);
 
 /**
  * Clones a string, creating a new copy.

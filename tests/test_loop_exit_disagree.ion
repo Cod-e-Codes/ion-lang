@@ -1,0 +1,13 @@
+fn main() -> int {
+    let extra: Box<int> = Box::new(7);
+    let mut n: int = 0;
+    while n < 2 {
+        if n == 0 {
+            let v: int = Box::unwrap(extra);
+            n = n + v;
+            break;
+        }
+        break;
+    }
+    return n;
+}

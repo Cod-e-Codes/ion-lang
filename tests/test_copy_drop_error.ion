@@ -1,0 +1,14 @@
+struct Guard {
+    n: int;
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+    }
+}
+
+fn main() -> int {
+    let g: Guard = Guard { n: 1 };
+    let h: Guard = g;
+    return g.n + h.n;
+}

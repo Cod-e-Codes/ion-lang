@@ -1,0 +1,9 @@
+protocol Bad {
+    send String;
+    end;
+}
+
+fn main() -> int {
+    let (_client, _server) = endpoint<Bad>();
+    return 0;
+}

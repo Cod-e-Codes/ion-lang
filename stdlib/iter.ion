@@ -1,0 +1,3 @@
+capability Iter<T> {
+    fn next(self: &mut Self) -> Option<T>;
+}

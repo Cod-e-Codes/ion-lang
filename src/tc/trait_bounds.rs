@@ -62,7 +62,7 @@ impl TypeChecker {
             return true;
         }
         match bound {
-            "Copy" => Self::is_copy_type(ty),
+            "Copy" => self.is_copy_type(ty),
             "Send" => self.is_send(ty),
             "Eq" => self.is_eq_type(ty),
             _ => self.satisfies_capability(ty, bound),
@@ -171,7 +171,7 @@ impl TypeChecker {
             Type::Slice { .. } => false,
             Type::Tuple { elements } => elements.iter().all(|e| self.is_eq_type_rec(e, visiting)),
             Type::Fn { .. } => true,
-            Type::JoinHandle | Type::File => false,
+            Type::JoinHandle { .. } | Type::File | Type::Allocator | Type::Endpoint { .. } => false,
         }
     }
 }

@@ -1,0 +1,6 @@
+fn main() -> int {
+    let h = spawn {
+        return 7;
+    };
+    return join(h);
+}

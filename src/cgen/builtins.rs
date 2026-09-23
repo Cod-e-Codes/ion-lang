@@ -165,10 +165,96 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, arg_code);
             self.generate_expr(&args[0]);
             arg_code = std::mem::replace(&mut self.output, old_output);
+            let value_ty = return_type.filter(|ty| !matches!(ty, Type::Void));
+            if let Some(ty) = value_ty {
+                let c_ty = self.type_to_c(ty);
+                let code = format!(
+                    "({{ ion_thread_t _ion_jh = {arg_code}; {c_ty}* _ion_slot = 0; if (ion_join_value(&_ion_jh, (void**)&_ion_slot) != 0 || !_ion_slot) ion_panic(\"join failed\"); {c_ty} _ion_joined = *_ion_slot; free(_ion_slot); _ion_joined; }})"
+                );
+                return Some(code);
+            }
             let code = format!(
                 "({{ ion_thread_t _ion_jh = {arg_code}; if (ion_join(&_ion_jh) != 0) ion_panic(\"join failed\"); }})"
             );
             return Some(code);
+        }
+        if let Some(name) = callee.strip_prefix("endpoint:") {
+            return Some(self.endpoint_pair_code(name));
+        }
+        if callee == "heap" && args.is_empty() {
+            return Some("ion_heap()".to_string());
+        }
+        if callee == "make_allocator" && args.len() == 4 {
+            let mut parts = Vec::new();
+            for arg in args {
+                let mut arg_code = String::new();
+                let old_output = std::mem::replace(&mut self.output, arg_code);
+                self.generate_expr(arg);
+                arg_code = std::mem::replace(&mut self.output, old_output);
+                parts.push(arg_code);
+            }
+            return Some(format!(
+                "(ion_alloc_t){{ .alloc = {alloc}, .resize = {resize}, .dealloc = {dealloc}, .ctx = {ctx} }}",
+                alloc = parts[0],
+                resize = parts[1],
+                dealloc = parts[2],
+                ctx = parts[3]
+            ));
+        }
+        if callee == "Vec::new_in" && args.len() == 1 {
+            let elem_type = return_type
+                .and_then(|t| {
+                    if let Type::Vec { elem_type } = t {
+                        Some(elem_type.as_ref())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(&Type::Int);
+            let elem_c = self.type_to_c(elem_type);
+            let vec = mangle_type_name("Vec", std::slice::from_ref(elem_type));
+            let mut alloc_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, alloc_code);
+            self.generate_expr(&args[0]);
+            alloc_code = std::mem::replace(&mut self.output, old_output);
+            return Some(format!(
+                "({{ {vec}* _v = ({vec}*)ion_vec_new_in({alloc_code}, sizeof({elem_c})); if (!_v) ion_panic(\"Vec::new_in allocation failed\"); _v; }})"
+            ));
+        }
+        if callee == "String::new_in" && args.len() == 1 {
+            let mut alloc_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, alloc_code);
+            self.generate_expr(&args[0]);
+            alloc_code = std::mem::replace(&mut self.output, old_output);
+            return Some(format!(
+                "({{ ion_string_t* _s = ion_string_new_in({alloc_code}); if (!_s) ion_panic(\"String::new_in allocation failed\"); _s; }})"
+            ));
+        }
+        if callee == "Box::new_in" && args.len() == 2 {
+            let inner_type = return_type
+                .and_then(|t| {
+                    if let Type::Box { inner } = t {
+                        Some(inner.as_ref())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(&Type::Int);
+            let inner_c_type = self.type_to_c(inner_type);
+            let mut value_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, value_code);
+            self.generate_expr_with_type(&args[0], Some(inner_type));
+            value_code = std::mem::replace(&mut self.output, old_output);
+            let mut alloc_code = String::new();
+            let old_output = std::mem::replace(&mut self.output, alloc_code);
+            self.generate_expr(&args[1]);
+            alloc_code = std::mem::replace(&mut self.output, old_output);
+            return Some(format!(
+                "({{ {ty}* ptr = ({ty}*)ion_box_alloc_in({alloc}, sizeof({ty})); if (!ptr) ion_panic(\"Box::new_in allocation failed\"); *ptr = {value}; ptr; }})",
+                ty = inner_c_type,
+                alloc = alloc_code,
+                value = value_code
+            ));
         }
         if callee.starts_with("Box::new") && args.len() == 1 {
             // Get the type from the return type

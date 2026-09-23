@@ -149,7 +149,9 @@ impl TypeChecker {
             Type::UInt => Ok(("uint".to_string(), false, false)),
             Type::Box { .. } => Ok(("Box".to_string(), false, false)),
             Type::File => Ok(("File".to_string(), false, false)),
-            Type::JoinHandle => Ok(("JoinHandle".to_string(), false, false)),
+            Type::Allocator => Ok(("Allocator".to_string(), false, false)),
+            Type::Endpoint { .. } => Ok(("Endpoint".to_string(), false, false)),
+            Type::JoinHandle { .. } => Ok(("JoinHandle".to_string(), false, false)),
             Type::Struct(name) => Ok((name.clone(), false, false)),
             Type::Enum(name) => Ok((name.clone(), false, false)),
             Type::Generic { name, .. } => Ok((name.clone(), false, false)),
@@ -213,8 +215,21 @@ pub(crate) fn types_equal(a: &Type, b: &Type) -> bool {
         (Type::Generic { name: a_name, .. }, Type::Enum(b_name)) => a_name == b_name,
         (Type::String, Type::String) => true,
         (Type::Str, Type::Str) => true,
-        (Type::JoinHandle, Type::JoinHandle) => true,
+        (Type::JoinHandle { result: a }, Type::JoinHandle { result: b }) => types_equal(a, b),
         (Type::File, Type::File) => true,
+        (Type::Allocator, Type::Allocator) => true,
+        (
+            Type::Endpoint {
+                protocol: a_name,
+                step: a_step,
+                dual: a_dual,
+            },
+            Type::Endpoint {
+                protocol: b_name,
+                step: b_step,
+                dual: b_dual,
+            },
+        ) => a_name == b_name && a_step == b_step && a_dual == b_dual,
         (Type::Box { inner: a_inner }, Type::Box { inner: b_inner }) => {
             types_equal(a_inner, b_inner)
         }
@@ -348,7 +363,22 @@ pub fn type_to_string(ty: &Type) -> String {
                 type_to_string(return_type)
             )
         }
-        Type::JoinHandle => "JoinHandle".to_string(),
+        Type::JoinHandle { result } => {
+            if matches!(result.as_ref(), Type::Void) {
+                "JoinHandle".to_string()
+            } else {
+                format!("JoinHandle<{}>", type_to_string(result))
+            }
+        }
         Type::File => "File".to_string(),
+        Type::Allocator => "Allocator".to_string(),
+        Type::Endpoint {
+            protocol,
+            step,
+            dual,
+        } => format!(
+            "Endpoint<{protocol}, {step}{}>",
+            if *dual { ", dual" } else { "" }
+        ),
     }
 }

@@ -1,0 +1,14 @@
+fn take() -> JoinHandle {
+    scope {
+        let h = spawn {
+            let x: int = 1;
+        };
+        return h;
+    }
+}
+
+fn main() -> int {
+    let h = take();
+    join(h);
+    return 0;
+}

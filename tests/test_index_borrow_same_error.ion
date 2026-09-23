@@ -1,0 +1,8 @@
+fn both(a: &mut int, b: &mut int) -> int {
+    return 0;
+}
+
+fn main() -> int {
+    let mut a: [int; 2] = [1, 2];
+    return both(&mut a[0], &mut a[0]);
+}

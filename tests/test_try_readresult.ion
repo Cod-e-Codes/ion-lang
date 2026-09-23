@@ -1,0 +1,27 @@
+enum ReadResult {
+    Ok(String);
+    Err(int);
+}
+
+fn read(flag: int) -> ReadResult {
+    if flag == 0 {
+        return ReadResult::Err(-1);
+    }
+    return ReadResult::Ok(String::from("hi"));
+}
+
+fn load(flag: int) -> ReadResult {
+    let s: String = read(flag)?;
+    return ReadResult::Ok(s);
+}
+
+fn main() -> int {
+    match load(1) {
+        ReadResult::Ok(s) => {
+            return String::len(&s);
+        }
+        ReadResult::Err(code) => {
+            return 0 - code;
+        }
+    }
+}

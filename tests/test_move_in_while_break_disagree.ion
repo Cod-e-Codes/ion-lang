@@ -1,4 +1,3 @@
-// while exit join: Valid loop-head (condition-false) vs Moved on break.
 fn take(b: Box<int>) {
 }
 

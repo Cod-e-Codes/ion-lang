@@ -16,6 +16,7 @@ pub struct IRProgram {
     pub functions: Vec<IRFunction>,
     pub extern_blocks: Vec<ExternBlock>,
     pub type_aliases: Vec<TypeAliasDecl>,
+    pub drop_impls: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +55,7 @@ pub enum IRStmt {
     If(IRIf),
     While(IRWhile),
     UnsafeBlock(IRUnsafeBlock),
+    Scope(IRScope),
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +84,8 @@ pub struct IRReturn {
 pub struct IRSpawn {
     pub captures: Vec<(String, Type)>,
     pub body: IRBlock,
+    /// Value the thread returns. `Void` when the block does not return one.
+    pub result: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +113,11 @@ pub struct IRIf {
 
 #[derive(Debug, Clone)]
 pub struct IRUnsafeBlock {
+    pub body: IRBlock,
+}
+
+#[derive(Debug, Clone)]
+pub struct IRScope {
     pub body: IRBlock,
 }
 
@@ -151,6 +160,7 @@ pub enum IREexpr {
     Spawn {
         captures: Vec<(String, Type)>,
         body: IRBlock,
+        result: Type,
     },
     StructLit {
         type_name: String,
@@ -228,6 +238,10 @@ pub struct IRFnLiteral {
     pub params: Vec<IRParam>,
     pub return_type: Option<Type>,
     pub body: IRBlock,
+    /// Owned captures moved into the closure value. Empty for a function pointer.
+    pub captures: Vec<(String, Type)>,
+    /// Struct type name of a move closure.
+    pub env_struct: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -296,8 +310,13 @@ fn record_match_arm_bindings(pattern: &Pattern, scrutinee_ty: &Type, ctx: &mut L
         Type::Ref { inner, .. } => inner.as_ref(),
         other => other,
     };
+    let struct_decls = ctx.struct_decls.clone();
+    let enum_decls = ctx.enum_decls.clone();
+    let drop_impls = ctx.types.drop_impls.clone();
     let bind_ty = |field_ty: &Type| -> Type {
-        if through_ref && !crate::tc::TypeChecker::is_copy_type(field_ty) {
+        if through_ref
+            && !crate::tc::type_is_copy(field_ty, &struct_decls, &enum_decls, &drop_impls)
+        {
             Type::Ref {
                 inner: Box::new(field_ty.clone()),
                 mutable: through_mut,
@@ -563,7 +582,14 @@ fn assign_pattern_binding_types(
     let through_ref = matches!(scrutinee_ty, Type::Ref { .. });
     let peeled = peel_type_ref(scrutinee_ty);
     let bind_field = |field_ty: &Type| -> Type {
-        if through_ref && !crate::tc::TypeChecker::is_copy_type(field_ty) {
+        if through_ref
+            && !crate::tc::type_is_copy(
+                field_ty,
+                &ctx.struct_decls,
+                &ctx.enum_decls,
+                &ctx.types.drop_impls,
+            )
+        {
             Type::Ref {
                 inner: Box::new(field_ty.clone()),
                 mutable: through_mut,
@@ -1128,6 +1154,7 @@ impl IRBuilder {
             functions,
             extern_blocks: ast.extern_blocks.clone(),
             type_aliases: ast.type_aliases.clone(),
+            drop_impls: types.drop_impls.clone(),
         };
         monomorphize_generic_functions(&mut program);
         program
@@ -1366,7 +1393,11 @@ impl IRBuilder {
                 let body = Self::lower_ast_block("spawn_body", &spawn_stmt.body, ctx);
                 ctx.var_types = parent_vars;
 
-                out.push(IRStmt::Spawn(IRSpawn { captures, body }));
+                out.push(IRStmt::Spawn(IRSpawn {
+                    captures,
+                    body,
+                    result: Type::Void,
+                }));
             }
             Stmt::Select(select_stmt) => {
                 let mut recv_arms = Vec::new();
@@ -1431,215 +1462,234 @@ impl IRBuilder {
                 }));
             }
             Stmt::For(for_stmt) => {
-                let container_var = format!("__for_container_{}", for_stmt.span.start);
-                let index_var = format!("__for_i_{}", for_stmt.span.start);
+                let iter_ty = ctx.expr_type(&for_stmt.iterable);
+                if let Some((symbol, elem)) = iter_call_for_type(&ctx.types, &iter_ty) {
+                    lower_iter_for(for_stmt, ctx, iter_ty, symbol, elem, out);
+                } else {
+                    let container_var = format!("__for_container_{}", for_stmt.span.start);
+                    let index_var = format!("__for_i_{}", for_stmt.span.start);
 
-                let container_ty = ctx.expr_type(&for_stmt.iterable);
+                    let container_ty = ctx.expr_type(&for_stmt.iterable);
 
-                let elem_type = match &container_ty {
-                    Type::Vec { elem_type } => (**elem_type).clone(),
-                    Type::String => Type::U8,
-                    Type::Array { inner, .. } => (**inner).clone(),
-                    _ => panic!(
-                        "compiler bug: for-iterable type is not Vec/String/Array: {:?}",
-                        container_ty
-                    ),
-                };
+                    let elem_type = match &container_ty {
+                        Type::Vec { elem_type } => (**elem_type).clone(),
+                        Type::String => Type::U8,
+                        Type::Array { inner, .. } => (**inner).clone(),
+                        _ => panic!(
+                            "compiler bug: for-iterable type is not Vec/String/Array: {:?}",
+                            container_ty
+                        ),
+                    };
 
-                let use_container_copy = !matches!(container_ty, Type::Array { .. });
-                if use_container_copy {
-                    ctx.record_binding(&container_var, &container_ty);
+                    let use_container_copy = !matches!(container_ty, Type::Array { .. });
+                    if use_container_copy {
+                        ctx.record_binding(&container_var, &container_ty);
+                        out.push(IRStmt::Let(IRLetStmt {
+                            name: container_var.clone(),
+                            ty: container_ty.clone(),
+                            init: Some(build_expr_with_ctx(&for_stmt.iterable, ctx)),
+                        }));
+                    }
+                    ctx.record_binding(&index_var, &Type::Int);
                     out.push(IRStmt::Let(IRLetStmt {
-                        name: container_var.clone(),
-                        ty: container_ty.clone(),
-                        init: Some(build_expr_with_ctx(&for_stmt.iterable, ctx)),
+                        name: index_var.clone(),
+                        ty: Type::Int,
+                        init: Some(IREexpr::Lit(0)),
+                    }));
+
+                    let iterable_expr = build_expr_with_ctx(&for_stmt.iterable, ctx);
+                    let container_ref_ty = Type::Ref {
+                        inner: Box::new(container_ty.clone()),
+                        mutable: false,
+                    };
+                    let container_ref = if use_container_copy {
+                        IREexpr::AddressOf {
+                            inner: Box::new(IREexpr::Var(container_var.clone())),
+                            mutable: false,
+                            ty: container_ref_ty,
+                        }
+                    } else {
+                        IREexpr::AddressOf {
+                            inner: Box::new(iterable_expr.clone()),
+                            mutable: false,
+                            ty: Type::Ref {
+                                inner: Box::new(container_ty.clone()),
+                                mutable: false,
+                            },
+                        }
+                    };
+                    let index_ref = IREexpr::Var(index_var.clone());
+                    let index_target = if use_container_copy {
+                        IREexpr::Var(container_var.clone())
+                    } else {
+                        iterable_expr.clone()
+                    };
+
+                    let cond = match &container_ty {
+                        Type::Array { size, .. } => IREexpr::BinOp {
+                            op: BinOp::Lt,
+                            left: Box::new(index_ref.clone()),
+                            right: Box::new(IREexpr::Lit(*size as i64)),
+                            result_type: Type::Bool,
+                        },
+                        Type::Vec { .. } => IREexpr::BinOp {
+                            op: BinOp::Lt,
+                            left: Box::new(index_ref.clone()),
+                            right: Box::new(IREexpr::Call {
+                                callee: "Vec::len".to_string(),
+                                args: vec![container_ref.clone()],
+                                return_type: Some(Type::Int),
+                                tuple_destructure_index: None,
+                            }),
+                            result_type: Type::Bool,
+                        },
+                        Type::String => IREexpr::BinOp {
+                            op: BinOp::Lt,
+                            left: Box::new(index_ref.clone()),
+                            right: Box::new(IREexpr::Call {
+                                callee: "String::len".to_string(),
+                                args: vec![container_ref.clone()],
+                                return_type: Some(Type::Int),
+                                tuple_destructure_index: None,
+                            }),
+                            result_type: Type::Bool,
+                        },
+                        _ => IREexpr::BoolLiteral(false),
+                    };
+
+                    let mut while_body_stmts = Vec::new();
+                    let mut while_defers = Vec::new();
+
+                    let step_label = format!("__for_step_{}", for_stmt.span.start);
+                    let step_stmt = IRStmt::Expr(IREexpr::Assign {
+                        target: index_var.clone(),
+                        value: Box::new(IREexpr::BinOp {
+                            op: BinOp::Add,
+                            left: Box::new(IREexpr::Var(index_var.clone())),
+                            right: Box::new(IREexpr::Lit(1)),
+                            result_type: Type::Int,
+                        }),
+                    });
+                    let step_block = IRBlock {
+                        name: "for_step".to_string(),
+                        statements: vec![step_stmt],
+                        defers: Vec::new(),
+                    };
+
+                    match &container_ty {
+                        Type::Vec { .. } => {
+                            let opt_var = format!("__for_opt_{}", for_stmt.span.start);
+                            let get_call = IREexpr::Call {
+                                callee: "Vec::get".to_string(),
+                                args: vec![container_ref, index_ref.clone()],
+                                return_type: Some(Type::Generic {
+                                    name: "Option".to_string(),
+                                    params: vec![elem_type.clone()],
+                                }),
+                                tuple_destructure_index: None,
+                            };
+                            while_body_stmts.push(IRStmt::Let(IRLetStmt {
+                                name: opt_var.clone(),
+                                ty: Type::Generic {
+                                    name: "Option".to_string(),
+                                    params: vec![elem_type.clone()],
+                                },
+                                init: Some(get_call),
+                            }));
+                            let mut match_body_stmts = Vec::new();
+                            let mut match_defers = Vec::new();
+                            ctx.record_binding(&for_stmt.var_name, &elem_type);
+                            for inner in &for_stmt.body.statements {
+                                Self::lower_stmt(
+                                    inner,
+                                    &mut match_body_stmts,
+                                    &mut match_defers,
+                                    ctx,
+                                );
+                            }
+                            while_body_stmts.push(IRStmt::Expr(IREexpr::Match {
+                                expr: Box::new(IREexpr::Var(opt_var)),
+                                enum_type: "Option".to_string(),
+                                scrutinee_type: None,
+                                result_type: Type::Void,
+                                arms: vec![
+                                    IRMatchArm {
+                                        pattern: IRPattern::Variant {
+                                            enum_name: "Option".to_string(),
+                                            variant: "Some".to_string(),
+                                            sub_patterns: vec![IRPattern::Binding {
+                                                name: for_stmt.var_name.clone(),
+                                                ty: None,
+                                            }],
+                                            named_fields: None,
+                                        },
+                                        guard: None,
+                                        body: IRBlock {
+                                            name: "for_match_body".to_string(),
+                                            statements: match_body_stmts,
+                                            defers: match_defers,
+                                        },
+                                    },
+                                    IRMatchArm {
+                                        pattern: IRPattern::Variant {
+                                            enum_name: "Option".to_string(),
+                                            variant: "None".to_string(),
+                                            sub_patterns: Vec::new(),
+                                            named_fields: None,
+                                        },
+                                        guard: None,
+                                        body: IRBlock {
+                                            name: "for_none_body".to_string(),
+                                            statements: Vec::new(),
+                                            defers: Vec::new(),
+                                        },
+                                    },
+                                ],
+                            }));
+                        }
+                        Type::Array { .. } | Type::String => {
+                            let target_type = Some(container_ty.clone());
+                            while_body_stmts.push(IRStmt::Let(IRLetStmt {
+                                name: for_stmt.var_name.clone(),
+                                ty: elem_type.clone(),
+                                init: Some(IREexpr::Index {
+                                    target: Box::new(index_target),
+                                    index: Box::new(index_ref.clone()),
+                                    target_type,
+                                }),
+                            }));
+                            ctx.record_binding(&for_stmt.var_name, &elem_type);
+                            for inner in &for_stmt.body.statements {
+                                Self::lower_stmt(
+                                    inner,
+                                    &mut while_body_stmts,
+                                    &mut while_defers,
+                                    ctx,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    out.push(IRStmt::While(IRWhile {
+                        cond,
+                        body: IRBlock {
+                            name: "for_while_body".to_string(),
+                            statements: while_body_stmts,
+                            defers: while_defers,
+                        },
+                        step: Some(step_block),
+                        continue_label: Some(step_label),
                     }));
                 }
-                ctx.record_binding(&index_var, &Type::Int);
-                out.push(IRStmt::Let(IRLetStmt {
-                    name: index_var.clone(),
-                    ty: Type::Int,
-                    init: Some(IREexpr::Lit(0)),
-                }));
-
-                let iterable_expr = build_expr_with_ctx(&for_stmt.iterable, ctx);
-                let container_ref_ty = Type::Ref {
-                    inner: Box::new(container_ty.clone()),
-                    mutable: false,
-                };
-                let container_ref = if use_container_copy {
-                    IREexpr::AddressOf {
-                        inner: Box::new(IREexpr::Var(container_var.clone())),
-                        mutable: false,
-                        ty: container_ref_ty,
-                    }
-                } else {
-                    IREexpr::AddressOf {
-                        inner: Box::new(iterable_expr.clone()),
-                        mutable: false,
-                        ty: Type::Ref {
-                            inner: Box::new(container_ty.clone()),
-                            mutable: false,
-                        },
-                    }
-                };
-                let index_ref = IREexpr::Var(index_var.clone());
-                let index_target = if use_container_copy {
-                    IREexpr::Var(container_var.clone())
-                } else {
-                    iterable_expr.clone()
-                };
-
-                let cond = match &container_ty {
-                    Type::Array { size, .. } => IREexpr::BinOp {
-                        op: BinOp::Lt,
-                        left: Box::new(index_ref.clone()),
-                        right: Box::new(IREexpr::Lit(*size as i64)),
-                        result_type: Type::Bool,
-                    },
-                    Type::Vec { .. } => IREexpr::BinOp {
-                        op: BinOp::Lt,
-                        left: Box::new(index_ref.clone()),
-                        right: Box::new(IREexpr::Call {
-                            callee: "Vec::len".to_string(),
-                            args: vec![container_ref.clone()],
-                            return_type: Some(Type::Int),
-                            tuple_destructure_index: None,
-                        }),
-                        result_type: Type::Bool,
-                    },
-                    Type::String => IREexpr::BinOp {
-                        op: BinOp::Lt,
-                        left: Box::new(index_ref.clone()),
-                        right: Box::new(IREexpr::Call {
-                            callee: "String::len".to_string(),
-                            args: vec![container_ref.clone()],
-                            return_type: Some(Type::Int),
-                            tuple_destructure_index: None,
-                        }),
-                        result_type: Type::Bool,
-                    },
-                    _ => IREexpr::BoolLiteral(false),
-                };
-
-                let mut while_body_stmts = Vec::new();
-                let mut while_defers = Vec::new();
-
-                let step_label = format!("__for_step_{}", for_stmt.span.start);
-                let step_stmt = IRStmt::Expr(IREexpr::Assign {
-                    target: index_var.clone(),
-                    value: Box::new(IREexpr::BinOp {
-                        op: BinOp::Add,
-                        left: Box::new(IREexpr::Var(index_var.clone())),
-                        right: Box::new(IREexpr::Lit(1)),
-                        result_type: Type::Int,
-                    }),
-                });
-                let step_block = IRBlock {
-                    name: "for_step".to_string(),
-                    statements: vec![step_stmt],
-                    defers: Vec::new(),
-                };
-
-                match &container_ty {
-                    Type::Vec { .. } => {
-                        let opt_var = format!("__for_opt_{}", for_stmt.span.start);
-                        let get_call = IREexpr::Call {
-                            callee: "Vec::get".to_string(),
-                            args: vec![container_ref, index_ref.clone()],
-                            return_type: Some(Type::Generic {
-                                name: "Option".to_string(),
-                                params: vec![elem_type.clone()],
-                            }),
-                            tuple_destructure_index: None,
-                        };
-                        while_body_stmts.push(IRStmt::Let(IRLetStmt {
-                            name: opt_var.clone(),
-                            ty: Type::Generic {
-                                name: "Option".to_string(),
-                                params: vec![elem_type.clone()],
-                            },
-                            init: Some(get_call),
-                        }));
-                        let mut match_body_stmts = Vec::new();
-                        let mut match_defers = Vec::new();
-                        ctx.record_binding(&for_stmt.var_name, &elem_type);
-                        for inner in &for_stmt.body.statements {
-                            Self::lower_stmt(inner, &mut match_body_stmts, &mut match_defers, ctx);
-                        }
-                        while_body_stmts.push(IRStmt::Expr(IREexpr::Match {
-                            expr: Box::new(IREexpr::Var(opt_var)),
-                            enum_type: "Option".to_string(),
-                            scrutinee_type: None,
-                            result_type: Type::Void,
-                            arms: vec![
-                                IRMatchArm {
-                                    pattern: IRPattern::Variant {
-                                        enum_name: "Option".to_string(),
-                                        variant: "Some".to_string(),
-                                        sub_patterns: vec![IRPattern::Binding {
-                                            name: for_stmt.var_name.clone(),
-                                            ty: None,
-                                        }],
-                                        named_fields: None,
-                                    },
-                                    guard: None,
-                                    body: IRBlock {
-                                        name: "for_match_body".to_string(),
-                                        statements: match_body_stmts,
-                                        defers: match_defers,
-                                    },
-                                },
-                                IRMatchArm {
-                                    pattern: IRPattern::Variant {
-                                        enum_name: "Option".to_string(),
-                                        variant: "None".to_string(),
-                                        sub_patterns: Vec::new(),
-                                        named_fields: None,
-                                    },
-                                    guard: None,
-                                    body: IRBlock {
-                                        name: "for_none_body".to_string(),
-                                        statements: Vec::new(),
-                                        defers: Vec::new(),
-                                    },
-                                },
-                            ],
-                        }));
-                    }
-                    Type::Array { .. } | Type::String => {
-                        let target_type = Some(container_ty.clone());
-                        while_body_stmts.push(IRStmt::Let(IRLetStmt {
-                            name: for_stmt.var_name.clone(),
-                            ty: elem_type.clone(),
-                            init: Some(IREexpr::Index {
-                                target: Box::new(index_target),
-                                index: Box::new(index_ref.clone()),
-                                target_type,
-                            }),
-                        }));
-                        ctx.record_binding(&for_stmt.var_name, &elem_type);
-                        for inner in &for_stmt.body.statements {
-                            Self::lower_stmt(inner, &mut while_body_stmts, &mut while_defers, ctx);
-                        }
-                    }
-                    _ => {}
-                }
-
-                out.push(IRStmt::While(IRWhile {
-                    cond,
-                    body: IRBlock {
-                        name: "for_while_body".to_string(),
-                        statements: while_body_stmts,
-                        defers: while_defers,
-                    },
-                    step: Some(step_block),
-                    continue_label: Some(step_label),
-                }));
             }
             Stmt::UnsafeBlock(unsafe_stmt) => {
                 let body = Self::lower_ast_block("unsafe_body", &unsafe_stmt.body, ctx);
                 out.push(IRStmt::UnsafeBlock(IRUnsafeBlock { body }));
+            }
+            Stmt::Scope(scope_stmt) => {
+                let body = Self::lower_ast_block("scope_body", &scope_stmt.body, ctx);
+                out.push(IRStmt::Scope(IRScope { body }));
             }
         }
     }
@@ -1652,7 +1702,231 @@ fn resolve_recv_elem_type(channel: &Expr, ctx: &LoweringContext) -> Type {
     };
     match receiver_type {
         Type::Receiver { elem_type } => (*elem_type).clone(),
+        Type::Endpoint {
+            protocol,
+            step,
+            dual,
+        } => {
+            let proto = ctx.types.protocols.get(&protocol).expect("protocol exists");
+            let payload = match proto.steps.get(step) {
+                Some(ProtocolStep::Send(ty) | ProtocolStep::Recv(ty)) => ty.clone(),
+                None => Type::Void,
+            };
+            Type::Tuple {
+                elements: vec![
+                    payload,
+                    Type::Endpoint {
+                        protocol,
+                        step: step + 1,
+                        dual,
+                    },
+                ],
+            }
+        }
         other => panic!("compiler bug: recv channel is not Receiver: {:?}", other),
+    }
+}
+
+fn iter_call_for_type(types: &TypeInfo, ty: &Type) -> Option<(String, Type)> {
+    if matches!(ty, Type::Vec { .. } | Type::String | Type::Array { .. }) {
+        return None;
+    }
+    let name = match ty {
+        Type::Struct(name) | Type::Enum(name) => name.clone(),
+        Type::Generic { name, .. } => name.clone(),
+        _ => return None,
+    };
+    let info = types.iter_impls.get(&name)?;
+    let concrete = match ty {
+        Type::Generic { params, .. } => params.clone(),
+        _ => Vec::new(),
+    };
+    if info.generics.len() != concrete.len() {
+        return None;
+    }
+    let substitutions = info
+        .generics
+        .iter()
+        .cloned()
+        .zip(concrete)
+        .collect::<HashMap<_, _>>();
+    Some((
+        info.symbol.clone(),
+        crate::types_util::substitute_type(&info.element, &substitutions),
+    ))
+}
+
+fn lower_iter_for(
+    for_stmt: &ForStmt,
+    ctx: &mut LoweringContext,
+    iter_ty: Type,
+    symbol: String,
+    elem: Type,
+    out: &mut Vec<IRStmt>,
+) {
+    let iter_var = format!("__for_iter_{}", for_stmt.span.start);
+    let opt_var = format!("__for_opt_{}", for_stmt.span.start);
+    ctx.record_binding(&iter_var, &iter_ty);
+    out.push(IRStmt::Let(IRLetStmt {
+        name: iter_var.clone(),
+        ty: iter_ty.clone(),
+        init: Some(build_expr_with_ctx(&for_stmt.iterable, ctx)),
+    }));
+    let opt_ty = Type::Generic {
+        name: "Option".to_string(),
+        params: vec![elem.clone()],
+    };
+    let next = IREexpr::Call {
+        callee: symbol,
+        args: vec![IREexpr::AddressOf {
+            inner: Box::new(IREexpr::Var(iter_var)),
+            mutable: true,
+            ty: Type::Ref {
+                inner: Box::new(iter_ty),
+                mutable: true,
+            },
+        }],
+        return_type: Some(opt_ty.clone()),
+        tuple_destructure_index: None,
+    };
+    let mut body = Vec::new();
+    body.push(IRStmt::Let(IRLetStmt {
+        name: opt_var.clone(),
+        ty: opt_ty,
+        init: Some(next),
+    }));
+    let mut some_stmts = Vec::new();
+    let mut some_defers = Vec::new();
+    ctx.record_binding(&for_stmt.var_name, &elem);
+    for inner in &for_stmt.body.statements {
+        IRBuilder::lower_stmt(inner, &mut some_stmts, &mut some_defers, ctx);
+    }
+    body.push(IRStmt::Expr(IREexpr::Match {
+        expr: Box::new(IREexpr::Var(opt_var)),
+        enum_type: "Option".to_string(),
+        scrutinee_type: None,
+        result_type: Type::Void,
+        arms: vec![
+            IRMatchArm {
+                pattern: IRPattern::Variant {
+                    enum_name: "Option".to_string(),
+                    variant: "Some".to_string(),
+                    sub_patterns: vec![IRPattern::Binding {
+                        name: for_stmt.var_name.clone(),
+                        ty: None,
+                    }],
+                    named_fields: None,
+                },
+                guard: None,
+                body: IRBlock {
+                    name: "for_iter_some".to_string(),
+                    statements: some_stmts,
+                    defers: some_defers,
+                },
+            },
+            IRMatchArm {
+                pattern: IRPattern::Variant {
+                    enum_name: "Option".to_string(),
+                    variant: "None".to_string(),
+                    sub_patterns: Vec::new(),
+                    named_fields: None,
+                },
+                guard: None,
+                body: IRBlock {
+                    name: "for_iter_none".to_string(),
+                    statements: vec![IRStmt::Break],
+                    defers: Vec::new(),
+                },
+            },
+        ],
+    }));
+    out.push(IRStmt::While(IRWhile {
+        cond: IREexpr::BoolLiteral(true),
+        body: IRBlock {
+            name: "for_iter".to_string(),
+            statements: body,
+            defers: Vec::new(),
+        },
+        step: None,
+        continue_label: None,
+    }));
+}
+
+fn lower_enum_try(try_expr: &TryExpr, ctx: &LoweringContext, operand_ty: &Type) -> IREexpr {
+    let id = try_expr.id.0;
+    let (enum_name, concrete) = match operand_ty {
+        Type::Enum(name) => (name.clone(), Vec::new()),
+        Type::Generic { name, params } => (name.clone(), params.clone()),
+        other => panic!("compiler bug: ? lowering expected an enum, got {:?}", other),
+    };
+    let Some(decl) = ctx.enum_decls.get(&enum_name).cloned() else {
+        panic!("compiler bug: ? lowering missing enum '{enum_name}'");
+    };
+    let Some((success, payload)) = crate::tc::enum_try_success(&decl, &concrete) else {
+        panic!("compiler bug: ? lowering enum '{enum_name}' has no success variant");
+    };
+    let ok_name = format!("__ion_try_ok_{id}");
+    let mut arms = Vec::new();
+    for variant in &decl.variants {
+        if variant.name == success {
+            arms.push(IRMatchArm {
+                pattern: IRPattern::Variant {
+                    enum_name: enum_name.clone(),
+                    variant: variant.name.clone(),
+                    sub_patterns: vec![IRPattern::Binding {
+                        name: ok_name.clone(),
+                        ty: None,
+                    }],
+                    named_fields: None,
+                },
+                guard: None,
+                body: IRBlock {
+                    name: "try_ok".to_string(),
+                    statements: vec![IRStmt::Expr(IREexpr::Var(ok_name.clone()))],
+                    defers: Vec::new(),
+                },
+            });
+            continue;
+        }
+        let mut sub_patterns = Vec::new();
+        let mut args = Vec::new();
+        for (index, _) in variant.payload_types.iter().enumerate() {
+            let binding = format!("__ion_try_e_{id}_{}_{index}", variant.name);
+            sub_patterns.push(IRPattern::Binding {
+                name: binding.clone(),
+                ty: None,
+            });
+            args.push(IREexpr::Var(binding));
+        }
+        arms.push(IRMatchArm {
+            pattern: IRPattern::Variant {
+                enum_name: enum_name.clone(),
+                variant: variant.name.clone(),
+                sub_patterns,
+                named_fields: None,
+            },
+            guard: None,
+            body: IRBlock {
+                name: "try_err".to_string(),
+                statements: vec![IRStmt::Return(IRReturn {
+                    value: Some(IREexpr::EnumLit {
+                        enum_name: enum_name.clone(),
+                        variant: variant.name.clone(),
+                        args,
+                        named_fields: None,
+                        ty: operand_ty.clone(),
+                    }),
+                })],
+                defers: Vec::new(),
+            },
+        });
+    }
+    IREexpr::Match {
+        expr: Box::new(build_expr_with_ctx(&try_expr.operand, ctx)),
+        enum_type: enum_name,
+        scrutinee_type: Some(operand_ty.clone()),
+        result_type: payload,
+        arms,
     }
 }
 
@@ -1674,10 +1948,9 @@ fn lower_try_expr(try_expr: &TryExpr, ctx: &LoweringContext) -> IREexpr {
             "Err".to_string(),
             true,
         ),
-        other => panic!(
-            "compiler bug: ? lowering expected Option or Result, got {:?}",
-            other
-        ),
+        other => {
+            return lower_enum_try(try_expr, ctx, other);
+        }
     };
 
     let success_arm = IRMatchArm {
@@ -1826,7 +2099,15 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 spawn_ctx.record_binding(name, ty);
             }
             let body = IRBuilder::lower_ast_block("spawn_body", &spawn_expr.body, &mut spawn_ctx);
-            IREexpr::Spawn { captures, body }
+            let result = match ctx.expr_type(expr) {
+                Type::JoinHandle { result } => *result,
+                _ => Type::Void,
+            };
+            IREexpr::Spawn {
+                captures,
+                body,
+                result,
+            }
         }
         Expr::StructLit(lit) => IREexpr::StructLit {
             type_name: lit.type_name.clone(),
@@ -2095,7 +2376,12 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
             _ => panic!("Invalid assignment target in IR lowering"),
         },
         Expr::FnLiteral(lit) => {
-            let lit_params: Vec<IRParam> = lit
+            let lit_ty = ctx.expr_type(expr);
+            let closure = match &lit_ty {
+                Type::Struct(name) => ctx.types.closures.get(name).cloned(),
+                _ => None,
+            };
+            let user_params: Vec<IRParam> = lit
                 .params
                 .iter()
                 .map(|p| IRParam {
@@ -2103,26 +2389,225 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                     ty: p.ty.clone(),
                 })
                 .collect();
-            let id = ctx.fn_literal_counter.get();
-            ctx.fn_literal_counter.set(id + 1);
-            let symbol = format!("ion_fn_lit_{}", id);
-            let mut lit_ctx = LoweringContext::from_params(
-                &lit_params,
-                ctx.struct_decls.clone(),
-                ctx.enum_decls.clone(),
-                ctx.enum_param_counts.clone(),
-                ctx.fn_literal_counter.clone(),
-                ctx.function_returns.clone(),
-                ctx.types.clone(),
-            );
-            let body = IRBuilder::lower_ast_block("fn_lit_body", &lit.body, &mut lit_ctx);
-            IREexpr::FnLiteral(IRFnLiteral {
-                symbol,
-                params: lit_params,
-                return_type: lit.return_type.clone(),
-                body,
-            })
+            if let Some(sig) = closure {
+                let struct_name = match &lit_ty {
+                    Type::Struct(name) => name.clone(),
+                    _ => String::new(),
+                };
+                let env_ty = Type::Ref {
+                    inner: Box::new(Type::Struct(struct_name.clone())),
+                    mutable: true,
+                };
+                let mut lit_params = vec![IRParam {
+                    name: "env".to_string(),
+                    ty: env_ty,
+                }];
+                lit_params.extend(user_params);
+                let mut lit_ctx = LoweringContext::from_params(
+                    &lit_params,
+                    ctx.struct_decls.clone(),
+                    ctx.enum_decls.clone(),
+                    ctx.enum_param_counts.clone(),
+                    ctx.fn_literal_counter.clone(),
+                    ctx.function_returns.clone(),
+                    ctx.types.clone(),
+                );
+                for (name, cap_ty) in &sig.captures {
+                    lit_ctx.record_binding(name, cap_ty);
+                }
+                let mut body = IRBuilder::lower_ast_block("fn_lit_body", &lit.body, &mut lit_ctx);
+                let capture_names: HashMap<String, Type> = sig.captures.iter().cloned().collect();
+                rewrite_closure_body(&mut body, &capture_names);
+                IREexpr::FnLiteral(IRFnLiteral {
+                    symbol: sig.symbol,
+                    params: lit_params,
+                    return_type: lit.return_type.clone(),
+                    body,
+                    captures: sig.captures,
+                    env_struct: Some(struct_name),
+                })
+            } else {
+                let id = ctx.fn_literal_counter.get();
+                ctx.fn_literal_counter.set(id + 1);
+                let symbol = format!("ion_fn_lit_{}", id);
+                let mut lit_ctx = LoweringContext::from_params(
+                    &user_params,
+                    ctx.struct_decls.clone(),
+                    ctx.enum_decls.clone(),
+                    ctx.enum_param_counts.clone(),
+                    ctx.fn_literal_counter.clone(),
+                    ctx.function_returns.clone(),
+                    ctx.types.clone(),
+                );
+                let body = IRBuilder::lower_ast_block("fn_lit_body", &lit.body, &mut lit_ctx);
+                IREexpr::FnLiteral(IRFnLiteral {
+                    symbol,
+                    params: user_params,
+                    return_type: lit.return_type.clone(),
+                    body,
+                    captures: Vec::new(),
+                    env_struct: None,
+                })
+            }
         }
+    }
+}
+
+fn rewrite_closure_body(block: &mut IRBlock, captures: &HashMap<String, Type>) {
+    for stmt in &mut block.statements {
+        rewrite_closure_stmt(stmt, captures);
+    }
+    for defer in &mut block.defers {
+        rewrite_closure_expr(defer, captures);
+    }
+}
+
+fn rewrite_closure_stmt(stmt: &mut IRStmt, captures: &HashMap<String, Type>) {
+    match stmt {
+        IRStmt::Let(let_stmt) => {
+            if let Some(init) = &mut let_stmt.init {
+                rewrite_closure_expr(init, captures);
+            }
+        }
+        IRStmt::Return(ret) => {
+            if let Some(value) = &mut ret.value {
+                rewrite_closure_expr(value, captures);
+            }
+        }
+        IRStmt::Expr(expr) | IRStmt::Defer(expr) => rewrite_closure_expr(expr, captures),
+        IRStmt::If(ir_if) => {
+            rewrite_closure_expr(&mut ir_if.cond, captures);
+            rewrite_closure_body(&mut ir_if.then_block, captures);
+            if let Some(else_block) = &mut ir_if.else_block {
+                rewrite_closure_body(else_block, captures);
+            }
+        }
+        IRStmt::While(ir_while) => {
+            rewrite_closure_expr(&mut ir_while.cond, captures);
+            rewrite_closure_body(&mut ir_while.body, captures);
+            if let Some(step) = &mut ir_while.step {
+                rewrite_closure_body(step, captures);
+            }
+        }
+        IRStmt::UnsafeBlock(block) => rewrite_closure_body(&mut block.body, captures),
+        IRStmt::Scope(block) => rewrite_closure_body(&mut block.body, captures),
+        IRStmt::Spawn(spawn) => rewrite_closure_body(&mut spawn.body, captures),
+        IRStmt::Select(sel) => {
+            for arm in &mut sel.recv_arms {
+                rewrite_closure_expr(&mut arm.channel, captures);
+                rewrite_closure_body(&mut arm.body, captures);
+            }
+            if let Some(body) = &mut sel.default_body {
+                rewrite_closure_body(body, captures);
+            }
+            if let Some(ms) = &mut sel.timeout_ms {
+                rewrite_closure_expr(ms, captures);
+            }
+            if let Some(body) = &mut sel.timeout_body {
+                rewrite_closure_body(body, captures);
+            }
+        }
+        IRStmt::Break | IRStmt::Continue => {}
+    }
+}
+
+fn rewrite_closure_expr(expr: &mut IREexpr, captures: &HashMap<String, Type>) {
+    if let IREexpr::Var(name) = expr
+        && let Some(ty) = captures.get(name)
+    {
+        *expr = IREexpr::FieldAccess {
+            base: Box::new(IREexpr::Var("env".to_string())),
+            field: name.clone(),
+            is_pointer: true,
+            ty: ty.clone(),
+        };
+        return;
+    }
+    match expr {
+        IREexpr::AddressOf { inner, .. }
+        | IREexpr::UnOp { operand: inner, .. }
+        | IREexpr::Recv { channel: inner, .. }
+        | IREexpr::Cast { expr: inner, .. } => rewrite_closure_expr(inner, captures),
+        IREexpr::BinOp { left, right, .. } => {
+            rewrite_closure_expr(left, captures);
+            rewrite_closure_expr(right, captures);
+        }
+        IREexpr::Send { channel, value, .. } => {
+            rewrite_closure_expr(channel, captures);
+            rewrite_closure_expr(value, captures);
+        }
+        IREexpr::FieldAccess { base, .. } => rewrite_closure_expr(base, captures),
+        IREexpr::Index { target, index, .. } => {
+            rewrite_closure_expr(target, captures);
+            rewrite_closure_expr(index, captures);
+        }
+        IREexpr::Assign { value, .. } => rewrite_closure_expr(value, captures),
+        IREexpr::AssignIndex {
+            target,
+            index,
+            value,
+            ..
+        } => {
+            rewrite_closure_expr(target, captures);
+            rewrite_closure_expr(index, captures);
+            rewrite_closure_expr(value, captures);
+        }
+        IREexpr::AssignField { target, value, .. } => {
+            rewrite_closure_expr(target, captures);
+            rewrite_closure_expr(value, captures);
+        }
+        IREexpr::Call { args, .. } => {
+            for arg in args {
+                rewrite_closure_expr(arg, captures);
+            }
+        }
+        IREexpr::StructLit { fields, .. } => {
+            for field in fields {
+                rewrite_closure_expr(&mut field.value, captures);
+            }
+        }
+        IREexpr::EnumLit {
+            args, named_fields, ..
+        } => {
+            for arg in args {
+                rewrite_closure_expr(arg, captures);
+            }
+            if let Some(fields) = named_fields {
+                for (_, value) in fields {
+                    rewrite_closure_expr(value, captures);
+                }
+            }
+        }
+        IREexpr::TupleLit { elements, .. } => {
+            for elem in elements {
+                rewrite_closure_expr(elem, captures);
+            }
+        }
+        IREexpr::ArrayLiteral { elements, repeat } => {
+            for elem in elements {
+                rewrite_closure_expr(elem, captures);
+            }
+            if let Some((value, _)) = repeat {
+                rewrite_closure_expr(value, captures);
+            }
+        }
+        IREexpr::Match { expr, arms, .. } => {
+            rewrite_closure_expr(expr, captures);
+            for arm in arms {
+                if let Some(guard) = &mut arm.guard {
+                    rewrite_closure_expr(guard, captures);
+                }
+                rewrite_closure_body(&mut arm.body, captures);
+            }
+        }
+        IREexpr::Spawn { body, .. } => rewrite_closure_body(body, captures),
+        IREexpr::FnLiteral(lit) => rewrite_closure_body(&mut lit.body, captures),
+        IREexpr::Lit(_)
+        | IREexpr::BoolLiteral(_)
+        | IREexpr::FloatLiteral(_)
+        | IREexpr::IntLimit { .. }
+        | IREexpr::Var(_)
+        | IREexpr::StringLit(_) => {}
     }
 }
 
@@ -2253,6 +2738,7 @@ struct GenericRewrite<'a> {
     instantiations: &'a mut HashMap<String, (IRFunction, HashMap<String, Type>)>,
     structs: &'a [StructDecl],
     enums: &'a [EnumDecl],
+    drop_impls: &'a HashMap<String, String>,
 }
 
 fn bind_ir_pattern_vars(
@@ -2260,14 +2746,23 @@ fn bind_ir_pattern_vars(
     ty: &Type,
     structs: &[StructDecl],
     enums: &[EnumDecl],
+    drop_impls: &HashMap<String, String>,
     vars: &mut HashMap<String, Type>,
 ) {
     let original = ty.clone();
     let through_mut = matches!(ty, Type::Ref { mutable: true, .. });
     let through_ref = matches!(ty, Type::Ref { .. });
     let ty = peel_type_ref(ty);
+    let struct_map: HashMap<String, StructDecl> = structs
+        .iter()
+        .map(|decl| (decl.name.clone(), decl.clone()))
+        .collect();
+    let enum_map: HashMap<String, EnumDecl> = enums
+        .iter()
+        .map(|decl| (decl.name.clone(), decl.clone()))
+        .collect();
     let bind_ty = |field_ty: &Type| -> Type {
-        if through_ref && !crate::tc::TypeChecker::is_copy_type(field_ty) {
+        if through_ref && !crate::tc::type_is_copy(field_ty, &struct_map, &enum_map, drop_impls) {
             Type::Ref {
                 inner: Box::new(field_ty.clone()),
                 mutable: through_mut,
@@ -2289,7 +2784,7 @@ fn bind_ir_pattern_vars(
         }
         IRPattern::At { name, pattern } => {
             vars.insert(name.clone(), bound_value.clone());
-            bind_ir_pattern_vars(pattern, &bound_value, structs, enums, vars);
+            bind_ir_pattern_vars(pattern, &bound_value, structs, enums, drop_impls, vars);
         }
         IRPattern::Struct { name, fields, .. } => {
             let decl = structs.iter().find(|decl| decl.name == *name);
@@ -2301,7 +2796,14 @@ fn bind_ir_pattern_vars(
                     panic!("compiler bug: struct '{name}' has no field '{field_name}'");
                 };
                 let field_ty = substitute_type(&field.ty, &subst);
-                bind_ir_pattern_vars(field_pattern, &bind_ty(&field_ty), structs, enums, vars);
+                bind_ir_pattern_vars(
+                    field_pattern,
+                    &bind_ty(&field_ty),
+                    structs,
+                    enums,
+                    drop_impls,
+                    vars,
+                );
             }
         }
         IRPattern::Variant {
@@ -2336,7 +2838,14 @@ fn bind_ir_pattern_vars(
                         panic!("compiler bug: enum '{enum_name}::{variant}' has no field '{field_name}'")
                     });
                     let concrete = substitute_type(field_ty, &subst);
-                    bind_ir_pattern_vars(field_pattern, &bind_ty(&concrete), structs, enums, vars);
+                    bind_ir_pattern_vars(
+                        field_pattern,
+                        &bind_ty(&concrete),
+                        structs,
+                        enums,
+                        drop_impls,
+                        vars,
+                    );
                 }
             } else {
                 for (index, sub_pattern) in sub_patterns.iter().enumerate() {
@@ -2347,13 +2856,20 @@ fn bind_ir_pattern_vars(
                         panic!("compiler bug: enum '{enum_name}::{variant}' has no payload {index}")
                     });
                     let concrete = substitute_type(field_ty, &subst);
-                    bind_ir_pattern_vars(sub_pattern, &bind_ty(&concrete), structs, enums, vars);
+                    bind_ir_pattern_vars(
+                        sub_pattern,
+                        &bind_ty(&concrete),
+                        structs,
+                        enums,
+                        drop_impls,
+                        vars,
+                    );
                 }
             }
         }
         IRPattern::Or { alts } => {
             if let Some(alt) = alts.first() {
-                bind_ir_pattern_vars(alt, &bind_ty(&ty), structs, enums, vars);
+                bind_ir_pattern_vars(alt, &bind_ty(&ty), structs, enums, drop_impls, vars);
             }
         }
         IRPattern::Lit { .. } | IRPattern::Range { .. } | IRPattern::Wildcard | IRPattern::Rest => {
@@ -2381,6 +2897,7 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
         instantiations: &mut instantiations,
         structs: &program.structs,
         enums: &program.enums,
+        drop_impls: &program.drop_impls,
     };
 
     for func in &mut program.functions {
@@ -2408,7 +2925,12 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
         .cloned()
         .collect();
     functions.extend(monomorphized);
-    resolve_capability_callees(&mut functions, &program.structs, &program.enums);
+    resolve_capability_callees(
+        &mut functions,
+        &program.structs,
+        &program.enums,
+        &program.drop_impls,
+    );
     append_drop_instantiations(&generic_defs, &mut functions);
 
     let mut pending = functions;
@@ -2428,6 +2950,7 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
             instantiations: &mut instantiations,
             structs: &program.structs,
             enums: &program.enums,
+            drop_impls: &program.drop_impls,
         };
         for func in &mut pending {
             let mut var_types: HashMap<String, Type> = HashMap::new();
@@ -2447,9 +2970,19 @@ fn monomorphize_generic_functions(program: &mut IRProgram) {
             .map(|(template, subs)| instantiate_generic_function(&template, &subs))
             .filter(|func| !pending.iter().any(|existing| existing.name == func.name))
             .collect();
-        resolve_capability_callees(&mut pending, &program.structs, &program.enums);
+        resolve_capability_callees(
+            &mut pending,
+            &program.structs,
+            &program.enums,
+            &program.drop_impls,
+        );
         let mut more = more;
-        resolve_capability_callees(&mut more, &program.structs, &program.enums);
+        resolve_capability_callees(
+            &mut more,
+            &program.structs,
+            &program.enums,
+            &program.drop_impls,
+        );
         pending.extend(more);
     }
     panic!("compiler bug: generic instantiation did not finish within 8 rounds");
@@ -2529,6 +3062,7 @@ fn collect_drop_types_block(block: &IRBlock, out: &mut Vec<Type>) {
                 }
             }
             IRStmt::UnsafeBlock(block) => collect_drop_types_block(&block.body, out),
+            IRStmt::Scope(block) => collect_drop_types_block(&block.body, out),
             IRStmt::Spawn(spawn) => collect_drop_types_block(&spawn.body, out),
             IRStmt::Select(sel) => {
                 for arm in &sel.recv_arms {
@@ -2553,14 +3087,20 @@ fn collect_drop_types_block(block: &IRBlock, out: &mut Vec<Type>) {
 struct TypeLayouts<'a> {
     structs: &'a [StructDecl],
     enums: &'a [EnumDecl],
+    drop_impls: &'a HashMap<String, String>,
 }
 
 fn resolve_capability_callees(
     functions: &mut [IRFunction],
     structs: &[StructDecl],
     enums: &[EnumDecl],
+    drop_impls: &HashMap<String, String>,
 ) {
-    let layouts = TypeLayouts { structs, enums };
+    let layouts = TypeLayouts {
+        structs,
+        enums,
+        drop_impls,
+    };
     for func in functions {
         let mut vars: HashMap<String, Type> = HashMap::new();
         for param in &func.params {
@@ -2608,6 +3148,7 @@ fn resolve_capability_block(
                 }
             }
             IRStmt::UnsafeBlock(block) => resolve_capability_block(layouts, &mut block.body, vars),
+            IRStmt::Scope(block) => resolve_capability_block(layouts, &mut block.body, vars),
             IRStmt::Spawn(spawn) => {
                 let mut spawn_vars = vars.clone();
                 for (name, ty) in &spawn.captures {
@@ -2677,7 +3218,7 @@ fn resolve_capability_expr(
             resolve_capability_expr(layouts, value, vars);
         }
         IREexpr::Recv { channel, .. } => resolve_capability_expr(layouts, channel, vars),
-        IREexpr::Spawn { body, captures } => {
+        IREexpr::Spawn { body, captures, .. } => {
             let mut spawn_vars = vars.clone();
             for (name, ty) in captures {
                 spawn_vars.insert(name.clone(), ty.clone());
@@ -2720,6 +3261,7 @@ fn resolve_capability_expr(
                         ty,
                         layouts.structs,
                         layouts.enums,
+                        layouts.drop_impls,
                         &mut arm_vars,
                     );
                 }
@@ -2830,6 +3372,9 @@ fn rewrite_generic_calls_in_block(
             IRStmt::UnsafeBlock(unsafe_block) => {
                 rewrite_generic_calls_in_block(&mut unsafe_block.body, ctx, var_types);
             }
+            IRStmt::Scope(scope) => {
+                rewrite_generic_calls_in_block(&mut scope.body, ctx, var_types);
+            }
             IRStmt::Defer(expr) => {
                 rewrite_generic_calls_in_expr(expr, ctx, var_types);
             }
@@ -2916,7 +3461,7 @@ fn rewrite_generic_calls_in_expr(
         IREexpr::Recv { channel, .. } => {
             rewrite_generic_calls_in_expr(channel, ctx, var_types);
         }
-        IREexpr::Spawn { captures, body } => {
+        IREexpr::Spawn { captures, body, .. } => {
             let mut spawn_vars = var_types.clone();
             for (name, ty) in captures.iter() {
                 spawn_vars.insert(name.clone(), ty.clone());
@@ -2963,7 +3508,14 @@ fn rewrite_generic_calls_in_expr(
                 }
                 let mut arm_vars = var_types.clone();
                 if let Some(ty) = scrutinee_type.as_ref() {
-                    bind_ir_pattern_vars(&arm.pattern, ty, ctx.structs, ctx.enums, &mut arm_vars);
+                    bind_ir_pattern_vars(
+                        &arm.pattern,
+                        ty,
+                        ctx.structs,
+                        ctx.enums,
+                        ctx.drop_impls,
+                        &mut arm_vars,
+                    );
                 }
                 rewrite_generic_calls_in_block(&mut arm.body, ctx, &mut arm_vars);
             }
@@ -3035,7 +3587,9 @@ pub(crate) fn ir_expr_stored_type(expr: &IREexpr) -> Option<Type> {
         IREexpr::TupleLit { elem_types, .. } => Some(Type::Tuple {
             elements: elem_types.clone(),
         }),
-        IREexpr::Spawn { .. } => Some(Type::JoinHandle),
+        IREexpr::Spawn { result, .. } => Some(Type::JoinHandle {
+            result: Box::new(result.clone()),
+        }),
         IREexpr::Cast { target_type, .. } => Some(target_type.clone()),
         IREexpr::EnumLit { ty, .. } => Some(ty.clone()),
         IREexpr::Match { result_type, .. } => Some(result_type.clone()),
@@ -3146,8 +3700,22 @@ fn type_name_for_mangle(ty: &Type) -> String {
         Type::U64 => "u64".to_string(),
         Type::UInt => "uint".to_string(),
         Type::String | Type::Str => "str".to_string(),
-        Type::JoinHandle => "JoinHandle".to_string(),
+        Type::JoinHandle { result } => {
+            if matches!(result.as_ref(), Type::Void) {
+                "JoinHandle".to_string()
+            } else {
+                format!("JoinHandle_{}", type_name_for_mangle(result))
+            }
+        }
         Type::File => "File".to_string(),
+        Type::Allocator => "Allocator".to_string(),
+        Type::Endpoint {
+            protocol,
+            step,
+            dual,
+        } => {
+            format!("Endpoint_{protocol}_{step}_{}", if *dual { 1 } else { 0 })
+        }
         Type::Struct(name) | Type::Enum(name) => name.clone(),
         Type::Generic { name, params } => mangle_type_name(name, params),
         Type::Box { inner } => mangle_type_name("Box", std::slice::from_ref(inner)),
@@ -3253,6 +3821,7 @@ fn substitute_types_in_stmt(stmt: &IRStmt, substitutions: &HashMap<String, Type>
                 .map(|(name, ty)| (name.clone(), substitute_type(ty, substitutions)))
                 .collect(),
             body: substitute_types_in_block(&spawn.body, substitutions),
+            result: substitute_type(&spawn.result, substitutions),
         }),
         IRStmt::Select(sel) => IRStmt::Select(IRSelect {
             recv_arms: sel
@@ -3297,6 +3866,9 @@ fn substitute_types_in_stmt(stmt: &IRStmt, substitutions: &HashMap<String, Type>
         }),
         IRStmt::UnsafeBlock(unsafe_block) => IRStmt::UnsafeBlock(IRUnsafeBlock {
             body: substitute_types_in_block(&unsafe_block.body, substitutions),
+        }),
+        IRStmt::Scope(scope) => IRStmt::Scope(IRScope {
+            body: substitute_types_in_block(&scope.body, substitutions),
         }),
     }
 }
@@ -3381,12 +3953,17 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             channel: Box::new(substitute_types_in_expr(channel, substitutions)),
             elem_type: substitute_type(elem_type, substitutions),
         },
-        IREexpr::Spawn { captures, body } => IREexpr::Spawn {
+        IREexpr::Spawn {
+            captures,
+            body,
+            result,
+        } => IREexpr::Spawn {
             captures: captures
                 .iter()
                 .map(|(name, ty)| (name.clone(), substitute_type(ty, substitutions)))
                 .collect(),
             body: substitute_types_in_block(body, substitutions),
+            result: substitute_type(result, substitutions),
         },
         IREexpr::Index {
             target,
@@ -3575,6 +4152,12 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
                 .as_ref()
                 .map(|ty| substitute_type(ty, substitutions)),
             body: substitute_types_in_block(&lit.body, substitutions),
+            captures: lit
+                .captures
+                .iter()
+                .map(|(name, ty)| (name.clone(), substitute_type(ty, substitutions)))
+                .collect(),
+            env_struct: lit.env_struct.clone(),
         }),
     }
 }

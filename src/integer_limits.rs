@@ -183,6 +183,40 @@ pub fn builtin_hash_type_name(ty: &Type) -> Option<&'static str> {
     }
 }
 
+pub fn integer_value_fits(ty: &Type, value: i64) -> bool {
+    let Some(row) = integer_row(ty) else {
+        return false;
+    };
+    let bits = row.width.unwrap_or(32);
+    if row.signed {
+        if bits >= 64 {
+            return true;
+        }
+        let min = -1i64 << (bits - 1);
+        let max = (1i64 << (bits - 1)) - 1;
+        value >= min && value <= max
+    } else if bits >= 64 {
+        value >= 0
+    } else {
+        value >= 0 && (bits == 63 || value < (1i64 << bits))
+    }
+}
+
+pub fn integer_low_bits(value: i64, ty: &Type) -> Option<i64> {
+    let row = integer_row(ty)?;
+    let bits = row.width.unwrap_or(32);
+    if bits >= 64 {
+        return Some(value);
+    }
+    let mask = (1i64 << bits) - 1;
+    let low = value & mask;
+    if row.signed && (low & (1i64 << (bits - 1))) != 0 {
+        Some(low | !mask)
+    } else {
+        Some(low)
+    }
+}
+
 pub fn is_unsigned_integer(ty: &Type) -> bool {
     integer_row(ty).is_some_and(|row| !row.signed)
 }
