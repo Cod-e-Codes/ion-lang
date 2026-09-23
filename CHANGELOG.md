@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.3 - 2026-09-23
+
 - **Compiler**: Type substitution, the referenced-type walk, integer limits, builtin signatures, qualified lookup, the loan walk, and the parser's statement spans, identifier expect, and precedence loops each exist once. This impacts the compiler only. Ion source is unchanged. Generated C and the runtime entry points are unchanged, so programs and C from 0.3.2 do not need to be regenerated.
 - **Runtime**: The integer `ion_hash_*` wrappers stay `static inline` with the same names and the same mix. They are one macro in `runtime/ion_runtime.h`. `ion_hash_string` stays handwritten. This does not change the hash ABI.
 - **Tooling**: Editor completion reads the lexer `KEYWORDS` table, `EXTRA_COMPLETION_WORDS` for names that are not keywords, and `MIN`/`MAX` from the integer catalog. The TextMate grammar highlights `import`. This impacts highlighting and completion lists, not Ion programs.
