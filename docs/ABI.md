@@ -93,6 +93,8 @@ Stable beta expectations:
 Stable beta expectations:
 
 - `Box::new` allocates and owns a value.
+- `ion_box_alloc` and `ion_box_free` are `static inline` `malloc` and `free` in
+  `runtime/ion_runtime.h`. They are not symbols in `ion_runtime.o`.
 - `Box::unwrap` consumes the box, copies the payload out by value, and
   `ion_box_free`s the allocation. It does not drop `T`; the caller owns the copy.
 - Dropping a `Box<T>` drops the payload when `T` needs destruction, then
@@ -156,8 +158,9 @@ thread context.
 Stable beta expectations:
 
 - References do not cross channel or thread boundaries.
-- `ion_channel_new(elem_size, capacity, drop_fn, sender_out, receiver_out)` panics if `capacity < 1`. `drop_fn` may be NULL when `T` needs no destructor.
-- Runtime tracks `sender_count` and `receiver_count` separately. Last sender drop disconnects receive; last receiver drop disconnects send. Destroy runs when both counts are 0 and drops remaining buffered `T` through `drop_fn`.
+- `ion_channel_new(elem_size, capacity, drop_fn, sender_out, receiver_out)` panics if `capacity < 1`. The buffer has exactly `capacity` slots, including capacity 1. `drop_fn` may be NULL when `T` needs no destructor.
+- The success path of send and recv claims a slot with atomics and copies `elem_size` bytes. A pthread wait happens only when the buffer is full, empty, or disconnected, and only after the waiter is registered and the operation is retried. A successful operation notifies only when a waiter is registered.
+- Runtime tracks `sender_count` and `receiver_count` separately. There is one receiver. Last sender drop disconnects receive and wakes receivers. Last receiver drop disconnects send and wakes senders. Destroy runs only when both counts are 0, after in-progress copies finish, and drops remaining buffered `T` through `drop_fn` once.
 - `ion_channel_send` returns 0 on success and non-zero when no receiver remains (value is not copied). `ion_channel_recv` returns 0 on success and non-zero when disconnected and empty (`out_value` unchanged).
 - `ion_channel_try_send` returns 0 sent, `-1` closed, `-2` full. `ion_channel_try_recv` returns 0 message, `-1` closed, `-2` empty. Generated Ion maps those to `TrySendResult<T>` / `TryRecvResult<T>`.
 - `ion_channel_select` waits on `ion_select_arm_t` receivers and copies in the same `try_recv`. Waiters are registered before the empty recheck. `timeout_ms` is `0` (poll), `>0` (wait ms), or `-1` (wait forever). Values `< -1` panic.

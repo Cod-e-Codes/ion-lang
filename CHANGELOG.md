@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.4 - 2026-09-23
+
+- **Runtime**: Channel send and recv claim a slot with atomics and copy `elem_size` bytes on the success path. A pthread wait happens only when the buffer is full, empty, or disconnected, and only after the waiter is registered and the operation is retried. A successful operation notifies only when a waiter is registered. `ion_channel_send`, `ion_channel_recv`, `try_send`, `try_recv`, `select`, and the drop entry points keep the same status codes. This impacts every program that links the runtime: relink with this `ion_runtime.c`. Ion source is unchanged. Capacity, blocking, `SendResult`, `Option`, and select results are unchanged.
+- **Stdlib**: `HashMap` probes and `for_each` borrow slots with `Vec::get_ref`. `Vec::set` runs only for the index that receives a new pair or a tombstone. `remove` still moves the matching value out. `grow` still moves live pairs into the new vector. This impacts programs that import `stdlib/map.ion`: recompile them. Insert, remove, `len`, and `for_each` results are unchanged.
+- **Runtime**: `ion_box_alloc` and `ion_box_free` are `static inline` `malloc` and `free` in `runtime/ion_runtime.h`. The out-of-line definitions are gone. This impacts C that called those symbols from `ion_runtime.o`: recompile that C against this header. Ion source is unchanged. `Box::new` still panics on allocation failure. `Box::unwrap` still copies `T` out and frees the allocation without dropping `T`.
+- **Compiler**: A match on a reference to a generic enum uses that instantiation. A binding the type checker recorded as a reference stays a pointer when a type parameter is replaced by a copy type. Equality of a reference to a struct or enum compares the value. This impacts generated C for those matches and comparisons: recompile those programs. A concrete copy field such as `v + 0` on `&Status<int>` still binds `int`.
+- **Docs**: Spec section 8.10, ABI, BETA, and bug hotspots describe the channel success path, in-place map probes, and inline Box helpers.
+
 ## 0.3.3 - 2026-09-23
 
 - **Compiler**: Type substitution, the referenced-type walk, integer limits, builtin signatures, qualified lookup, the loan walk, and the parser's statement spans, identifier expect, and precedence loops each exist once. This impacts the compiler only. Ion source is unchanged. Generated C and the runtime entry points are unchanged, so programs and C from 0.3.2 do not need to be regenerated.

@@ -1423,6 +1423,36 @@ impl Codegen {
         }
     }
 
+    fn peel_eq_refs(ty: &Type) -> Type {
+        match ty {
+            Type::Ref { inner, .. } => Self::peel_eq_refs(inner),
+            other => other.clone(),
+        }
+    }
+
+    fn eq_ref_depth(ty: &Type) -> usize {
+        match ty {
+            Type::Ref { inner, .. } => 1 + Self::eq_ref_depth(inner),
+            _ => 0,
+        }
+    }
+
+    fn capture_structural_operand(&mut self, expr: &IREexpr) -> String {
+        let depth = self
+            .stored_expr_type(expr)
+            .map(|ty| Self::eq_ref_depth(&ty))
+            .unwrap_or(0);
+        let raw = String::new();
+        let old = std::mem::replace(&mut self.output, raw);
+        self.generate_expr(expr);
+        let raw = std::mem::replace(&mut self.output, old);
+        if depth == 0 {
+            raw
+        } else {
+            format!("({}({raw}))", "*".repeat(depth))
+        }
+    }
+
     fn capture_binop_operand(&mut self, expr: &IREexpr) -> String {
         let code = String::new();
         let old = std::mem::replace(&mut self.output, code);
@@ -1446,15 +1476,21 @@ impl Codegen {
             return;
         }
         if matches!(op, BinOp::Eq | BinOp::Ne)
-            && let Some(left_ty) = self.stored_expr_type(left)
+            && let (Some(left_ty), Some(right_ty)) =
+                (self.stored_expr_type(left), self.stored_expr_type(right))
         {
+            let left_owned = resolve_type_alias(&Self::peel_eq_refs(&left_ty), &self.type_aliases);
+            let right_owned =
+                resolve_type_alias(&Self::peel_eq_refs(&right_ty), &self.type_aliases);
+            if crate::tc::types_equal(&left_owned, &right_owned)
+                && self.needs_structural_eq(&left_owned)
+            {
+                self.generate_structural_equality(op, left, right, &left_owned, extra_parens);
+                return;
+            }
             let resolved = resolve_type_alias(&left_ty, &self.type_aliases);
             if let Type::Tuple { elements } = resolved {
                 self.generate_tuple_equality(op, left, right, &elements, extra_parens);
-                return;
-            }
-            if self.needs_structural_eq(&resolved) {
-                self.generate_structural_equality(op, left, right, &resolved, extra_parens);
                 return;
             }
         }
@@ -1651,8 +1687,8 @@ impl Codegen {
         extra_parens: bool,
     ) {
         let _ = extra_parens;
-        let left_code = self.capture_binop_operand(left);
-        let right_code = self.capture_binop_operand(right);
+        let left_code = self.capture_structural_operand(left);
+        let right_code = self.capture_structural_operand(right);
         self.write("({ ");
         let cmp = if matches!(ty, Type::Array { .. }) {
             self.value_eq_c_expr(&left_code, &right_code, ty)
@@ -4165,11 +4201,23 @@ impl Codegen {
         enum_decl: Option<&EnumDecl>,
         scrutinee_type: Option<&Type>,
     ) -> (String, Vec<Type>) {
-        if let Some(Type::Generic { name, params }) = scrutinee_type
-            && name == enum_type
-            && !params.is_empty()
-        {
-            return (mangle_type_name(name, params), params.clone());
+        let preferred = match scrutinee {
+            IREexpr::Var(name) => self
+                .lookup_var_type(name)
+                .or_else(|| scrutinee_type.cloned()),
+            _ => scrutinee_type.cloned(),
+        };
+        if let Some(ty) = preferred.as_ref() {
+            let peeled = match ty {
+                Type::Ref { inner, .. } => inner.as_ref(),
+                other => other,
+            };
+            if let Type::Generic { name, params } = peeled
+                && name == enum_type
+                && !params.is_empty()
+            {
+                return (mangle_type_name(name, params), params.clone());
+            }
         }
         if let IREexpr::Call {
             callee,
@@ -4292,7 +4340,7 @@ impl Codegen {
         through_ref: bool,
     ) {
         match pattern {
-            IRPattern::Binding { name } => {
+            IRPattern::Binding { name, .. } => {
                 self.emit_pattern_binding(ty, name, src, through_ref);
             }
             IRPattern::At { name, pattern } => {
@@ -4718,30 +4766,20 @@ impl Codegen {
                             };
 
                             match field_pattern {
-                                IRPattern::Binding { name } => {
-                                    // Extract field into binding variable
-                                    // For struct variants, fields are stored in variant_N.field_name
+                                IRPattern::Binding { name, ty } => {
+                                    let bound_ty = ty.clone().unwrap_or(concrete_field_ty.clone());
+                                    let src = format!(
+                                        "{}.data.variant_{}.{}",
+                                        match_var_name, variant_idx, field_name
+                                    );
                                     self.write_indent();
-                                    self.emit_binding_from_c_expr(
+                                    self.emit_ref_or_moved_field_binding(
+                                        &bound_ty,
                                         &concrete_field_ty,
                                         name,
-                                        &format!(
-                                            "{}.data.variant_{}.{}",
-                                            match_var_name, variant_idx, field_name
-                                        ),
+                                        &src,
+                                        (match_var_name, variant_idx, field_name),
                                     );
-                                    self.writeln("");
-                                    self.emit_match_scrutinee_payload_moved_out(
-                                        match_var_name,
-                                        variant_idx,
-                                        field_name,
-                                        &concrete_field_ty,
-                                    );
-                                    self.scope_register_binding(name, &concrete_field_ty);
-                                    if Self::should_silence_unused_binding(name, &concrete_field_ty)
-                                    {
-                                        self.emit_silence_unused_binding(name);
-                                    }
                                 }
                                 IRPattern::Wildcard => {
                                     // Wildcard - don't extract, field is ignored
@@ -4774,43 +4812,21 @@ impl Codegen {
                     // Get the pattern for this payload position (or use wildcard)
                     if let Some(sub_pattern) = sub_patterns.get(i) {
                         match sub_pattern {
-                            IRPattern::Binding { name } => {
-                                // A reference payload is the pointer. Do not load
-                                // or drop the referent. Owned payloads still move out.
+                            IRPattern::Binding { name, ty } => {
+                                let bound_ty = ty.clone().unwrap_or(concrete_payload_ty.clone());
                                 let payload_field = format!("arg{i}");
+                                let src = format!(
+                                    "{}.data.variant_{}.{}",
+                                    match_var_name, variant_idx, payload_field
+                                );
                                 self.write_indent();
-                                if matches!(concrete_payload_ty, Type::Ref { .. }) {
-                                    self.write(&format!(
-                                        "{} {} = {}.data.variant_{}.{};",
-                                        self.type_to_c(&concrete_payload_ty),
-                                        name,
-                                        match_var_name,
-                                        variant_idx,
-                                        payload_field
-                                    ));
-                                    self.writeln("");
-                                    self.scope_register_binding(name, &concrete_payload_ty);
-                                } else {
-                                    self.emit_binding_from_c_expr(
-                                        &concrete_payload_ty,
-                                        name,
-                                        &format!(
-                                            "{}.data.variant_{}.{}",
-                                            match_var_name, variant_idx, payload_field
-                                        ),
-                                    );
-                                    self.writeln("");
-                                    self.emit_match_scrutinee_payload_moved_out(
-                                        match_var_name,
-                                        variant_idx,
-                                        &payload_field,
-                                        &concrete_payload_ty,
-                                    );
-                                    self.scope_register_binding(name, &concrete_payload_ty);
-                                }
-                                if Self::should_silence_unused_binding(name, &concrete_payload_ty) {
-                                    self.emit_silence_unused_binding(name);
-                                }
+                                self.emit_ref_or_moved_field_binding(
+                                    &bound_ty,
+                                    &concrete_payload_ty,
+                                    name,
+                                    &src,
+                                    (match_var_name, variant_idx, &payload_field),
+                                );
                             }
                             IRPattern::Wildcard => {
                                 // Wildcard - don't extract, payload is ignored
@@ -4830,6 +4846,41 @@ impl Codegen {
                     }
                 }
             }
+        }
+    }
+
+    /// Bind a match field. A reference binding whose field is an owned value
+    /// points at that field and does not move it. A field that is already a
+    /// reference is the pointer. Anything else is copied or moved out.
+    fn emit_ref_or_moved_field_binding(
+        &mut self,
+        bound_ty: &Type,
+        field_ty: &Type,
+        name: &str,
+        src: &str,
+        moved_out: (&str, usize, &str),
+    ) {
+        if matches!(bound_ty, Type::Ref { .. }) && !matches!(field_ty, Type::Ref { .. }) {
+            self.write(&format!("{} {name} = &({src});", self.type_to_c(bound_ty)));
+            self.writeln("");
+            self.scope_register_binding(name, bound_ty);
+        } else if matches!(bound_ty, Type::Ref { .. }) {
+            self.write(&format!("{} {name} = {src};", self.type_to_c(bound_ty)));
+            self.writeln("");
+            self.scope_register_binding(name, bound_ty);
+        } else {
+            self.emit_binding_from_c_expr(bound_ty, name, src);
+            self.writeln("");
+            self.emit_match_scrutinee_payload_moved_out(
+                moved_out.0,
+                moved_out.1,
+                moved_out.2,
+                bound_ty,
+            );
+            self.scope_register_binding(name, bound_ty);
+        }
+        if Self::should_silence_unused_binding(name, bound_ty) {
+            self.emit_silence_unused_binding(name);
         }
     }
 
@@ -4865,7 +4916,7 @@ impl Codegen {
                 self.write_indent();
                 self.writeln("}");
             }
-            IRPattern::Binding { name } => {
+            IRPattern::Binding { name, .. } => {
                 self.write_indent();
                 self.writeln(&format!("default: {{ // binding {}", name));
                 self.indent_level += 1;

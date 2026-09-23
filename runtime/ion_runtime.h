@@ -119,8 +119,11 @@ int ion_channel_new(size_t elem_size, int capacity, void (*drop_fn)(void *),
                     ion_sender_t *sender_out, ion_receiver_t *receiver_out);
 
 /**
- * Sends a value into the channel using a sender handle. Blocks if the buffer is
- * full and a receiver still exists.
+ * Sends a value into the channel using a sender handle. The success path claims
+ * a buffer slot with atomics and copies elem_size bytes. It blocks if the buffer
+ * is full and a receiver still exists. A pthread wait is used only when the
+ * buffer is full, empty, or disconnected, and only after the waiter is
+ * registered and the claim is retried.
  *
  * @param sender Sender handle
  * @param value Pointer to the value to send (must be elem_size bytes)
@@ -129,8 +132,11 @@ int ion_channel_new(size_t elem_size, int capacity, void (*drop_fn)(void *),
 int ion_channel_send(const ion_sender_t *sender, const void *value);
 
 /**
- * Receives a value from the channel using a receiver handle. Blocks if the
- * buffer is empty and a sender still exists.
+ * Receives a value from the channel using a receiver handle. The success path
+ * claims a buffer slot with atomics and copies elem_size bytes. It blocks if the
+ * buffer is empty and a sender still exists. A pthread wait is used only when
+ * the buffer is full, empty, or disconnected, and only after the waiter is
+ * registered and the claim is retried.
  *
  * @param receiver Receiver handle
  * @param out_value Pointer to buffer to write the received value (must be
@@ -200,19 +206,16 @@ void ion_channel_receiver_drop(ion_receiver_t *receiver);
 // ============================================================================
 
 /**
- * Allocates raw memory on the heap for Box<T> and other collection types.
- *
- * @param size Number of bytes to allocate
- * @return Pointer to allocated memory, or NULL on failure
+ * Allocates raw memory on the heap for Box<T>. Inline so the C compiler sees
+ * malloc. Returns NULL on failure. Callers panic on NULL.
  */
-void *ion_box_alloc(size_t size);
+static inline void *ion_box_alloc(size_t size) { return malloc(size); }
 
 /**
- * Frees memory previously allocated by ion_box_alloc.
- *
- * @param ptr Pointer to memory to free (must be from ion_box_alloc)
+ * Frees memory previously allocated by ion_box_alloc. Inline so the C compiler
+ * sees free.
  */
-void ion_box_free(void *ptr);
+static inline void ion_box_free(void *ptr) { free(ptr); }
 
 // ============================================================================
 // Vec Type (Generic Vector)

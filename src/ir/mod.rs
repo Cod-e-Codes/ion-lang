@@ -418,7 +418,10 @@ fn pattern_to_ir(pattern: &Pattern) -> IRPattern {
             }),
         },
         Pattern::Wildcard { .. } => IRPattern::Wildcard,
-        Pattern::Binding { name, .. } => IRPattern::Binding { name: name.clone() },
+        Pattern::Binding { name, .. } => IRPattern::Binding {
+            name: name.clone(),
+            ty: None,
+        },
         Pattern::Lit { lit, .. } => IRPattern::Lit { lit: lit.clone() },
         Pattern::Range { lo, hi, .. } => IRPattern::Range { lo: *lo, hi: *hi },
         Pattern::Or { alts, .. } => IRPattern::Or {
@@ -483,6 +486,12 @@ pub enum IRPattern {
     Wildcard,
     Binding {
         name: String,
+        /// Type of this name in the arm, from the same ref-pattern rule as the
+        /// type checker. `None` for bindings synthesized later; codegen then
+        /// uses the enum field type. Substitution replaces type parameters in
+        /// `Some`, so a parameter bound as `&V` stays a reference after `V`
+        /// becomes a copy type.
+        ty: Option<Type>,
     },
     Lit {
         lit: crate::ast::PatLit,
@@ -542,6 +551,99 @@ fn peel_type_ref(ty: &Type) -> Type {
     }
 }
 
+/// Record the type each binding has in this arm. A match through `&T` / `&mut T`
+/// binds a non-copy field as a reference, including a type parameter. Later
+/// substitution replaces the parameter and leaves the reference in place.
+fn assign_pattern_binding_types(
+    pattern: &mut IRPattern,
+    scrutinee_ty: &Type,
+    ctx: &LoweringContext,
+) {
+    let through_mut = matches!(scrutinee_ty, Type::Ref { mutable: true, .. });
+    let through_ref = matches!(scrutinee_ty, Type::Ref { .. });
+    let peeled = peel_type_ref(scrutinee_ty);
+    let bind_field = |field_ty: &Type| -> Type {
+        if through_ref && !crate::tc::TypeChecker::is_copy_type(field_ty) {
+            Type::Ref {
+                inner: Box::new(field_ty.clone()),
+                mutable: through_mut,
+            }
+        } else {
+            field_ty.clone()
+        }
+    };
+    match pattern {
+        IRPattern::Binding { ty, .. } => {
+            *ty = Some(if matches!(scrutinee_ty, Type::Ref { .. }) {
+                scrutinee_ty.clone()
+            } else {
+                bind_field(&peeled)
+            });
+        }
+        IRPattern::At { pattern, .. } => {
+            assign_pattern_binding_types(pattern, scrutinee_ty, ctx);
+        }
+        IRPattern::Or { alts } => {
+            for alt in alts {
+                assign_pattern_binding_types(alt, scrutinee_ty, ctx);
+            }
+        }
+        IRPattern::Struct { name, fields, .. } => {
+            let decl = ctx.struct_decls.get(name).cloned();
+            let subst = decl
+                .as_ref()
+                .map(|decl| struct_subst(decl, &peeled))
+                .unwrap_or_default();
+            for (field_name, field_pattern) in fields {
+                let field_ty = decl.as_ref().and_then(|decl| {
+                    decl.fields
+                        .iter()
+                        .find(|field| field.name == *field_name)
+                        .map(|field| ctx.types.resolve(&substitute_type(&field.ty, &subst)))
+                });
+                let Some(field_ty) = field_ty else {
+                    panic!("compiler bug: struct '{name}' has no field '{field_name}'");
+                };
+                assign_pattern_binding_types(field_pattern, &bind_field(&field_ty), ctx);
+            }
+        }
+        IRPattern::Variant {
+            enum_name,
+            variant,
+            sub_patterns,
+            named_fields,
+        } => {
+            let Some(decl) = ctx.enum_decls.get(enum_name).cloned() else {
+                return;
+            };
+            let subst = generic_subst_from_scrutinee(&decl, &peeled);
+            let Some(vdecl) = decl.variants.iter().find(|v| v.name == *variant).cloned() else {
+                return;
+            };
+            if let Some(named) = named_fields {
+                let Some(fields) = vdecl.named_fields.clone() else {
+                    return;
+                };
+                for (fname, sub) in named {
+                    if let Some((_, ty)) = fields.iter().find(|(n, _)| n == fname) {
+                        let concrete = ctx.types.resolve(&substitute_type(ty, &subst));
+                        assign_pattern_binding_types(sub, &bind_field(&concrete), ctx);
+                    }
+                }
+            } else {
+                for (i, sub) in sub_patterns.iter_mut().enumerate() {
+                    if let Some(ty) = vdecl.payload_types.get(i) {
+                        let concrete = ctx.types.resolve(&substitute_type(ty, &subst));
+                        assign_pattern_binding_types(sub, &bind_field(&concrete), ctx);
+                    }
+                }
+            }
+        }
+        IRPattern::Wildcard | IRPattern::Lit { .. } | IRPattern::Range { .. } | IRPattern::Rest => {
+        }
+    }
+}
+
 fn ir_pattern_has_nested_variant(pattern: &IRPattern) -> bool {
     match pattern {
         IRPattern::Variant {
@@ -593,7 +695,7 @@ fn pattern_ctor_key(pattern: &IRPattern) -> String {
     match pattern {
         IRPattern::Variant { variant, .. } => format!("v:{variant}"),
         IRPattern::Wildcard => "_".to_string(),
-        IRPattern::Binding { name } => format!("b:{name}"),
+        IRPattern::Binding { name, .. } => format!("b:{name}"),
         IRPattern::At { pattern, .. } => pattern_ctor_key(pattern),
         IRPattern::Or { .. } => "or".to_string(),
         IRPattern::Struct { name, .. } => format!("s:{name}"),
@@ -691,14 +793,20 @@ fn replace_nested_slots_with_bindings(
         match slot {
             NestedSlot::Pos(i) => {
                 if let Some(p) = sub_patterns.get_mut(*i) {
-                    *p = IRPattern::Binding { name: temp.clone() };
+                    *p = IRPattern::Binding {
+                        name: temp.clone(),
+                        ty: None,
+                    };
                 }
             }
             NestedSlot::Named(name) => {
                 if let Some(fields) = named_fields.as_mut()
                     && let Some((_, p)) = fields.iter_mut().find(|(n, _)| n == name)
                 {
-                    *p = IRPattern::Binding { name: temp.clone() };
+                    *p = IRPattern::Binding {
+                        name: temp.clone(),
+                        ty: None,
+                    };
                 }
             }
         }
@@ -713,7 +821,7 @@ fn replace_nested_slots_with_bindings(
 
 fn catch_all_body_binding_outer(ca: &IRMatchArm, scrutinee_ty: Option<&Type>) -> IRBlock {
     match &ca.pattern {
-        IRPattern::Binding { name } => {
+        IRPattern::Binding { name, .. } => {
             let ty = scrutinee_ty
                 .cloned()
                 .unwrap_or_else(|| Type::Enum("Unknown".to_string()));
@@ -1471,6 +1579,7 @@ impl IRBuilder {
                                         variant: "Some".to_string(),
                                         sub_patterns: vec![IRPattern::Binding {
                                             name: for_stmt.var_name.clone(),
+                                            ty: None,
                                         }],
                                         named_fields: None,
                                     },
@@ -1577,6 +1686,7 @@ fn lower_try_expr(try_expr: &TryExpr, ctx: &LoweringContext) -> IREexpr {
             variant: success_variant,
             sub_patterns: vec![IRPattern::Binding {
                 name: ok_name.clone(),
+                ty: None,
             }],
             named_fields: None,
         },
@@ -1610,7 +1720,10 @@ fn lower_try_expr(try_expr: &TryExpr, ctx: &LoweringContext) -> IREexpr {
             enum_name: enum_name.clone(),
             variant: error_variant,
             sub_patterns: if error_has_payload {
-                vec![IRPattern::Binding { name: err_name }]
+                vec![IRPattern::Binding {
+                    name: err_name,
+                    ty: None,
+                }]
             } else {
                 Vec::new()
             },
@@ -1844,13 +1957,18 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
 
             let scrutinee_type = ctx.resolve_expr_type(&match_expr.expr);
             let mut next_temp = 0;
-            let arms = specialize_nested_match_arms(
+            let mut arms = specialize_nested_match_arms(
                 arms,
                 &enum_name,
                 scrutinee_type.as_ref(),
                 ctx,
                 &mut next_temp,
             );
+            if let Some(ty) = scrutinee_type.as_ref() {
+                for arm in &mut arms {
+                    assign_pattern_binding_types(&mut arm.pattern, ty, ctx);
+                }
+            }
             IREexpr::Match {
                 expr: Box::new(build_expr_with_ctx(&match_expr.expr, ctx)),
                 enum_type: enum_name,
@@ -2166,7 +2284,7 @@ fn bind_ir_pattern_vars(
         bind_ty(&ty)
     };
     match pattern {
-        IRPattern::Binding { name } => {
+        IRPattern::Binding { name, .. } => {
             vars.insert(name.clone(), bound_value);
         }
         IRPattern::At { name, pattern } => {
@@ -3183,6 +3301,55 @@ fn substitute_types_in_stmt(stmt: &IRStmt, substitutions: &HashMap<String, Type>
     }
 }
 
+fn substitute_pattern(pattern: &IRPattern, substitutions: &HashMap<String, Type>) -> IRPattern {
+    match pattern {
+        IRPattern::Binding { name, ty } => IRPattern::Binding {
+            name: name.clone(),
+            ty: ty.as_ref().map(|ty| substitute_type(ty, substitutions)),
+        },
+        IRPattern::Variant {
+            enum_name,
+            variant,
+            sub_patterns,
+            named_fields,
+        } => IRPattern::Variant {
+            enum_name: enum_name.clone(),
+            variant: variant.clone(),
+            sub_patterns: sub_patterns
+                .iter()
+                .map(|pattern| substitute_pattern(pattern, substitutions))
+                .collect(),
+            named_fields: named_fields.as_ref().map(|fields| {
+                fields
+                    .iter()
+                    .map(|(name, pattern)| {
+                        (name.clone(), substitute_pattern(pattern, substitutions))
+                    })
+                    .collect()
+            }),
+        },
+        IRPattern::At { name, pattern } => IRPattern::At {
+            name: name.clone(),
+            pattern: Box::new(substitute_pattern(pattern, substitutions)),
+        },
+        IRPattern::Or { alts } => IRPattern::Or {
+            alts: alts
+                .iter()
+                .map(|pattern| substitute_pattern(pattern, substitutions))
+                .collect(),
+        },
+        IRPattern::Struct { name, fields, rest } => IRPattern::Struct {
+            name: name.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, pattern)| (name.clone(), substitute_pattern(pattern, substitutions)))
+                .collect(),
+            rest: *rest,
+        },
+        other => other.clone(),
+    }
+}
+
 fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type>) -> IREexpr {
     match expr {
         IREexpr::Call {
@@ -3324,7 +3491,7 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
             arms: arms
                 .iter()
                 .map(|arm| IRMatchArm {
-                    pattern: arm.pattern.clone(),
+                    pattern: substitute_pattern(&arm.pattern, substitutions),
                     guard: arm
                         .guard
                         .as_ref()

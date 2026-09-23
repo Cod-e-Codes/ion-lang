@@ -38,41 +38,48 @@ fn place<K: Hash + Eq, V>(slots: &mut Vec<Slot<K, V>>, cap: int, key: K, value: 
         if idx < 0 {
             idx = idx + cap;
         }
-        let taken: Option<Slot<K, V>> = Vec::get(slots, idx);
-        match taken {
+        let mut kind: int = 0;
+        match Vec::get_ref(slots, idx) {
             Option::Some(slot) => {
                 match slot {
                     Slot::Empty => {
-                        let mut dest: int = idx;
-                        if first_tomb >= 0 {
-                            dest = first_tomb;
-                        }
-                        if dest != idx {
-                            Vec::set(slots, idx, Slot::Empty);
-                            Vec::set(slots, dest, Slot::Full { key: key, value: value });
-                            return 2;
-                        }
-                        Vec::set(slots, dest, Slot::Full { key: key, value: value });
-                        return 1;
+                        kind = 1;
                     }
                     Slot::Tomb => {
-                        if first_tomb < 0 {
-                            first_tomb = idx;
-                        }
-                        let _ = Vec::set(slots, idx, Slot::Tomb);
+                        kind = 2;
                     }
-                    Slot::Full { key: found, value: old } => {
-                        if found == key {
-                            let _ = Vec::set(slots, idx, Slot::Full { key: found, value: value });
-                            return 0;
+                    Slot::Full { key: found, value: _old } => {
+                        if found == &key {
+                            kind = 3;
+                        } else {
+                            kind = 4;
                         }
-                        let _ = Vec::set(slots, idx, Slot::Full { key: found, value: old });
                     }
                 }
             }
             Option::None => {
                 return -1;
             }
+        }
+        if kind == 1 {
+            let mut dest: int = idx;
+            if first_tomb >= 0 {
+                dest = first_tomb;
+            }
+            let _ = Vec::set(slots, dest, Slot::Full { key: key, value: value });
+            if dest != idx {
+                return 2;
+            }
+            return 1;
+        }
+        if kind == 2 {
+            if first_tomb < 0 {
+                first_tomb = idx;
+            }
+        }
+        if kind == 3 {
+            let _ = Vec::set(slots, idx, Slot::Full { key: key, value: value });
+            return 0;
         }
         n = n + 1;
     }
@@ -93,18 +100,33 @@ fn grow<K: Hash + Eq, V>(map: &mut HashMap<K, V>) {
     }
     i = 0;
     while i < map.cap {
-        let taken: Option<Slot<K, V>> = Vec::get(map.slots, i);
-        match taken {
+        let mut live: int = 0;
+        match Vec::get_ref(map.slots, i) {
             Option::Some(slot) => {
                 match slot {
-                    Slot::Full { key: k, value: v } => {
-                        let _ = place(&mut bigger, new_cap, k, v);
+                    Slot::Full { key: _k, value: _v } => {
+                        live = 1;
                     }
                     Slot::Empty => {}
                     Slot::Tomb => {}
                 }
             }
             Option::None => {}
+        }
+        if live == 1 {
+            let taken: Option<Slot<K, V>> = Vec::get(map.slots, i);
+            match taken {
+                Option::Some(slot) => {
+                    match slot {
+                        Slot::Full { key: k, value: v } => {
+                            let _ = place(&mut bigger, new_cap, k, v);
+                        }
+                        Slot::Empty => {}
+                        Slot::Tomb => {}
+                    }
+                }
+                Option::None => {}
+            }
         }
         i = i + 1;
     }
@@ -135,29 +157,46 @@ pub fn remove<K: Hash + Eq, V>(map: &mut HashMap<K, V>, key: K) -> Option<V> {
         if idx < 0 {
             idx = idx + cap;
         }
-        let taken: Option<Slot<K, V>> = Vec::get(map.slots, idx);
-        match taken {
+        let mut hit: int = 0;
+        match Vec::get_ref(map.slots, idx) {
             Option::Some(slot) => {
                 match slot {
                     Slot::Empty => {
-                        let _ = Vec::set(map.slots, idx, Slot::Empty);
                         return Option::None;
                     }
-                    Slot::Tomb => {
-                        let _ = Vec::set(map.slots, idx, Slot::Tomb);
-                    }
-                    Slot::Full { key: found, value: old } => {
-                        if found == key {
-                            let _ = Vec::set(map.slots, idx, Slot::Tomb);
-                            map.len = map.len - 1;
-                            return Option::Some(old);
+                    Slot::Tomb => {}
+                    Slot::Full { key: found, value: _old } => {
+                        if found == &key {
+                            hit = 1;
                         }
-                        let _ = Vec::set(map.slots, idx, Slot::Full { key: found, value: old });
                     }
                 }
             }
             Option::None => {
                 return Option::None;
+            }
+        }
+        if hit == 1 {
+            let taken: Option<Slot<K, V>> = Vec::get(map.slots, idx);
+            match taken {
+                Option::Some(slot) => {
+                    match slot {
+                        Slot::Full { key: _found, value: old } => {
+                            let _ = Vec::set(map.slots, idx, Slot::Tomb);
+                            map.len = map.len - 1;
+                            return Option::Some(old);
+                        }
+                        Slot::Empty => {
+                            return Option::None;
+                        }
+                        Slot::Tomb => {
+                            return Option::None;
+                        }
+                    }
+                }
+                Option::None => {
+                    return Option::None;
+                }
             }
         }
         n = n + 1;
@@ -173,20 +212,14 @@ pub fn for_each<K, V>(map: &mut HashMap<K, V>, f: fn(&V) -> int) {
     let cap: int = map.cap;
     let mut i: int = 0;
     while i < cap {
-        let taken: Option<Slot<K, V>> = Vec::get(map.slots, i);
-        match taken {
+        match Vec::get_ref(map.slots, i) {
             Option::Some(slot) => {
                 match slot {
-                    Slot::Full { key: k, value: v } => {
-                        f(&v);
-                        Vec::set(map.slots, i, Slot::Full { key: k, value: v });
+                    Slot::Full { key: _k, value: v } => {
+                        f(v);
                     }
-                    Slot::Empty => {
-                        Vec::set(map.slots, i, Slot::Empty);
-                    }
-                    Slot::Tomb => {
-                        Vec::set(map.slots, i, Slot::Tomb);
-                    }
+                    Slot::Empty => {}
+                    Slot::Tomb => {}
                 }
             }
             Option::None => {}
