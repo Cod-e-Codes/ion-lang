@@ -772,6 +772,29 @@ fn substitute_type_len(ty: &mut Type, bindings: &HashMap<String, i64>) {
         | Type::RawPtr { inner }
         | Type::Box { inner }
         | Type::Slice { inner } => substitute_type_len(inner, bindings),
+        Type::Vec { elem_type }
+        | Type::Channel { elem_type }
+        | Type::Sender { elem_type }
+        | Type::Receiver { elem_type } => substitute_type_len(elem_type, bindings),
+        Type::Tuple { elements } => {
+            for elem in elements {
+                substitute_type_len(elem, bindings);
+            }
+        }
+        Type::Generic { params, .. } => {
+            for param in params {
+                substitute_type_len(param, bindings);
+            }
+        }
+        Type::Fn {
+            params,
+            return_type,
+        } => {
+            for param in params {
+                substitute_type_len(param, bindings);
+            }
+            substitute_type_len(return_type, bindings);
+        }
         _ => {}
     }
 }

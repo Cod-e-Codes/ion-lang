@@ -1,149 +1,23 @@
 use crate::ast::Span;
 use crate::compiler::CompileError;
 use crate::tc::{
-    LspCompletionItem, LspDocumentSymbol, LspInfo, LspSymbolKind, LspTarget, type_to_string,
+    BUILTIN_SIGNATURES, LspCompletionItem, LspDocumentSymbol, LspInfo, LspSymbolKind, LspTarget,
+    type_to_string,
 };
 use tower_lsp::lsp_types::*;
 
-pub const KEYWORDS: &[&str] = &[
-    "fn",
-    "let",
-    "mut",
-    "struct",
-    "enum",
-    "if",
-    "else",
-    "return",
-    "break",
-    "continue",
-    "while",
-    "for",
+/// Completion words that are not lexer keywords.
+const EXTRA_COMPLETION_WORDS: &[&str] = &[
     "in",
-    "loop",
-    "match",
-    "spawn",
-    "select",
-    "defer",
-    "unsafe",
-    "pub",
-    "import",
-    "extern",
-    "type",
-    "capability",
-    "const",
-    "impl",
-    "as",
-    "true",
-    "false",
-    "int",
-    "i8",
-    "i16",
-    "i32",
-    "i64",
-    "u8",
-    "u16",
-    "u32",
-    "u64",
-    "uint",
-    "f32",
-    "f64",
-    "bool",
     "void",
-    "String",
-    "Vec",
-    "Box",
-    "Slice",
     "Sender",
     "Receiver",
     "SendResult",
     "TrySendResult",
     "TryRecvResult",
     "SetResult",
-    "channel",
-    "send",
-    "recv",
     "clone_sender",
     "JoinHandle",
-    "File",
-];
-
-pub const BUILTINS: &[&str] = &[
-    "Vec::new",
-    "Vec::with_capacity",
-    "Vec::push",
-    "Vec::pop",
-    "Vec::len",
-    "Vec::capacity",
-    "Vec::get",
-    "Vec::get_ref",
-    "Vec::set",
-    "Slice::len",
-    "Slice::get_ref",
-    "String::new",
-    "String::from",
-    "String::from_utf8",
-    "String::get",
-    "String::len",
-    "String::push_str",
-    "String::push_byte",
-    "Box::new",
-    "Box::unwrap",
-    "channel",
-    "clone_sender",
-    "send",
-    "recv",
-    "try_send",
-    "try_recv",
-    "join",
-    "Arena::get_ref",
-    "File::open",
-    "File::create",
-    "File::read",
-    "File::write",
-    "File::close",
-];
-
-pub const BUILTIN_TYPE_MEMBERS: &[(&str, &[&str])] = &[
-    (
-        "Vec",
-        &[
-            "new",
-            "with_capacity",
-            "push",
-            "pop",
-            "len",
-            "capacity",
-            "get",
-            "get_ref",
-            "set",
-        ],
-    ),
-    (
-        "String",
-        &[
-            "new",
-            "from",
-            "from_utf8",
-            "get",
-            "len",
-            "push_str",
-            "push_byte",
-        ],
-    ),
-    ("Slice", &["len", "get_ref"]),
-    ("Arena", &["get_ref"]),
-    ("File", &["open", "create", "read", "write", "close"]),
-    ("Box", &["new", "unwrap"]),
-    ("int", &["MIN", "MAX"]),
-    ("i8", &["MIN", "MAX"]),
-    ("i16", &["MIN", "MAX"]),
-    ("i32", &["MIN", "MAX"]),
-    ("i64", &["MIN", "MAX"]),
-    ("u8", &["MIN", "MAX"]),
-    ("u16", &["MIN", "MAX"]),
-    ("u32", &["MIN", "MAX"]),
-    ("u64", &["MIN", "MAX"]),
-    ("uint", &["MIN", "MAX"]),
 ];
 
 pub fn span_to_range(span: &Span) -> Range {
@@ -278,6 +152,19 @@ pub fn completion_context(text: &str, position: Position) -> CompletionContext {
     CompletionContext::TopLevel { prefix }
 }
 
+fn extra_completion_words() -> Vec<&'static str> {
+    let mut words: Vec<&'static str> = EXTRA_COMPLETION_WORDS.to_vec();
+    for row in crate::integer_limits::INTEGERS {
+        if !crate::lexer::KEYWORDS
+            .iter()
+            .any(|(name, _)| *name == row.name)
+        {
+            words.push(row.name);
+        }
+    }
+    words
+}
+
 fn matches_prefix(label: &str, prefix: &str) -> bool {
     prefix.is_empty() || label.starts_with(prefix)
 }
@@ -307,17 +194,26 @@ pub fn completion_items(
             return items;
         }
         CompletionContext::TypeMembers { type_name, .. } => {
-            if let Some(members) = BUILTIN_TYPE_MEMBERS
-                .iter()
-                .find(|(name, _)| *name == type_name)
-            {
-                for member in members.1 {
-                    let label = format!("{type_name}::{member}");
+            for (name, _) in BUILTIN_SIGNATURES {
+                let Some(member) = name.strip_prefix(&format!("{type_name}::")) else {
+                    continue;
+                };
+                if matches_prefix(member, prefix) {
+                    items.push(CompletionItem {
+                        label: member.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        detail: Some((*name).to_string()),
+                        ..Default::default()
+                    });
+                }
+            }
+            if crate::integer_limits::integer_row_by_name(type_name).is_some() {
+                for member in ["MIN", "MAX"] {
                     if matches_prefix(member, prefix) {
                         items.push(CompletionItem {
                             label: member.to_string(),
                             kind: Some(CompletionItemKind::METHOD),
-                            detail: Some(label),
+                            detail: Some(format!("{type_name}::{member}")),
                             ..Default::default()
                         });
                     }
@@ -344,7 +240,7 @@ pub fn completion_items(
         CompletionContext::TopLevel { .. } => {}
     }
 
-    for kw in KEYWORDS {
+    for (kw, _) in crate::lexer::KEYWORDS {
         if matches_prefix(kw, prefix) {
             items.push(CompletionItem {
                 label: kw.to_string(),
@@ -353,7 +249,16 @@ pub fn completion_items(
             });
         }
     }
-    for builtin in BUILTINS {
+    for word in extra_completion_words() {
+        if matches_prefix(word, prefix) {
+            items.push(CompletionItem {
+                label: word.to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            });
+        }
+    }
+    for (builtin, _) in BUILTIN_SIGNATURES {
         if matches_prefix(builtin, prefix) {
             items.push(CompletionItem {
                 label: builtin.to_string(),

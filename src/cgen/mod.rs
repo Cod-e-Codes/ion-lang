@@ -9,13 +9,19 @@ use self::types::{
 };
 
 use crate::ast::{
-    BinOp, EnumDecl, EnumVariant, ExternBlock, PatLit, Program, Span, StructDecl, Type,
-    TypeAliasDecl, TypeParam, UnOp,
+    BinOp, EnumDecl, ExternBlock, PatLit, Program, Span, StructDecl, Type, TypeAliasDecl,
+    TypeParam, UnOp, synthetic_option_enum,
 };
 use crate::ir::*;
 use crate::tc::TypeInfo;
 use crate::types_util::{is_ref_to_vec, ref_to_vec_elem};
 use std::collections::{HashMap, HashSet};
+
+type GenericInstantiationGroups = (
+    Vec<(StructDecl, Vec<Type>)>,
+    Vec<(EnumDecl, Vec<Type>)>,
+    Vec<(EnumDecl, Vec<Type>)>,
+);
 
 enum BoundsCheck {
     Fixed(usize),
@@ -25,6 +31,18 @@ enum BoundsCheck {
 
 fn escape_c_comment_text(s: &str) -> String {
     s.replace("*/", "* /")
+}
+
+fn primitive_type_from_mangled_name(name: &str) -> Option<Type> {
+    if let Some(row) = crate::integer_limits::integer_row_by_name(name) {
+        return Some(row.ty.clone());
+    }
+    match name {
+        "bool" => Some(Type::Bool),
+        "f32" => Some(Type::F32),
+        "f64" => Some(Type::F64),
+        _ => None,
+    }
 }
 
 #[derive(Clone)]
@@ -513,24 +531,8 @@ impl Codegen {
         let mut instantiations_vec: Vec<_> = self.generic_instantiations.values().collect();
         instantiations_vec.sort_by_key(|(name, _)| name.clone());
 
-        let mut struct_instantiations: Vec<(StructDecl, Vec<Type>)> = Vec::new();
-        let mut early_enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
-        let mut late_enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
-
-        for (base_name, params) in instantiations_vec {
-            let base_name_clone = base_name.clone();
-            let params_clone = params.clone();
-
-            if let Some(decl) = self.struct_map.get(&base_name_clone) {
-                struct_instantiations.push((decl.clone(), params_clone));
-            } else if let Some(decl) = self.enum_map.get(&base_name_clone) {
-                if params_complete_with_struct_forwards(&params_clone) {
-                    early_enum_instantiations.push((decl.clone(), params_clone));
-                } else {
-                    late_enum_instantiations.push((decl.clone(), params_clone));
-                }
-            }
-        }
+        let (struct_instantiations, early_enum_instantiations, late_enum_instantiations) =
+            self.partition_generic_instantiations(&instantiations_vec);
 
         // Early enums: payloads only need pointers / primitives (e.g. Option<Box<Node>>).
         for (decl, params) in &early_enum_instantiations {
@@ -592,94 +594,7 @@ impl Codegen {
         self.emit_enum_instantiations_ready_first(late_pending);
         self.emit_ready_array_typedefs(&array_typedefs);
 
-        // Collect and generate Vec type definitions
-        let mut vec_types = std::collections::HashSet::new();
-        collect_vec_types_impl(program, &mut vec_types);
-        for vec_type_name in &vec_types {
-            // Generate Option<T> for each Vec<T> since Vec::pop and Vec::get return Option<T>
-            // Extract element type from Vec type name (e.g., "Vec_int" -> "int")
-            if let Some(elem_type_str) = vec_type_name.strip_prefix("Vec_") {
-                let option_type_name = format!("Option_{}", elem_type_str);
-                if !self.generated_types.contains_key(&option_type_name) {
-                    // Parse element type from string (e.g., "int" -> Type::Int)
-                    let elem_type = match elem_type_str {
-                        "int" => Type::Int,
-                        "bool" => Type::Bool,
-                        "f32" => Type::F32,
-                        "f64" => Type::F64,
-                        "i8" => Type::I8,
-                        "i16" => Type::I16,
-                        "i32" => Type::I32,
-                        "i64" => Type::I64,
-                        "u8" => Type::U8,
-                        "u16" => Type::U16,
-                        "u32" => Type::U32,
-                        "u64" => Type::U64,
-                        "uint" => Type::UInt,
-                        _ => {
-                            // Try to parse as a struct/enum type or skip complex types
-                            // For now, skip complex types and only handle primitives
-                            continue;
-                        }
-                    };
-
-                    // Create a synthetic EnumDecl for Option<T>
-                    let option_decl = EnumDecl {
-                        doc: None,
-                        pub_: false,
-                        name: "Option".to_string(),
-                        generics: vec![TypeParam::simple("T")],
-                        variants: vec![
-                            EnumVariant {
-                                doc: None,
-                                name: "Some".to_string(),
-                                payload_types: vec![Type::Generic {
-                                    name: "T".to_string(),
-                                    params: vec![],
-                                }],
-                                named_fields: None,
-                                span: Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: 0,
-                                    column: 0,
-                                },
-                            },
-                            EnumVariant {
-                                doc: None,
-                                name: "None".to_string(),
-                                payload_types: vec![],
-                                named_fields: None,
-                                span: Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: 0,
-                                    column: 0,
-                                },
-                            },
-                        ],
-                        span: Span {
-                            start: 0,
-                            end: 0,
-                            line: 0,
-                            column: 0,
-                        },
-                    };
-                    let elem_type_clone = elem_type.clone();
-                    self.generate_monomorphized_enum(
-                        &option_decl,
-                        std::slice::from_ref(&elem_type_clone),
-                    );
-                    self.generated_types.insert(option_type_name.clone(), true);
-
-                    // Also add to generic_instantiations for consistency
-                    self.generic_instantiations.insert(
-                        option_type_name,
-                        ("Option".to_string(), vec![elem_type_clone]),
-                    );
-                }
-            }
-        }
+        self.emit_vec_primitive_options(program);
 
         self.emit_ready_array_typedefs(&array_typedefs);
 
@@ -824,24 +739,8 @@ impl Codegen {
         let mut instantiations_vec: Vec<_> = generic_instantiations_map.values().collect();
         instantiations_vec.sort_by_key(|(name, _)| name.clone());
 
-        let mut struct_instantiations: Vec<(StructDecl, Vec<Type>)> = Vec::new();
-        let mut early_enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
-        let mut late_enum_instantiations: Vec<(EnumDecl, Vec<Type>)> = Vec::new();
-
-        for (base_name, params) in instantiations_vec {
-            let base_name_clone = base_name.clone();
-            let params_clone = params.clone();
-
-            if let Some(decl) = self.struct_map.get(&base_name_clone) {
-                struct_instantiations.push((decl.clone(), params_clone));
-            } else if let Some(decl) = self.enum_map.get(&base_name_clone) {
-                if params_complete_with_struct_forwards(&params_clone) {
-                    early_enum_instantiations.push((decl.clone(), params_clone));
-                } else {
-                    late_enum_instantiations.push((decl.clone(), params_clone));
-                }
-            }
-        }
+        let (struct_instantiations, early_enum_instantiations, late_enum_instantiations) =
+            self.partition_generic_instantiations(&instantiations_vec);
 
         for (decl, params) in &early_enum_instantiations {
             self.generate_monomorphized_enum(decl, params);
@@ -862,24 +761,7 @@ impl Codegen {
 
         for s in &program.structs {
             if s.generics.is_empty() {
-                self.write(&format!("typedef struct {} {{\n", s.name));
-                self.indent_level += 1;
-                for field in &s.fields {
-                    self.write_indent();
-                    let field_decl = match &field.ty {
-                        Type::Array { inner, size, .. } => {
-                            let base_type = self.type_to_c(inner);
-                            format!("{} {}[{}]", base_type, field.name, size)
-                        }
-                        _ => {
-                            format!("{} {}", self.type_to_c(&field.ty), field.name)
-                        }
-                    };
-                    self.writeln(&format!("{};", field_decl));
-                }
-                self.indent_level -= 1;
-                self.writeln(&format!("}} {};", s.name));
-                self.writeln("");
+                self.emit_struct_typedef(s);
             }
         }
 
@@ -910,94 +792,7 @@ impl Codegen {
         }
         self.emit_ready_array_typedefs(&array_typedefs);
 
-        // Collect and generate Vec type definitions
-        let mut vec_types = std::collections::HashSet::new();
-        collect_vec_types_impl(program, &mut vec_types);
-        for vec_type_name in &vec_types {
-            // Generate Option<T> for each Vec<T> since Vec::pop and Vec::get return Option<T>
-            // Extract element type from Vec type name (e.g., "Vec_int" -> "int")
-            if let Some(elem_type_str) = vec_type_name.strip_prefix("Vec_") {
-                let option_type_name = format!("Option_{}", elem_type_str);
-                if !self.generated_types.contains_key(&option_type_name) {
-                    // Parse element type from string (e.g., "int" -> Type::Int)
-                    let elem_type = match elem_type_str {
-                        "int" => Type::Int,
-                        "bool" => Type::Bool,
-                        "f32" => Type::F32,
-                        "f64" => Type::F64,
-                        "i8" => Type::I8,
-                        "i16" => Type::I16,
-                        "i32" => Type::I32,
-                        "i64" => Type::I64,
-                        "u8" => Type::U8,
-                        "u16" => Type::U16,
-                        "u32" => Type::U32,
-                        "u64" => Type::U64,
-                        "uint" => Type::UInt,
-                        _ => {
-                            // Try to parse as a struct/enum type or skip complex types
-                            // For now, skip complex types and only handle primitives
-                            continue;
-                        }
-                    };
-
-                    // Create a synthetic EnumDecl for Option<T>
-                    let option_decl = EnumDecl {
-                        doc: None,
-                        pub_: false,
-                        name: "Option".to_string(),
-                        generics: vec![TypeParam::simple("T")],
-                        variants: vec![
-                            EnumVariant {
-                                doc: None,
-                                name: "Some".to_string(),
-                                payload_types: vec![Type::Generic {
-                                    name: "T".to_string(),
-                                    params: vec![],
-                                }],
-                                named_fields: None,
-                                span: Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: 0,
-                                    column: 0,
-                                },
-                            },
-                            EnumVariant {
-                                doc: None,
-                                name: "None".to_string(),
-                                payload_types: vec![],
-                                named_fields: None,
-                                span: Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: 0,
-                                    column: 0,
-                                },
-                            },
-                        ],
-                        span: Span {
-                            start: 0,
-                            end: 0,
-                            line: 0,
-                            column: 0,
-                        },
-                    };
-                    let elem_type_clone = elem_type.clone();
-                    self.generate_monomorphized_enum(
-                        &option_decl,
-                        std::slice::from_ref(&elem_type_clone),
-                    );
-                    self.generated_types.insert(option_type_name.clone(), true);
-
-                    // Also add to generic_instantiations for consistency
-                    self.generic_instantiations.insert(
-                        option_type_name,
-                        ("Option".to_string(), vec![elem_type_clone]),
-                    );
-                }
-            }
-        }
+        self.emit_vec_primitive_options(program);
 
         self.emit_ready_array_typedefs(&array_typedefs);
 
@@ -1134,25 +929,7 @@ impl Codegen {
         // Generate public struct definitions
         for s in &program.structs {
             if s.pub_ && s.generics.is_empty() {
-                self.write(&format!("typedef struct {} {{\n", s.name));
-                self.indent_level += 1;
-                for field in &s.fields {
-                    self.write_indent();
-                    // Handle arrays specially: in struct fields, arrays must be declared as "type name[size];"
-                    let field_decl = match &field.ty {
-                        Type::Array { inner, size, .. } => {
-                            let base_type = type_to_c_impl(inner);
-                            format!("{} {}[{}]", base_type, field.name, size)
-                        }
-                        _ => {
-                            format!("{} {}", type_to_c_impl(&field.ty), field.name)
-                        }
-                    };
-                    self.writeln(&format!("{};", field_decl));
-                }
-                self.indent_level -= 1;
-                self.writeln(&format!("}} {};", s.name));
-                self.writeln("");
+                self.emit_struct_typedef(s);
             }
         }
 
@@ -1252,7 +1029,7 @@ impl Codegen {
     fn substitute_field_types(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
         let refs: HashMap<String, &Type> =
             substitutions.iter().map(|(k, v)| (k.clone(), v)).collect();
-        substitute_generic_types(ty, &refs)
+        substitute_type_params(ty, &refs)
     }
 
     fn scope_begin(&mut self, defers: &[IREexpr]) {
@@ -1326,34 +1103,12 @@ impl Codegen {
     fn stored_expr_type(&self, expr: &IREexpr) -> Option<Type> {
         match expr {
             IREexpr::Var(name) => self.lookup_var_type(name),
-            IREexpr::StringLit(_) => Some(Type::String),
-            IREexpr::BoolLiteral(_) => Some(Type::Bool),
-            IREexpr::Lit(_) => Some(Type::Int),
-            IREexpr::FloatLiteral(_) => Some(Type::F64),
-            IREexpr::IntLimit { ty, .. } => Some(ty.clone()),
-            IREexpr::FieldAccess { ty, .. } => Some(ty.clone()),
-            IREexpr::AddressOf { ty, .. } => Some(ty.clone()),
-            IREexpr::BinOp { result_type, .. } | IREexpr::UnOp { result_type, .. } => {
-                Some(result_type.clone())
-            }
-            IREexpr::Call { return_type, .. } => return_type.clone(),
-            IREexpr::TupleLit { elem_types, .. } => Some(Type::Tuple {
-                elements: elem_types.clone(),
-            }),
-            IREexpr::Spawn { .. } => Some(Type::JoinHandle),
-            IREexpr::Cast { target_type, .. } => Some(target_type.clone()),
             IREexpr::Index { target_type, .. } => target_type.as_ref().and_then(|ty| {
                 let resolved = resolve_type_alias(ty, &self.type_aliases);
                 Self::index_element_type(&resolved)
             }),
-            IREexpr::EnumLit { ty, .. } => Some(ty.clone()),
-            IREexpr::Send { .. } | IREexpr::Recv { .. } | IREexpr::StructLit { .. } => None,
-            IREexpr::Match { result_type, .. } => Some(result_type.clone()),
-            IREexpr::ArrayLiteral { .. }
-            | IREexpr::Assign { .. }
-            | IREexpr::AssignIndex { .. }
-            | IREexpr::AssignField { .. }
-            | IREexpr::FnLiteral(_) => None,
+            IREexpr::FnLiteral(_) => None,
+            other => crate::ir::ir_expr_stored_type(other),
         }
     }
 
@@ -1490,16 +1245,7 @@ impl Codegen {
     pub(crate) fn slice_elem_type_from_arg(&self, arg: &IREexpr) -> Option<Type> {
         let ty = self.stored_expr_type(arg)?;
         let resolved = resolve_type_alias(&ty, &self.type_aliases);
-        match resolved {
-            Type::Slice { inner } => Some(*inner),
-            Type::Array { inner, .. } => Some(*inner),
-            Type::Ref { inner, .. } => match *inner {
-                Type::Slice { inner } => Some(*inner),
-                Type::Array { inner, .. } => Some(*inner),
-                _ => None,
-            },
-            _ => None,
-        }
+        crate::types_util::slice_elem_type(&resolved)
     }
 
     /// If `arg` is `&arr` for a fixed array, return (name, len, elem type).
@@ -2337,19 +2083,29 @@ impl Codegen {
         self.writeln(&format!("goto {};", self.epilogue_label));
     }
 
+    fn c_struct_field_decl(&self, name: &str, ty: &Type) -> String {
+        match ty {
+            Type::Array { inner, size, .. } => {
+                format!("{} {}[{}]", self.type_to_c(inner), name, size)
+            }
+            _ => format!("{} {}", self.type_to_c(ty), name),
+        }
+    }
+
+    fn c_named_decl(&self, name: &str, ty: &Type) -> String {
+        match ty {
+            Type::Fn { .. } => fn_type_to_c_decl(ty, name),
+            other => self.c_struct_field_decl(name, other),
+        }
+    }
+
     fn format_ir_param_list_c(&self, params: &[IRParam]) -> String {
         if params.is_empty() {
             return "void".to_string();
         }
         params
             .iter()
-            .map(|param| match &param.ty {
-                Type::Array { inner, size, .. } => {
-                    format!("{} {}[{}]", self.type_to_c(inner), param.name, size)
-                }
-                Type::Fn { .. } => fn_type_to_c_decl(&param.ty, &param.name),
-                _ => format!("{} {}", self.type_to_c(&param.ty), param.name),
-            })
+            .map(|param| self.c_named_decl(&param.name, &param.ty))
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -2466,62 +2222,18 @@ impl Codegen {
             })
             .unwrap_or_else(|| "void".to_string());
 
-        self.fn_literal_forward_decls
-            .push_str(&format!("static {} {}(", return_type_c, lit.symbol));
-        if lit.params.is_empty() {
-            self.fn_literal_forward_decls.push_str("void");
-        } else {
-            for (i, param) in lit.params.iter().enumerate() {
-                if i > 0 {
-                    self.fn_literal_forward_decls.push_str(", ");
-                }
-                match &param.ty {
-                    Type::Array { inner, size, .. } => {
-                        let base_type = self.type_to_c(inner);
-                        self.fn_literal_forward_decls
-                            .push_str(&format!("{} {}[{}]", base_type, param.name, size));
-                    }
-                    Type::Fn { .. } => {
-                        self.fn_literal_forward_decls
-                            .push_str(&fn_type_to_c_decl(&param.ty, &param.name));
-                    }
-                    _ => {
-                        self.fn_literal_forward_decls.push_str(&format!(
-                            "{} {}",
-                            self.type_to_c(&param.ty),
-                            param.name
-                        ));
-                    }
-                }
-            }
-        }
-        self.fn_literal_forward_decls.push_str(");\n");
+        let param_list = self.format_ir_param_list_c(&lit.params);
+        self.fn_literal_forward_decls.push_str(&format!(
+            "static {} {}({});\n",
+            return_type_c, lit.symbol, param_list
+        ));
 
         let epilogue = format!("{}_epilogue", lit.symbol);
         let mut def = String::new();
-        def.push_str(&format!("static {} {}(", return_type_c, lit.symbol));
-        if lit.params.is_empty() {
-            def.push_str("void");
-        } else {
-            for (i, param) in lit.params.iter().enumerate() {
-                if i > 0 {
-                    def.push_str(", ");
-                }
-                match &param.ty {
-                    Type::Array { inner, size, .. } => {
-                        let base_type = self.type_to_c(inner);
-                        def.push_str(&format!("{} {}[{}]", base_type, param.name, size));
-                    }
-                    Type::Fn { .. } => {
-                        def.push_str(&fn_type_to_c_decl(&param.ty, &param.name));
-                    }
-                    _ => {
-                        def.push_str(&format!("{} {}", self.type_to_c(&param.ty), param.name));
-                    }
-                }
-            }
-        }
-        def.push_str(") {\n");
+        def.push_str(&format!(
+            "static {} {}({}) {{\n",
+            return_type_c, lit.symbol, param_list
+        ));
 
         if let Some(ty) = &lit.return_type {
             let resolved = resolve_type_alias(ty, &self.type_aliases);
@@ -2584,76 +2296,24 @@ impl Codegen {
         self.fn_literal_definitions.push_str(&def);
     }
 
+    fn spawn_capture_fill_lines(&self, spawn: &IRSpawn, ctx_name: &str) -> Vec<String> {
+        let mut lines = vec![
+            format!("{ctx_name}* ctx = ({ctx_name}*)malloc(sizeof({ctx_name}));"),
+            "if (!ctx) { ion_panic(\"spawn allocation failed\"); }".to_string(),
+        ];
+        for (name, ty) in &spawn.captures {
+            lines.push(format!("ctx->{name} = {name};"));
+            lines.push(format!("{name} = {};", self.zero_value_for_type(ty)));
+        }
+        lines
+    }
+
     fn generate_spawn(&mut self, spawn: &IRSpawn) {
         let spawn_id = self.spawn_counter;
         self.spawn_counter += 1;
-
         let ctx_name = format!("ion_spawn_ctx_{}", spawn_id);
         let entry_name = format!("ion_spawn_entry_{}", spawn_id);
-        let spawn_epilogue = format!("spawn_{}_epilogue", spawn_id);
-
-        self.spawn_forward_decls
-            .push_str(&format!("static void* {}(void* arg);\n", entry_name));
-
-        if !spawn.captures.is_empty() {
-            self.spawn_forward_decls.push_str("typedef struct {\n");
-            for (name, ty) in &spawn.captures {
-                self.spawn_forward_decls.push_str(&format!(
-                    "    {} {};\n",
-                    self.type_to_c(ty),
-                    name
-                ));
-            }
-            self.spawn_forward_decls
-                .push_str(&format!("}} {};\n", ctx_name));
-        }
-
-        let mut def = String::new();
-        def.push_str(&format!("static void* {}(void* arg) {{\n", entry_name));
-        if !spawn.captures.is_empty() {
-            def.push_str(&format!("    {}* ctx = ({}*)arg;\n", ctx_name, ctx_name));
-            def.push_str("    if (!ctx) { ion_panic(\"spawn null context\"); }\n");
-            for (name, ty) in &spawn.captures {
-                def.push_str(&format!(
-                    "    {} {} = ctx->{};\n",
-                    self.type_to_c(ty),
-                    name,
-                    name
-                ));
-            }
-            def.push_str("    free(ctx);\n");
-        } else {
-            def.push_str("    (void)arg;\n");
-        }
-
-        let saved_output = std::mem::take(&mut self.output);
-        let saved_indent = self.indent_level;
-        let saved_scope = std::mem::take(&mut self.scope_stack);
-        let saved_epilogue = self.epilogue_label.clone();
-        self.indent_level = 1;
-        self.scope_stack.clear();
-        self.epilogue_label = spawn_epilogue.clone();
-
-        self.scope_begin(&[]);
-        for (name, ty) in &spawn.captures {
-            self.scope_register_param_binding(name, ty);
-        }
-        self.generate_block(&spawn.body);
-        self.scope_emit_exit();
-        self.write_indent();
-        self.writeln(&format!("goto {};", spawn_epilogue));
-
-        let body_code = std::mem::take(&mut self.output);
-        self.output = saved_output;
-        self.indent_level = saved_indent;
-        self.scope_stack = saved_scope;
-        self.epilogue_label = saved_epilogue;
-
-        def.push_str(&body_code);
-        def.push_str(&format!("{}:\n", spawn_epilogue));
-        def.push_str("    return NULL;\n");
-        def.push_str("}\n\n");
-        self.spawn_definitions.push_str(&def);
+        self.emit_spawn_entry(spawn, spawn_id, &ctx_name, &entry_name);
 
         self.write_indent();
         self.writeln("{");
@@ -2665,17 +2325,14 @@ impl Codegen {
                 entry_name
             ));
         } else {
-            self.writeln(&format!(
-                "{}* ctx = ({}*)malloc(sizeof({}));",
-                ctx_name, ctx_name, ctx_name
-            ));
-            self.write_indent();
-            self.writeln("if (!ctx) { ion_panic(\"spawn allocation failed\"); }");
-            for (name, ty) in &spawn.captures {
-                self.write_indent();
-                self.writeln(&format!("ctx->{} = {};", name, name));
-                self.write_indent();
-                self.writeln(&format!("{} = {};", name, self.zero_value_for_type(ty)));
+            let lines = self.spawn_capture_fill_lines(spawn, &ctx_name);
+            for (i, line) in lines.iter().enumerate() {
+                if i > 0 {
+                    self.write_indent();
+                }
+                self.writeln(line);
+            }
+            for (name, _) in &spawn.captures {
                 self.scope_mark_moved(name);
             }
             self.write_indent();
@@ -2701,13 +2358,11 @@ impl Codegen {
                 "if (ion_spawn_joinable({entry_name}, NULL, &_ion_jh) != 0) {{ ion_panic(\"spawn failed\"); }} "
             ));
         } else {
-            self.write(&format!(
-                "{ctx_name}* ctx = ({ctx_name}*)malloc(sizeof({ctx_name})); "
-            ));
-            self.write("if (!ctx) { ion_panic(\"spawn allocation failed\"); } ");
-            for (name, ty) in &spawn.captures {
-                self.write(&format!("ctx->{name} = {name}; "));
-                self.write(&format!("{name} = {}; ", self.zero_value_for_type(ty)));
+            for line in self.spawn_capture_fill_lines(spawn, &ctx_name) {
+                self.write(&line);
+                self.write(" ");
+            }
+            for (name, _) in &spawn.captures {
                 self.scope_mark_moved(name);
             }
             self.write(&format!(
@@ -3049,23 +2704,7 @@ impl Codegen {
                     // Function call returning array - declare as pointer
                     self.write(&format!("{}* {}", base_type, let_stmt.name));
                 } else {
-                    // Special handling for array types: C syntax is "int arr[3]" not "int[3] arr"
-                    match &let_stmt.ty {
-                        Type::Array { inner, size, .. } => {
-                            let base_type = self.type_to_c(inner);
-                            self.write(&format!("{} {}[{}]", base_type, let_stmt.name, size));
-                        }
-                        Type::Fn { .. } => {
-                            self.write(&fn_type_to_c_decl(&let_stmt.ty, &let_stmt.name));
-                        }
-                        _ => {
-                            self.write(&format!(
-                                "{} {}",
-                                self.type_to_c(&let_stmt.ty),
-                                let_stmt.name
-                            ));
-                        }
-                    }
+                    self.write(&self.c_named_decl(&let_stmt.name, &let_stmt.ty));
                 }
 
                 if let Some(ref init) = let_stmt.init {
@@ -4188,14 +3827,8 @@ impl Codegen {
     ) {
         match bounds_check {
             Some(BoundsCheck::SliceLen { by_ref }) => {
-                self.generate_expr(target);
-                if *by_ref {
-                    self.write("->data[");
-                } else {
-                    self.write(".data[");
-                }
-                self.generate_expr(index);
-                self.write("]");
+                let index_c = self.capture_expr_code(index);
+                self.emit_slice_data_index(target, &index_c, *by_ref);
             }
             Some(BoundsCheck::StringLen) => {
                 self.generate_expr(target);
@@ -4545,21 +4178,23 @@ impl Codegen {
             ..
         } = scrutinee
         {
-            let is_vec_pop_or_get = callee == "Vec::pop" || callee == "Vec::get";
-
-            if is_vec_pop_or_get
-                || callee == "Vec::get_ref"
-                || callee == "Slice::get_ref"
-                || callee == "Arena::get_ref"
-                || callee == "File::open"
-                || callee == "File::create"
-            {
+            if crate::tc::is_option_producing_builtin(callee) {
                 if let Some(Type::Generic { name, params }) = return_type
                     && name == "Option"
                     && params.len() == 1
                 {
                     let mono_name = mangle_type_name("Option", params);
                     return (mono_name, params.clone());
+                }
+                if callee == "String::from_utf8" {
+                    let elem = Type::String;
+                    let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem));
+                    return (mono_name, vec![elem]);
+                }
+                if callee == "String::get" {
+                    let elem = Type::U8;
+                    let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem));
+                    return (mono_name, vec![elem]);
                 }
                 if let Some(first_arg) = args.first() {
                     if callee == "Slice::get_ref" {
@@ -4587,22 +4222,6 @@ impl Codegen {
                         return (mono_name, vec![elem_type]);
                     }
                 }
-            } else if callee == "String::get" || callee == "String::from_utf8" {
-                if let Some(Type::Generic { name, params }) = return_type
-                    && name == "Option"
-                    && params.len() == 1
-                {
-                    let mono_name = mangle_type_name("Option", params);
-                    return (mono_name, params.clone());
-                }
-                if callee == "String::from_utf8" {
-                    let elem = Type::String;
-                    let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem));
-                    return (mono_name, vec![elem]);
-                }
-                let elem = Type::U8;
-                let mono_name = mangle_type_name("Option", std::slice::from_ref(&elem));
-                return (mono_name, vec![elem]);
             } else if let Some(Type::Generic { name, params }) = return_type
                 && name == enum_type
                 && !params.is_empty()
@@ -4612,25 +4231,6 @@ impl Codegen {
             }
         }
         self.find_enum_instantiation(enum_type, enum_decl)
-    }
-
-    fn is_value_scrutinee(ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::Int
-                | Type::Bool
-                | Type::String
-                | Type::Struct(_)
-                | Type::I8
-                | Type::I16
-                | Type::I32
-                | Type::I64
-                | Type::U8
-                | Type::U16
-                | Type::U32
-                | Type::U64
-                | Type::UInt
-        )
     }
 
     fn value_pattern_condition(&self, pattern: &IRPattern, var: &str) -> Option<String> {
@@ -4897,7 +4497,7 @@ impl Codegen {
                 Type::Ref { inner, .. } => inner.as_ref(),
                 other => other,
             };
-            if Self::is_value_scrutinee(peeled) {
+            if crate::types_util::is_value_scrutinee(peeled) {
                 self.emit_value_match(expr, ty, arms, match_result);
                 return;
             }
@@ -5456,6 +5056,316 @@ impl Codegen {
     }
 }
 
+struct ReferencedTypes {
+    arrays: HashMap<String, Type>,
+    slices: HashSet<String>,
+    tuples: HashMap<String, Vec<Type>>,
+    vecs: HashSet<String>,
+    generics: HashMap<String, (String, Vec<Type>)>,
+}
+
+fn note_referenced_type(ty: &Type, refs: &mut ReferencedTypes) {
+    collect_array_from_type(ty, &mut refs.arrays);
+    collect_slice_types_from_type(ty, &mut refs.slices);
+    collect_tuple_types_from_type(ty, &mut refs.tuples);
+    collect_vec_types_from_type(ty, &mut refs.vecs);
+    collect_generic_from_type(ty, &mut refs.generics);
+}
+
+fn walk_referenced_block(block: &IRBlock, refs: &mut ReferencedTypes) {
+    for stmt in &block.statements {
+        walk_referenced_stmt(stmt, refs);
+    }
+}
+
+fn collect_referenced_types(program: &IRProgram) -> ReferencedTypes {
+    let mut refs = ReferencedTypes {
+        arrays: HashMap::new(),
+        slices: HashSet::new(),
+        tuples: HashMap::new(),
+        vecs: HashSet::new(),
+        generics: HashMap::new(),
+    };
+    for function in &program.functions {
+        if let Some(ret_ty) = &function.return_type {
+            note_referenced_type(ret_ty, &mut refs);
+        }
+        for param in &function.params {
+            note_referenced_type(&param.ty, &mut refs);
+        }
+        for block in &function.blocks {
+            walk_referenced_block(block, &mut refs);
+        }
+    }
+    for struct_decl in &program.structs {
+        for field in &struct_decl.fields {
+            note_referenced_type(&field.ty, &mut refs);
+        }
+    }
+    visit_enum_payload_types(program, &mut |ty| note_referenced_type(ty, &mut refs));
+    refs
+}
+
+fn walk_referenced_stmt(stmt: &IRStmt, refs: &mut ReferencedTypes) {
+    match stmt {
+        IRStmt::Let(let_stmt) => {
+            note_referenced_type(&let_stmt.ty, refs);
+            if let Some(init) = &let_stmt.init {
+                walk_referenced_expr(init, refs);
+            }
+        }
+        IRStmt::Return(ret) => {
+            if let Some(value) = &ret.value {
+                walk_referenced_expr(value, refs);
+            }
+        }
+        IRStmt::Break | IRStmt::Continue => {}
+        IRStmt::Expr(expr) | IRStmt::Defer(expr) => walk_referenced_expr(expr, refs),
+        IRStmt::If(ir_if) => {
+            walk_referenced_expr(&ir_if.cond, refs);
+            walk_referenced_block(&ir_if.then_block, refs);
+            if let Some(else_block) = &ir_if.else_block {
+                walk_referenced_block(else_block, refs);
+            }
+        }
+        IRStmt::While(ir_while) => {
+            walk_referenced_expr(&ir_while.cond, refs);
+            walk_referenced_block(&ir_while.body, refs);
+            if let Some(step) = &ir_while.step {
+                walk_referenced_block(step, refs);
+            }
+        }
+        IRStmt::Spawn(spawn) => walk_referenced_block(&spawn.body, refs),
+        IRStmt::Select(sel) => {
+            for arm in &sel.recv_arms {
+                walk_referenced_expr(&arm.channel, refs);
+                note_referenced_type(&arm.elem_type, refs);
+                let option_ty = Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![arm.elem_type.clone()],
+                };
+                collect_generic_from_type(&option_ty, &mut refs.generics);
+                walk_referenced_block(&arm.body, refs);
+            }
+            if let Some(body) = &sel.default_body {
+                walk_referenced_block(body, refs);
+            }
+            if let Some(ms) = &sel.timeout_ms {
+                walk_referenced_expr(ms, refs);
+            }
+            if let Some(body) = &sel.timeout_body {
+                walk_referenced_block(body, refs);
+            }
+        }
+        IRStmt::UnsafeBlock(unsafe_block) => walk_referenced_block(&unsafe_block.body, refs),
+    }
+}
+
+fn walk_referenced_expr(expr: &IREexpr, refs: &mut ReferencedTypes) {
+    match expr {
+        IREexpr::Lit(_)
+        | IREexpr::BoolLiteral(_)
+        | IREexpr::FloatLiteral(_)
+        | IREexpr::IntLimit { .. }
+        | IREexpr::Var(_)
+        | IREexpr::StringLit(_) => {}
+        IREexpr::BinOp { left, right, .. } => {
+            walk_referenced_expr(left, refs);
+            walk_referenced_expr(right, refs);
+        }
+        IREexpr::UnOp { operand, .. } | IREexpr::AddressOf { inner: operand, .. } => {
+            walk_referenced_expr(operand, refs);
+        }
+        IREexpr::Send {
+            channel,
+            value,
+            value_type,
+        } => {
+            walk_referenced_expr(channel, refs);
+            walk_referenced_expr(value, refs);
+            collect_generic_from_type(value_type, &mut refs.generics);
+            let send_result = Type::Generic {
+                name: "SendResult".to_string(),
+                params: vec![value_type.clone()],
+            };
+            collect_generic_from_type(&send_result, &mut refs.generics);
+        }
+        IREexpr::Recv {
+            elem_type, channel, ..
+        } => {
+            walk_referenced_expr(channel, refs);
+            note_referenced_type(elem_type, refs);
+            let option_ty = Type::Generic {
+                name: "Option".to_string(),
+                params: vec![elem_type.clone()],
+            };
+            collect_generic_from_type(&option_ty, &mut refs.generics);
+        }
+        IREexpr::Spawn { body, .. } => walk_referenced_block(body, refs),
+        IREexpr::StructLit { fields, .. } => {
+            for field in fields {
+                walk_referenced_expr(&field.value, refs);
+            }
+        }
+        IREexpr::FieldAccess { base, .. } => walk_referenced_expr(base, refs),
+        IREexpr::EnumLit {
+            args,
+            named_fields,
+            ty,
+            ..
+        } => {
+            collect_generic_from_type(ty, &mut refs.generics);
+            for arg in args {
+                walk_referenced_expr(arg, refs);
+            }
+            if let Some(fields) = named_fields {
+                for (_, value) in fields {
+                    walk_referenced_expr(value, refs);
+                }
+            }
+        }
+        IREexpr::Match { expr, arms, .. } => {
+            walk_referenced_expr(expr, refs);
+            if let IREexpr::Call {
+                callee,
+                return_type,
+                ..
+            } = expr.as_ref()
+                && crate::tc::is_option_producing_builtin(callee)
+            {
+                if let Some(Type::Generic { name, params }) = return_type
+                    && name == "Option"
+                    && params.len() == 1
+                {
+                    let option_key = mangle_type_name("Option", params);
+                    refs.generics
+                        .entry(option_key)
+                        .or_insert_with(|| ("Option".to_string(), params.clone()));
+                } else if callee == "Vec::get_ref" || callee == "Slice::get_ref" {
+                    if let Some(elem_type) =
+                        refs.generics
+                            .iter()
+                            .find_map(|(_mono_name, (base, params))| {
+                                if (base == "Vec" || base == "Slice") && params.len() == 1 {
+                                    Some(params[0].clone())
+                                } else {
+                                    None
+                                }
+                            })
+                    {
+                        let ref_elem = Type::Ref {
+                            inner: Box::new(elem_type),
+                            mutable: false,
+                        };
+                        let option_key =
+                            mangle_type_name("Option", std::slice::from_ref(&ref_elem));
+                        refs.generics
+                            .entry(option_key)
+                            .or_insert_with(|| ("Option".to_string(), vec![ref_elem]));
+                    }
+                } else if callee == "String::get" {
+                    let option_key = mangle_type_name("Option", std::slice::from_ref(&Type::U8));
+                    refs.generics
+                        .entry(option_key)
+                        .or_insert_with(|| ("Option".to_string(), vec![Type::U8]));
+                } else if callee == "String::from_utf8" {
+                    let option_key =
+                        mangle_type_name("Option", std::slice::from_ref(&Type::String));
+                    refs.generics
+                        .entry(option_key)
+                        .or_insert_with(|| ("Option".to_string(), vec![Type::String]));
+                } else if let Some(elem_type) =
+                    refs.generics
+                        .iter()
+                        .find_map(|(_mono_name, (base, params))| {
+                            if base == "Vec" && params.len() == 1 {
+                                Some(params[0].clone())
+                            } else {
+                                None
+                            }
+                        })
+                {
+                    let option_key = mangle_type_name("Option", std::slice::from_ref(&elem_type));
+                    refs.generics
+                        .entry(option_key)
+                        .or_insert_with(|| ("Option".to_string(), vec![elem_type]));
+                }
+            }
+            for arm in arms {
+                walk_referenced_block(&arm.body, refs);
+            }
+        }
+        IREexpr::Call {
+            return_type, args, ..
+        } => {
+            if let Some(ret_ty) = return_type {
+                note_referenced_type(ret_ty, refs);
+            }
+            for arg in args {
+                walk_referenced_expr(arg, refs);
+            }
+        }
+        IREexpr::TupleLit {
+            elem_types,
+            elements,
+            ..
+        } => {
+            for ty in elem_types {
+                note_referenced_type(ty, refs);
+            }
+            for elem in elements {
+                walk_referenced_expr(elem, refs);
+            }
+        }
+        IREexpr::FnLiteral(lit) => {
+            for param in &lit.params {
+                note_referenced_type(&param.ty, refs);
+            }
+            if let Some(ret) = &lit.return_type {
+                note_referenced_type(ret, refs);
+            }
+            walk_referenced_block(&lit.body, refs);
+        }
+        IREexpr::ArrayLiteral {
+            elements, repeat, ..
+        } => {
+            for elem in elements {
+                walk_referenced_expr(elem, refs);
+            }
+            if let Some((value_expr, _)) = repeat {
+                walk_referenced_expr(value_expr, refs);
+            }
+        }
+        IREexpr::Index {
+            target,
+            index,
+            target_type,
+        } => {
+            walk_referenced_expr(target, refs);
+            walk_referenced_expr(index, refs);
+            if let Some(ty) = target_type {
+                note_referenced_type(ty, refs);
+            }
+        }
+        IREexpr::Cast { expr, .. } => walk_referenced_expr(expr, refs),
+        IREexpr::Assign { value, .. } => walk_referenced_expr(value, refs),
+        IREexpr::AssignIndex {
+            target,
+            index,
+            value,
+            ..
+        } => {
+            walk_referenced_expr(target, refs);
+            walk_referenced_expr(index, refs);
+            walk_referenced_expr(value, refs);
+        }
+        IREexpr::AssignField { target, value, .. } => {
+            walk_referenced_expr(target, refs);
+            walk_referenced_expr(value, refs);
+        }
+    }
+}
+
 fn visit_enum_payload_types(program: &IRProgram, visit: &mut impl FnMut(&Type)) {
     for e in &program.enums {
         for variant in &e.variants {
@@ -5472,29 +5382,10 @@ fn visit_enum_payload_types(program: &IRProgram, visit: &mut impl FnMut(&Type)) 
 }
 
 fn collect_array_typedefs(program: &IRProgram) -> Vec<(String, Type)> {
-    let mut arrays: HashMap<String, Type> = HashMap::new();
-    for function in &program.functions {
-        if let Some(ref ret_ty) = function.return_type {
-            collect_array_from_type(ret_ty, &mut arrays);
-        }
-        for param in &function.params {
-            collect_array_from_type(&param.ty, &mut arrays);
-        }
-        for block in &function.blocks {
-            for stmt in &block.statements {
-                collect_array_from_stmt(stmt, &mut arrays);
-            }
-        }
-    }
-    for s in &program.structs {
-        for field in &s.fields {
-            collect_array_from_type(&field.ty, &mut arrays);
-        }
-    }
-    visit_enum_payload_types(program, &mut |ty| {
-        collect_array_from_type(ty, &mut arrays);
-    });
-    let mut out: Vec<(String, Type)> = arrays.into_iter().collect();
+    let mut out: Vec<(String, Type)> = collect_referenced_types(program)
+        .arrays
+        .into_iter()
+        .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
@@ -5536,227 +5427,11 @@ fn collect_array_from_type(ty: &Type, arrays: &mut HashMap<String, Type>) {
     }
 }
 
-fn collect_array_from_stmt(stmt: &IRStmt, arrays: &mut HashMap<String, Type>) {
-    match stmt {
-        IRStmt::Let(let_stmt) => {
-            collect_array_from_type(&let_stmt.ty, arrays);
-            if let Some(ref init) = let_stmt.init {
-                collect_array_from_expr(init, arrays);
-            }
-        }
-        IRStmt::Return(ret) => {
-            if let Some(ref value) = ret.value {
-                collect_array_from_expr(value, arrays);
-            }
-        }
-        IRStmt::Break | IRStmt::Continue => {}
-        IRStmt::Expr(expr) | IRStmt::Defer(expr) => collect_array_from_expr(expr, arrays),
-        IRStmt::If(ir_if) => {
-            collect_array_from_expr(&ir_if.cond, arrays);
-            for stmt in &ir_if.then_block.statements {
-                collect_array_from_stmt(stmt, arrays);
-            }
-            if let Some(ref else_block) = ir_if.else_block {
-                for stmt in &else_block.statements {
-                    collect_array_from_stmt(stmt, arrays);
-                }
-            }
-        }
-        IRStmt::While(ir_while) => {
-            collect_array_from_expr(&ir_while.cond, arrays);
-            for stmt in &ir_while.body.statements {
-                collect_array_from_stmt(stmt, arrays);
-            }
-            if let Some(ref step) = ir_while.step {
-                for stmt in &step.statements {
-                    collect_array_from_stmt(stmt, arrays);
-                }
-            }
-        }
-        IRStmt::Spawn(spawn) => {
-            for stmt in &spawn.body.statements {
-                collect_array_from_stmt(stmt, arrays);
-            }
-        }
-        IRStmt::Select(sel) => {
-            for arm in &sel.recv_arms {
-                collect_array_from_expr(&arm.channel, arrays);
-                collect_array_from_type(&arm.elem_type, arrays);
-                for stmt in &arm.body.statements {
-                    collect_array_from_stmt(stmt, arrays);
-                }
-            }
-            if let Some(body) = &sel.default_body {
-                for stmt in &body.statements {
-                    collect_array_from_stmt(stmt, arrays);
-                }
-            }
-            if let Some(ms) = &sel.timeout_ms {
-                collect_array_from_expr(ms, arrays);
-            }
-            if let Some(body) = &sel.timeout_body {
-                for stmt in &body.statements {
-                    collect_array_from_stmt(stmt, arrays);
-                }
-            }
-        }
-        IRStmt::UnsafeBlock(unsafe_block) => {
-            for stmt in &unsafe_block.body.statements {
-                collect_array_from_stmt(stmt, arrays);
-            }
-        }
-    }
-}
-
-fn collect_array_from_expr(expr: &IREexpr, arrays: &mut HashMap<String, Type>) {
-    match expr {
-        IREexpr::Call {
-            return_type, args, ..
-        } => {
-            if let Some(ret_ty) = return_type {
-                collect_array_from_type(ret_ty, arrays);
-            }
-            for arg in args {
-                collect_array_from_expr(arg, arrays);
-            }
-        }
-        IREexpr::TupleLit {
-            elem_types,
-            elements,
-            ..
-        } => {
-            for ty in elem_types {
-                collect_array_from_type(ty, arrays);
-            }
-            for elem in elements {
-                collect_array_from_expr(elem, arrays);
-            }
-        }
-        IREexpr::Recv {
-            elem_type, channel, ..
-        } => {
-            collect_array_from_type(elem_type, arrays);
-            collect_array_from_expr(channel, arrays);
-        }
-        IREexpr::FnLiteral(lit) => {
-            for param in &lit.params {
-                collect_array_from_type(&param.ty, arrays);
-            }
-            if let Some(ret) = &lit.return_type {
-                collect_array_from_type(ret, arrays);
-            }
-            for stmt in &lit.body.statements {
-                collect_array_from_stmt(stmt, arrays);
-            }
-        }
-        IREexpr::BinOp { left, right, .. } => {
-            collect_array_from_expr(left, arrays);
-            collect_array_from_expr(right, arrays);
-        }
-        IREexpr::UnOp { operand, .. } | IREexpr::AddressOf { inner: operand, .. } => {
-            collect_array_from_expr(operand, arrays);
-        }
-        IREexpr::Send { channel, value, .. } => {
-            collect_array_from_expr(channel, arrays);
-            collect_array_from_expr(value, arrays);
-        }
-        IREexpr::StructLit { fields, .. } => {
-            for field in fields {
-                collect_array_from_expr(&field.value, arrays);
-            }
-        }
-        IREexpr::FieldAccess { base, .. } => collect_array_from_expr(base, arrays),
-        IREexpr::EnumLit {
-            args, named_fields, ..
-        } => {
-            for arg in args {
-                collect_array_from_expr(arg, arrays);
-            }
-            if let Some(fields) = named_fields {
-                for (_, value) in fields {
-                    collect_array_from_expr(value, arrays);
-                }
-            }
-        }
-        IREexpr::Match { expr, arms, .. } => {
-            collect_array_from_expr(expr, arrays);
-            for arm in arms {
-                for stmt in &arm.body.statements {
-                    collect_array_from_stmt(stmt, arrays);
-                }
-            }
-        }
-        IREexpr::ArrayLiteral {
-            elements, repeat, ..
-        } => {
-            for elem in elements {
-                collect_array_from_expr(elem, arrays);
-            }
-            if let Some((value_expr, _)) = repeat {
-                collect_array_from_expr(value_expr, arrays);
-            }
-        }
-        IREexpr::Index {
-            target,
-            index,
-            target_type,
-        } => {
-            collect_array_from_expr(target, arrays);
-            collect_array_from_expr(index, arrays);
-            if let Some(ty) = target_type {
-                collect_array_from_type(ty, arrays);
-            }
-        }
-        IREexpr::Cast { expr, .. } => collect_array_from_expr(expr, arrays),
-        IREexpr::Assign { value, .. } => collect_array_from_expr(value, arrays),
-        IREexpr::AssignIndex {
-            target,
-            index,
-            value,
-            ..
-        } => {
-            collect_array_from_expr(target, arrays);
-            collect_array_from_expr(index, arrays);
-            collect_array_from_expr(value, arrays);
-        }
-        IREexpr::AssignField { target, value, .. } => {
-            collect_array_from_expr(target, arrays);
-            collect_array_from_expr(value, arrays);
-        }
-        _ => {}
-    }
-}
-
 fn collect_slice_types_impl(
     program: &IRProgram,
     slice_types: &mut std::collections::HashSet<String>,
 ) {
-    // Collect slice types from function parameters, return types, and statements
-    for function in &program.functions {
-        // Check return type
-        if let Some(ref ret_ty) = function.return_type {
-            collect_slice_types_from_type(ret_ty, slice_types);
-        }
-        // Check parameters
-        for param in &function.params {
-            collect_slice_types_from_type(&param.ty, slice_types);
-        }
-        // Check function body (variables, etc.)
-        for block in &function.blocks {
-            for stmt in &block.statements {
-                collect_slice_types_from_stmt(stmt, slice_types);
-            }
-        }
-    }
-    // Check struct fields
-    for s in &program.structs {
-        for field in &s.fields {
-            collect_slice_types_from_type(&field.ty, slice_types);
-        }
-    }
-    visit_enum_payload_types(program, &mut |ty| {
-        collect_slice_types_from_type(ty, slice_types);
-    });
+    slice_types.extend(collect_referenced_types(program).slices);
 }
 
 fn collect_slice_types_from_type(ty: &Type, slice_types: &mut std::collections::HashSet<String>) {
@@ -5831,226 +5506,11 @@ fn collect_slice_types_from_type(ty: &Type, slice_types: &mut std::collections::
     }
 }
 
-fn collect_slice_types_from_stmt(
-    stmt: &IRStmt,
-    slice_types: &mut std::collections::HashSet<String>,
-) {
-    match stmt {
-        IRStmt::Let(let_stmt) => {
-            collect_slice_types_from_type(&let_stmt.ty, slice_types);
-            if let Some(ref init) = let_stmt.init {
-                collect_slice_types_from_expr(init, slice_types);
-            }
-        }
-        IRStmt::Return(ret) => {
-            if let Some(ref value) = ret.value {
-                collect_slice_types_from_expr(value, slice_types);
-            }
-        }
-        IRStmt::Break | IRStmt::Continue => {}
-        IRStmt::Expr(expr) => {
-            collect_slice_types_from_expr(expr, slice_types);
-        }
-        IRStmt::Defer(expr) => {
-            collect_slice_types_from_expr(expr, slice_types);
-        }
-        IRStmt::Spawn(spawn) => {
-            for stmt in &spawn.body.statements {
-                collect_slice_types_from_stmt(stmt, slice_types);
-            }
-        }
-        IRStmt::Select(sel) => {
-            for arm in &sel.recv_arms {
-                collect_slice_types_from_expr(&arm.channel, slice_types);
-                collect_slice_types_from_type(&arm.elem_type, slice_types);
-                for stmt in &arm.body.statements {
-                    collect_slice_types_from_stmt(stmt, slice_types);
-                }
-            }
-            if let Some(body) = &sel.default_body {
-                for stmt in &body.statements {
-                    collect_slice_types_from_stmt(stmt, slice_types);
-                }
-            }
-            if let Some(ms) = &sel.timeout_ms {
-                collect_slice_types_from_expr(ms, slice_types);
-            }
-            if let Some(body) = &sel.timeout_body {
-                for stmt in &body.statements {
-                    collect_slice_types_from_stmt(stmt, slice_types);
-                }
-            }
-        }
-        IRStmt::If(ir_if) => {
-            collect_slice_types_from_expr(&ir_if.cond, slice_types);
-            for stmt in &ir_if.then_block.statements {
-                collect_slice_types_from_stmt(stmt, slice_types);
-            }
-            if let Some(ref else_block) = ir_if.else_block {
-                for stmt in &else_block.statements {
-                    collect_slice_types_from_stmt(stmt, slice_types);
-                }
-            }
-        }
-        IRStmt::While(ir_while) => {
-            collect_slice_types_from_expr(&ir_while.cond, slice_types);
-            for stmt in &ir_while.body.statements {
-                collect_slice_types_from_stmt(stmt, slice_types);
-            }
-            if let Some(ref step) = ir_while.step {
-                for stmt in &step.statements {
-                    collect_slice_types_from_stmt(stmt, slice_types);
-                }
-            }
-        }
-        IRStmt::UnsafeBlock(unsafe_block) => {
-            for stmt in &unsafe_block.body.statements {
-                collect_slice_types_from_stmt(stmt, slice_types);
-            }
-        }
-    }
-}
-
-fn collect_slice_types_from_expr(
-    expr: &IREexpr,
-    slice_types: &mut std::collections::HashSet<String>,
-) {
-    match expr {
-        IREexpr::Lit(_)
-        | IREexpr::IntLimit { .. }
-        | IREexpr::BoolLiteral(_)
-        | IREexpr::FloatLiteral(_)
-        | IREexpr::Var(_)
-        | IREexpr::StringLit(_) => {}
-        IREexpr::AddressOf { inner, .. } => {
-            collect_slice_types_from_expr(inner, slice_types);
-        }
-        IREexpr::BinOp { left, right, .. } => {
-            collect_slice_types_from_expr(left, slice_types);
-            collect_slice_types_from_expr(right, slice_types);
-        }
-        IREexpr::UnOp { operand, .. } => {
-            collect_slice_types_from_expr(operand, slice_types);
-        }
-        IREexpr::Send { channel, value, .. } => {
-            collect_slice_types_from_expr(channel, slice_types);
-            collect_slice_types_from_expr(value, slice_types);
-        }
-        IREexpr::Recv { channel, .. } => {
-            collect_slice_types_from_expr(channel, slice_types);
-        }
-        IREexpr::StructLit { fields, .. } => {
-            for field in fields {
-                collect_slice_types_from_expr(&field.value, slice_types);
-            }
-        }
-        IREexpr::FieldAccess { base, .. } => {
-            collect_slice_types_from_expr(base, slice_types);
-        }
-        IREexpr::EnumLit { args, .. } => {
-            for arg in args {
-                collect_slice_types_from_expr(arg, slice_types);
-            }
-        }
-        IREexpr::Match { expr, arms, .. } => {
-            collect_slice_types_from_expr(expr, slice_types);
-            for arm in arms {
-                for stmt in &arm.body.statements {
-                    collect_slice_types_from_stmt(stmt, slice_types);
-                }
-            }
-        }
-        IREexpr::Call {
-            args, return_type, ..
-        } => {
-            if let Some(ret_ty) = return_type {
-                collect_slice_types_from_type(ret_ty, slice_types);
-            }
-            for arg in args {
-                collect_slice_types_from_expr(arg, slice_types);
-            }
-        }
-        IREexpr::ArrayLiteral { elements, repeat } => {
-            for elem in elements {
-                collect_slice_types_from_expr(elem, slice_types);
-            }
-            if let Some((value_expr, _)) = repeat {
-                collect_slice_types_from_expr(value_expr, slice_types);
-            }
-        }
-        IREexpr::Index {
-            target,
-            index,
-            target_type: _,
-        } => {
-            collect_slice_types_from_expr(target, slice_types);
-            collect_slice_types_from_expr(index, slice_types);
-        }
-        IREexpr::Cast { expr, .. } => {
-            collect_slice_types_from_expr(expr, slice_types);
-        }
-        IREexpr::Assign { target: _, value } => {
-            collect_slice_types_from_expr(value, slice_types);
-        }
-        IREexpr::AssignIndex {
-            target,
-            index,
-            value,
-            ..
-        } => {
-            collect_slice_types_from_expr(target, slice_types);
-            collect_slice_types_from_expr(index, slice_types);
-            collect_slice_types_from_expr(value, slice_types);
-        }
-        IREexpr::AssignField { target, value, .. } => {
-            collect_slice_types_from_expr(target, slice_types);
-            collect_slice_types_from_expr(value, slice_types);
-        }
-        IREexpr::TupleLit { .. } => {}
-        IREexpr::FnLiteral(lit) => {
-            for param in &lit.params {
-                collect_slice_types_from_type(&param.ty, slice_types);
-            }
-            if let Some(ret) = &lit.return_type {
-                collect_slice_types_from_type(ret, slice_types);
-            }
-            for stmt in &lit.body.statements {
-                collect_slice_types_from_stmt(stmt, slice_types);
-            }
-        }
-        IREexpr::Spawn { body, .. } => {
-            for stmt in &body.statements {
-                collect_slice_types_from_stmt(stmt, slice_types);
-            }
-        }
-    }
-}
-
 fn collect_tuple_types_impl(
     program: &IRProgram,
     tuple_types: &mut std::collections::HashMap<String, Vec<Type>>,
 ) {
-    for function in &program.functions {
-        if let Some(ref ret_ty) = function.return_type {
-            collect_tuple_types_from_type(ret_ty, tuple_types);
-        }
-        for param in &function.params {
-            collect_tuple_types_from_type(&param.ty, tuple_types);
-        }
-        for block in &function.blocks {
-            for stmt in &block.statements {
-                collect_tuple_types_from_stmt(stmt, tuple_types);
-            }
-        }
-    }
-    for s in &program.structs {
-        for field in &s.fields {
-            collect_tuple_types_from_type(&field.ty, tuple_types);
-        }
-    }
-    visit_enum_payload_types(program, &mut |ty| {
-        collect_tuple_types_from_type(ty, tuple_types);
-    });
+    tuple_types.extend(collect_referenced_types(program).tuples);
 }
 
 fn collect_tuple_types_from_type(
@@ -6092,231 +5552,8 @@ fn collect_tuple_types_from_type(
     }
 }
 
-fn collect_tuple_types_from_stmt(
-    stmt: &IRStmt,
-    tuple_types: &mut std::collections::HashMap<String, Vec<Type>>,
-) {
-    match stmt {
-        IRStmt::Let(let_stmt) => {
-            collect_tuple_types_from_type(&let_stmt.ty, tuple_types);
-            if let Some(ref init) = let_stmt.init {
-                collect_tuple_types_from_expr(init, tuple_types);
-            }
-        }
-        IRStmt::Return(ret) => {
-            if let Some(ref value) = ret.value {
-                collect_tuple_types_from_expr(value, tuple_types);
-            }
-        }
-        IRStmt::Break | IRStmt::Continue => {}
-        IRStmt::Expr(expr) => collect_tuple_types_from_expr(expr, tuple_types),
-        IRStmt::Defer(expr) => collect_tuple_types_from_expr(expr, tuple_types),
-        IRStmt::Spawn(spawn) => {
-            for stmt in &spawn.body.statements {
-                collect_tuple_types_from_stmt(stmt, tuple_types);
-            }
-        }
-        IRStmt::Select(sel) => {
-            for arm in &sel.recv_arms {
-                collect_tuple_types_from_expr(&arm.channel, tuple_types);
-                collect_tuple_types_from_type(&arm.elem_type, tuple_types);
-                for stmt in &arm.body.statements {
-                    collect_tuple_types_from_stmt(stmt, tuple_types);
-                }
-            }
-            if let Some(body) = &sel.default_body {
-                for stmt in &body.statements {
-                    collect_tuple_types_from_stmt(stmt, tuple_types);
-                }
-            }
-            if let Some(ms) = &sel.timeout_ms {
-                collect_tuple_types_from_expr(ms, tuple_types);
-            }
-            if let Some(body) = &sel.timeout_body {
-                for stmt in &body.statements {
-                    collect_tuple_types_from_stmt(stmt, tuple_types);
-                }
-            }
-        }
-        IRStmt::If(ir_if) => {
-            collect_tuple_types_from_expr(&ir_if.cond, tuple_types);
-            for stmt in &ir_if.then_block.statements {
-                collect_tuple_types_from_stmt(stmt, tuple_types);
-            }
-            if let Some(ref else_block) = ir_if.else_block {
-                for stmt in &else_block.statements {
-                    collect_tuple_types_from_stmt(stmt, tuple_types);
-                }
-            }
-        }
-        IRStmt::While(ir_while) => {
-            collect_tuple_types_from_expr(&ir_while.cond, tuple_types);
-            for stmt in &ir_while.body.statements {
-                collect_tuple_types_from_stmt(stmt, tuple_types);
-            }
-            if let Some(ref step) = ir_while.step {
-                for stmt in &step.statements {
-                    collect_tuple_types_from_stmt(stmt, tuple_types);
-                }
-            }
-        }
-        IRStmt::UnsafeBlock(unsafe_block) => {
-            for stmt in &unsafe_block.body.statements {
-                collect_tuple_types_from_stmt(stmt, tuple_types);
-            }
-        }
-    }
-}
-
-fn collect_tuple_types_from_expr(
-    expr: &IREexpr,
-    tuple_types: &mut std::collections::HashMap<String, Vec<Type>>,
-) {
-    match expr {
-        IREexpr::AddressOf { inner, .. } => collect_tuple_types_from_expr(inner, tuple_types),
-        IREexpr::BinOp { left, right, .. } => {
-            collect_tuple_types_from_expr(left, tuple_types);
-            collect_tuple_types_from_expr(right, tuple_types);
-        }
-        IREexpr::UnOp { operand, .. } => collect_tuple_types_from_expr(operand, tuple_types),
-        IREexpr::Send { channel, value, .. } => {
-            collect_tuple_types_from_expr(channel, tuple_types);
-            collect_tuple_types_from_expr(value, tuple_types);
-        }
-        IREexpr::Recv { channel, .. } => collect_tuple_types_from_expr(channel, tuple_types),
-        IREexpr::StructLit { fields, .. } => {
-            for field in fields {
-                collect_tuple_types_from_expr(&field.value, tuple_types);
-            }
-        }
-        IREexpr::FieldAccess { base, .. } => collect_tuple_types_from_expr(base, tuple_types),
-        IREexpr::EnumLit {
-            args, named_fields, ..
-        } => {
-            for arg in args {
-                collect_tuple_types_from_expr(arg, tuple_types);
-            }
-            if let Some(named_fields) = named_fields {
-                for (_, value) in named_fields {
-                    collect_tuple_types_from_expr(value, tuple_types);
-                }
-            }
-        }
-        IREexpr::Match { expr, arms, .. } => {
-            collect_tuple_types_from_expr(expr, tuple_types);
-            for arm in arms {
-                if let Some(ref guard) = arm.guard {
-                    collect_tuple_types_from_expr(guard, tuple_types);
-                }
-                for stmt in &arm.body.statements {
-                    collect_tuple_types_from_stmt(stmt, tuple_types);
-                }
-            }
-        }
-        IREexpr::Call {
-            return_type, args, ..
-        } => {
-            if let Some(ret_ty) = return_type {
-                collect_tuple_types_from_type(ret_ty, tuple_types);
-            }
-            for arg in args {
-                collect_tuple_types_from_expr(arg, tuple_types);
-            }
-        }
-        IREexpr::TupleLit {
-            elements,
-            elem_types,
-        } => {
-            tuple_types.insert(tuple_type_name(elem_types), elem_types.clone());
-            for elem in elements {
-                collect_tuple_types_from_expr(elem, tuple_types);
-            }
-        }
-        IREexpr::ArrayLiteral { elements, repeat } => {
-            for elem in elements {
-                collect_tuple_types_from_expr(elem, tuple_types);
-            }
-            if let Some((value_expr, _)) = repeat {
-                collect_tuple_types_from_expr(value_expr, tuple_types);
-            }
-        }
-        IREexpr::Index { target, index, .. } => {
-            collect_tuple_types_from_expr(target, tuple_types);
-            collect_tuple_types_from_expr(index, tuple_types);
-        }
-        IREexpr::Cast {
-            expr, target_type, ..
-        } => {
-            collect_tuple_types_from_type(target_type, tuple_types);
-            collect_tuple_types_from_expr(expr, tuple_types);
-        }
-        IREexpr::Assign { value, .. } => collect_tuple_types_from_expr(value, tuple_types),
-        IREexpr::AssignIndex {
-            target,
-            index,
-            value,
-            ..
-        } => {
-            collect_tuple_types_from_expr(target, tuple_types);
-            collect_tuple_types_from_expr(index, tuple_types);
-            collect_tuple_types_from_expr(value, tuple_types);
-        }
-        IREexpr::AssignField { target, value, .. } => {
-            collect_tuple_types_from_expr(target, tuple_types);
-            collect_tuple_types_from_expr(value, tuple_types);
-        }
-        IREexpr::Lit(_)
-        | IREexpr::IntLimit { .. }
-        | IREexpr::BoolLiteral(_)
-        | IREexpr::FloatLiteral(_)
-        | IREexpr::Var(_)
-        | IREexpr::StringLit(_) => {}
-        IREexpr::FnLiteral(lit) => {
-            for param in &lit.params {
-                collect_tuple_types_from_type(&param.ty, tuple_types);
-            }
-            if let Some(ret) = &lit.return_type {
-                collect_tuple_types_from_type(ret, tuple_types);
-            }
-            for stmt in &lit.body.statements {
-                collect_tuple_types_from_stmt(stmt, tuple_types);
-            }
-        }
-        IREexpr::Spawn { body, .. } => {
-            for stmt in &body.statements {
-                collect_tuple_types_from_stmt(stmt, tuple_types);
-            }
-        }
-    }
-}
-
 fn collect_vec_types_impl(program: &IRProgram, vec_types: &mut std::collections::HashSet<String>) {
-    // Collect Vec types from function parameters, return types, and struct fields
-    for function in &program.functions {
-        // Check return type
-        if let Some(ref ret_ty) = function.return_type {
-            collect_vec_types_from_type(ret_ty, vec_types);
-        }
-        // Check parameters
-        for param in &function.params {
-            collect_vec_types_from_type(&param.ty, vec_types);
-        }
-        // Check function body (variables, etc.)
-        for block in &function.blocks {
-            for stmt in &block.statements {
-                collect_vec_types_from_stmt(stmt, vec_types);
-            }
-        }
-    }
-    // Check struct fields
-    for s in &program.structs {
-        for field in &s.fields {
-            collect_vec_types_from_type(&field.ty, vec_types);
-        }
-    }
-    visit_enum_payload_types(program, &mut |ty| {
-        collect_vec_types_from_type(ty, vec_types);
-    });
+    vec_types.extend(collect_referenced_types(program).vecs);
 }
 
 fn collect_vec_types_from_type(ty: &Type, vec_types: &mut std::collections::HashSet<String>) {
@@ -6356,202 +5593,6 @@ fn collect_vec_types_from_type(ty: &Type, vec_types: &mut std::collections::Hash
     }
 }
 
-fn collect_vec_types_from_stmt(stmt: &IRStmt, vec_types: &mut std::collections::HashSet<String>) {
-    match stmt {
-        IRStmt::Let(let_stmt) => {
-            collect_vec_types_from_type(&let_stmt.ty, vec_types);
-            if let Some(ref init) = let_stmt.init {
-                collect_vec_types_from_expr(init, vec_types);
-            }
-        }
-        IRStmt::Return(ret) => {
-            if let Some(ref value) = ret.value {
-                collect_vec_types_from_expr(value, vec_types);
-            }
-        }
-        IRStmt::Break | IRStmt::Continue => {}
-        IRStmt::Expr(expr) => {
-            collect_vec_types_from_expr(expr, vec_types);
-        }
-        IRStmt::If(ir_if) => {
-            collect_vec_types_from_expr(&ir_if.cond, vec_types);
-            for stmt in &ir_if.then_block.statements {
-                collect_vec_types_from_stmt(stmt, vec_types);
-            }
-            if let Some(ref else_block) = ir_if.else_block {
-                for stmt in &else_block.statements {
-                    collect_vec_types_from_stmt(stmt, vec_types);
-                }
-            }
-        }
-        IRStmt::While(ir_while) => {
-            collect_vec_types_from_expr(&ir_while.cond, vec_types);
-            for stmt in &ir_while.body.statements {
-                collect_vec_types_from_stmt(stmt, vec_types);
-            }
-            if let Some(ref step) = ir_while.step {
-                for stmt in &step.statements {
-                    collect_vec_types_from_stmt(stmt, vec_types);
-                }
-            }
-        }
-        IRStmt::Spawn(spawn) => {
-            for stmt in &spawn.body.statements {
-                collect_vec_types_from_stmt(stmt, vec_types);
-            }
-        }
-        IRStmt::Select(sel) => {
-            for arm in &sel.recv_arms {
-                collect_vec_types_from_expr(&arm.channel, vec_types);
-                collect_vec_types_from_type(&arm.elem_type, vec_types);
-                for stmt in &arm.body.statements {
-                    collect_vec_types_from_stmt(stmt, vec_types);
-                }
-            }
-            if let Some(body) = &sel.default_body {
-                for stmt in &body.statements {
-                    collect_vec_types_from_stmt(stmt, vec_types);
-                }
-            }
-            if let Some(ms) = &sel.timeout_ms {
-                collect_vec_types_from_expr(ms, vec_types);
-            }
-            if let Some(body) = &sel.timeout_body {
-                for stmt in &body.statements {
-                    collect_vec_types_from_stmt(stmt, vec_types);
-                }
-            }
-        }
-        IRStmt::Defer(_) => {}
-        IRStmt::UnsafeBlock(unsafe_block) => {
-            for stmt in &unsafe_block.body.statements {
-                collect_vec_types_from_stmt(stmt, vec_types);
-            }
-        }
-    }
-}
-
-fn collect_vec_types_from_expr(expr: &IREexpr, vec_types: &mut std::collections::HashSet<String>) {
-    match expr {
-        IREexpr::Var(_)
-        | IREexpr::Lit(_)
-        | IREexpr::IntLimit { .. }
-        | IREexpr::BoolLiteral(_)
-        | IREexpr::FloatLiteral(_)
-        | IREexpr::StringLit(_) => {}
-        IREexpr::BinOp { left, right, .. } => {
-            collect_vec_types_from_expr(left, vec_types);
-            collect_vec_types_from_expr(right, vec_types);
-        }
-        IREexpr::UnOp { operand, .. } => {
-            collect_vec_types_from_expr(operand, vec_types);
-        }
-        IREexpr::AddressOf { inner, .. } => {
-            collect_vec_types_from_expr(inner, vec_types);
-        }
-        IREexpr::Send { channel, value, .. } => {
-            collect_vec_types_from_expr(channel, vec_types);
-            collect_vec_types_from_expr(value, vec_types);
-        }
-        IREexpr::Recv {
-            channel, elem_type, ..
-        } => {
-            collect_vec_types_from_expr(channel, vec_types);
-            // Extract Vec types from the element type
-            collect_vec_types_from_type(elem_type, vec_types);
-        }
-        IREexpr::StructLit { fields, .. } => {
-            for field in fields {
-                collect_vec_types_from_expr(&field.value, vec_types);
-            }
-        }
-        IREexpr::FieldAccess { base, .. } => {
-            collect_vec_types_from_expr(base, vec_types);
-        }
-        IREexpr::EnumLit { args, .. } => {
-            for arg in args {
-                collect_vec_types_from_expr(arg, vec_types);
-            }
-        }
-        IREexpr::Match { expr, arms, .. } => {
-            collect_vec_types_from_expr(expr, vec_types);
-            for arm in arms {
-                for stmt in &arm.body.statements {
-                    collect_vec_types_from_stmt(stmt, vec_types);
-                }
-            }
-        }
-        IREexpr::Call {
-            args, return_type, ..
-        } => {
-            // Extract Vec types from the return type - this uses vec_types directly
-            if let Some(ret_ty) = return_type {
-                collect_vec_types_from_type(ret_ty, vec_types);
-            }
-            for arg in args {
-                collect_vec_types_from_expr(arg, vec_types);
-            }
-        }
-        IREexpr::TupleLit { elements, .. } => {
-            for elem in elements {
-                collect_vec_types_from_expr(elem, vec_types);
-            }
-        }
-        IREexpr::ArrayLiteral { elements, repeat } => {
-            for elem in elements {
-                collect_vec_types_from_expr(elem, vec_types);
-            }
-            if let Some((value_expr, _)) = repeat {
-                collect_vec_types_from_expr(value_expr, vec_types);
-            }
-        }
-        IREexpr::Index {
-            target,
-            index,
-            target_type: _,
-        } => {
-            collect_vec_types_from_expr(target, vec_types);
-            collect_vec_types_from_expr(index, vec_types);
-        }
-        IREexpr::Cast { expr, .. } => {
-            collect_vec_types_from_expr(expr, vec_types);
-        }
-        IREexpr::Assign { target: _, value } => {
-            collect_vec_types_from_expr(value, vec_types);
-        }
-        IREexpr::AssignIndex {
-            target,
-            index,
-            value,
-            ..
-        } => {
-            collect_vec_types_from_expr(target, vec_types);
-            collect_vec_types_from_expr(index, vec_types);
-            collect_vec_types_from_expr(value, vec_types);
-        }
-        IREexpr::AssignField { target, value, .. } => {
-            collect_vec_types_from_expr(target, vec_types);
-            collect_vec_types_from_expr(value, vec_types);
-        }
-        IREexpr::FnLiteral(lit) => {
-            for param in &lit.params {
-                collect_vec_types_from_type(&param.ty, vec_types);
-            }
-            if let Some(ret) = &lit.return_type {
-                collect_vec_types_from_type(ret, vec_types);
-            }
-            for stmt in &lit.body.statements {
-                collect_vec_types_from_stmt(stmt, vec_types);
-            }
-        }
-        IREexpr::Spawn { body, .. } => {
-            for stmt in &body.statements {
-                collect_vec_types_from_stmt(stmt, vec_types);
-            }
-        }
-    }
-}
-
 impl Codegen {
     fn insert_spawn_fn_literal_forward_decls(&mut self, insert_at: usize) {
         if self.spawn_forward_decls.is_empty() && self.fn_literal_forward_decls.is_empty() {
@@ -6567,48 +5608,65 @@ impl Codegen {
         if self.enum_map.contains_key("Option") {
             return;
         }
-        let option_template = EnumDecl {
-            doc: None,
-            pub_: false,
-            name: "Option".to_string(),
-            generics: vec![TypeParam::simple("T")],
-            variants: vec![
-                EnumVariant {
-                    doc: None,
-                    name: "Some".to_string(),
-                    payload_types: vec![Type::Generic {
-                        name: "T".to_string(),
-                        params: vec![],
-                    }],
-                    named_fields: None,
-                    span: Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        column: 0,
-                    },
-                },
-                EnumVariant {
-                    doc: None,
-                    name: "None".to_string(),
-                    payload_types: vec![],
-                    named_fields: None,
-                    span: Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        column: 0,
-                    },
-                },
-            ],
-            span: Span {
+        let option_template = synthetic_option_enum(Span {
+            start: 0,
+            end: 0,
+            line: 0,
+            column: 0,
+        });
+        self.enum_map.insert("Option".to_string(), option_template);
+    }
+
+    fn partition_generic_instantiations(
+        &self,
+        instantiations: &[&(String, Vec<Type>)],
+    ) -> GenericInstantiationGroups {
+        let mut struct_instantiations = Vec::new();
+        let mut early_enum_instantiations = Vec::new();
+        let mut late_enum_instantiations = Vec::new();
+        for &(base_name, params) in instantiations {
+            if let Some(decl) = self.struct_map.get(base_name) {
+                struct_instantiations.push((decl.clone(), params.clone()));
+            } else if let Some(decl) = self.enum_map.get(base_name) {
+                if params_complete_with_struct_forwards(params) {
+                    early_enum_instantiations.push((decl.clone(), params.clone()));
+                } else {
+                    late_enum_instantiations.push((decl.clone(), params.clone()));
+                }
+            }
+        }
+        (
+            struct_instantiations,
+            early_enum_instantiations,
+            late_enum_instantiations,
+        )
+    }
+
+    fn emit_vec_primitive_options(&mut self, program: &IRProgram) {
+        let mut vec_types = std::collections::HashSet::new();
+        collect_vec_types_impl(program, &mut vec_types);
+        for vec_type_name in &vec_types {
+            let Some(elem_type_str) = vec_type_name.strip_prefix("Vec_") else {
+                continue;
+            };
+            let option_type_name = format!("Option_{elem_type_str}");
+            if self.generated_types.contains_key(&option_type_name) {
+                continue;
+            }
+            let Some(elem_type) = primitive_type_from_mangled_name(elem_type_str) else {
+                continue;
+            };
+            let option_decl = synthetic_option_enum(Span {
                 start: 0,
                 end: 0,
                 line: 0,
                 column: 0,
-            },
-        };
-        self.enum_map.insert("Option".to_string(), option_template);
+            });
+            self.generate_monomorphized_enum(&option_decl, std::slice::from_ref(&elem_type));
+            self.generated_types.insert(option_type_name.clone(), true);
+            self.generic_instantiations
+                .insert(option_type_name, ("Option".to_string(), vec![elem_type]));
+        }
     }
 
     fn emit_non_generic_type_forwards(&mut self, program: &IRProgram) {
@@ -6803,15 +5861,10 @@ impl Codegen {
         self.indent_level += 1;
         for (i, elem) in elements.iter().enumerate() {
             self.write_indent();
-            match elem {
-                Type::Array { inner, size, .. } => {
-                    let base_type = self.type_to_c(inner);
-                    self.writeln(&format!("{} f{}[{}];", base_type, i, size));
-                }
-                _ => {
-                    self.writeln(&format!("{} f{};", self.type_to_c(elem), i));
-                }
-            }
+            self.writeln(&format!(
+                "{};",
+                self.c_struct_field_decl(&format!("f{i}"), elem)
+            ));
         }
         self.indent_level -= 1;
         self.writeln(&format!("}} {};", tuple_name));
@@ -6835,44 +5888,34 @@ impl Codegen {
         self.indent_level += 1;
         for field in &decl.fields {
             self.write_indent();
-            let field_ty = substitute_generic_types(&field.ty, &substitutions);
-            // Handle arrays specially: in struct fields, arrays must be declared as "type name[size];"
-            // not "type[size] name;" which is invalid C syntax
-            let field_decl = match &field_ty {
-                Type::Array { inner, size, .. } => {
-                    let base_type = self.type_to_c(inner);
-                    format!("{} {}[{}]", base_type, field.name, size)
-                }
-                _ => {
-                    format!("{} {}", self.type_to_c(&field_ty), field.name)
-                }
-            };
-            self.writeln(&format!("{};", field_decl));
+            let field_ty = substitute_type_params(&field.ty, &substitutions);
+            self.writeln(&format!(
+                "{};",
+                self.c_struct_field_decl(&field.name, &field_ty)
+            ));
         }
         self.indent_level -= 1;
         self.writeln(&format!("}} {};", monomorphized_name));
         self.writeln("");
     }
 
-    fn emit_struct_decl_body(&mut self, decl: &StructDecl) {
+    fn emit_struct_typedef(&mut self, decl: &StructDecl) {
         self.write(&format!("typedef struct {} {{\n", decl.name));
         self.indent_level += 1;
         for field in &decl.fields {
             self.write_indent();
-            let field_decl = match &field.ty {
-                Type::Array { inner, size, .. } => {
-                    let base_type = self.type_to_c(inner);
-                    format!("{} {}[{}]", base_type, field.name, size)
-                }
-                _ => {
-                    format!("{} {}", self.type_to_c(&field.ty), field.name)
-                }
-            };
-            self.writeln(&format!("{};", field_decl));
+            self.writeln(&format!(
+                "{};",
+                self.c_struct_field_decl(&field.name, &field.ty)
+            ));
         }
         self.indent_level -= 1;
         self.writeln(&format!("}} {};", decl.name));
         self.writeln("");
+    }
+
+    fn emit_struct_decl_body(&mut self, decl: &StructDecl) {
+        self.emit_struct_typedef(decl);
         self.generated_types.insert(decl.name.clone(), true);
     }
 
@@ -7002,7 +6045,7 @@ impl Codegen {
             if let Some(named_fields) = &variant.named_fields {
                 for (field_name, field_ty) in named_fields {
                     self.write_indent();
-                    let substituted_ty = substitute_generic_types(field_ty, &substitutions);
+                    let substituted_ty = substitute_type_params(field_ty, &substitutions);
                     self.write(&format!(
                         "{} {};",
                         self.type_to_c(&substituted_ty),
@@ -7013,7 +6056,7 @@ impl Codegen {
             } else {
                 for (i, payload_ty) in variant.payload_types.iter().enumerate() {
                     self.write_indent();
-                    let substituted_ty = substitute_generic_types(payload_ty, &substitutions);
+                    let substituted_ty = substitute_type_params(payload_ty, &substitutions);
                     self.write(&format!("{} arg{};", self.type_to_c(&substituted_ty), i));
                     self.writeln("");
                 }
@@ -7029,96 +6072,6 @@ impl Codegen {
         self.indent_level -= 1;
         self.writeln(&format!("}} {};", monomorphized_name));
         self.writeln("");
-    }
-}
-
-fn substitute_generic_types(ty: &Type, substitutions: &HashMap<String, &Type>) -> Type {
-    match ty {
-        Type::Struct(name) => {
-            // Check if this is a generic parameter name
-            if let Some(substituted) = substitutions.get(name) {
-                (*substituted).clone()
-            } else {
-                ty.clone()
-            }
-        }
-        Type::Enum(name) => {
-            // Check if this is a generic parameter name
-            if let Some(substituted) = substitutions.get(name) {
-                (*substituted).clone()
-            } else {
-                ty.clone()
-            }
-        }
-        Type::Ref { inner, mutable } => Type::Ref {
-            inner: Box::new(substitute_generic_types(inner, substitutions)),
-            mutable: *mutable,
-        },
-        Type::Box { inner } => Type::Box {
-            inner: Box::new(substitute_generic_types(inner, substitutions)),
-        },
-        Type::Vec { elem_type } => Type::Vec {
-            elem_type: Box::new(substitute_generic_types(elem_type, substitutions)),
-        },
-        Type::Channel { elem_type } => Type::Channel {
-            elem_type: Box::new(substitute_generic_types(elem_type, substitutions)),
-        },
-        Type::Array {
-            inner,
-            size,
-            len_name,
-        } => Type::Array {
-            inner: Box::new(substitute_generic_types(inner, substitutions)),
-            size: *size,
-            len_name: len_name.clone(),
-        },
-        Type::Slice { inner } => Type::Slice {
-            inner: Box::new(substitute_generic_types(inner, substitutions)),
-        },
-        Type::RawPtr { inner } => Type::RawPtr {
-            inner: Box::new(substitute_generic_types(inner, substitutions)),
-        },
-        Type::Sender { elem_type } => Type::Sender {
-            elem_type: Box::new(substitute_generic_types(elem_type, substitutions)),
-        },
-        Type::Receiver { elem_type } => Type::Receiver {
-            elem_type: Box::new(substitute_generic_types(elem_type, substitutions)),
-        },
-        Type::Tuple { elements } => Type::Tuple {
-            elements: elements
-                .iter()
-                .map(|e| substitute_generic_types(e, substitutions))
-                .collect(),
-        },
-        Type::Fn {
-            params,
-            return_type,
-        } => Type::Fn {
-            params: params
-                .iter()
-                .map(|p| substitute_generic_types(p, substitutions))
-                .collect(),
-            return_type: Box::new(substitute_generic_types(return_type, substitutions)),
-        },
-        Type::Generic { name, params } => {
-            // First check if the generic name itself is a generic parameter (e.g., T in Option<T>)
-            if let Some(substituted) = substitutions.get(name) {
-                // If the generic name is a parameter, substitute it entirely
-                // But we still need to recursively substitute any nested generics
-                substitute_generic_types(substituted, substitutions)
-            } else {
-                // Otherwise, recursively substitute parameters
-                let substituted_params: Vec<Type> = params
-                    .iter()
-                    .map(|p| substitute_generic_types(p, substitutions))
-                    .collect();
-                Type::Generic {
-                    name: name.clone(),
-                    params: substituted_params,
-                }
-            }
-        }
-        _ => ty.clone(),
     }
 }
 
@@ -7229,28 +6182,7 @@ fn collect_generic_instantiations(
     program: &IRProgram,
     instantiations: &mut std::collections::HashMap<String, (String, Vec<Type>)>,
 ) {
-    // Collect from function parameters, return types, and struct fields
-    for function in &program.functions {
-        if let Some(ref ret_ty) = function.return_type {
-            collect_generic_from_type(ret_ty, instantiations);
-        }
-        for param in &function.params {
-            collect_generic_from_type(&param.ty, instantiations);
-        }
-        for block in &function.blocks {
-            for stmt in &block.statements {
-                collect_generic_from_stmt(stmt, instantiations);
-            }
-        }
-    }
-    for s in &program.structs {
-        for field in &s.fields {
-            collect_generic_from_type(&field.ty, instantiations);
-        }
-    }
-    visit_enum_payload_types(program, &mut |ty| {
-        collect_generic_from_type(ty, instantiations);
-    });
+    instantiations.extend(collect_referenced_types(program).generics);
     close_generic_instantiations(program, instantiations);
 
     let known = known_type_names(program);
@@ -7281,7 +6213,7 @@ fn close_generic_instantiations(
                     owned.iter().map(|(n, t)| (n.clone(), t)).collect();
                 for field in &decl.fields {
                     collect_generic_from_type(
-                        &substitute_generic_types(&field.ty, &subst),
+                        &substitute_type_params(&field.ty, &subst),
                         instantiations,
                     );
                 }
@@ -7300,14 +6232,14 @@ fn close_generic_instantiations(
                 for variant in &decl.variants {
                     for ty in &variant.payload_types {
                         collect_generic_from_type(
-                            &substitute_generic_types(ty, &subst),
+                            &substitute_type_params(ty, &subst),
                             instantiations,
                         );
                     }
                     if let Some(fields) = &variant.named_fields {
                         for (_, ty) in fields {
                             collect_generic_from_type(
-                                &substitute_generic_types(ty, &subst),
+                                &substitute_type_params(ty, &subst),
                                 instantiations,
                             );
                         }
@@ -7441,315 +6373,6 @@ fn collect_generic_from_type(
             collect_generic_from_type(return_type, instantiations);
         }
         _ => {}
-    }
-}
-
-fn collect_generic_from_stmt(
-    stmt: &IRStmt,
-    instantiations: &mut std::collections::HashMap<String, (String, Vec<Type>)>,
-) {
-    match stmt {
-        IRStmt::Let(let_stmt) => {
-            collect_generic_from_type(&let_stmt.ty, instantiations);
-            if let Some(ref init) = let_stmt.init {
-                collect_generic_from_expr(init, instantiations);
-            }
-        }
-        IRStmt::Return(ret) => {
-            if let Some(ref value) = ret.value {
-                collect_generic_from_expr(value, instantiations);
-            }
-        }
-        IRStmt::Break | IRStmt::Continue => {}
-        IRStmt::Expr(expr) => collect_generic_from_expr(expr, instantiations),
-        IRStmt::If(ir_if) => {
-            collect_generic_from_expr(&ir_if.cond, instantiations);
-            for stmt in &ir_if.then_block.statements {
-                collect_generic_from_stmt(stmt, instantiations);
-            }
-            if let Some(ref else_block) = ir_if.else_block {
-                for stmt in &else_block.statements {
-                    collect_generic_from_stmt(stmt, instantiations);
-                }
-            }
-        }
-        IRStmt::While(ir_while) => {
-            collect_generic_from_expr(&ir_while.cond, instantiations);
-            for stmt in &ir_while.body.statements {
-                collect_generic_from_stmt(stmt, instantiations);
-            }
-            if let Some(ref step) = ir_while.step {
-                for stmt in &step.statements {
-                    collect_generic_from_stmt(stmt, instantiations);
-                }
-            }
-        }
-        IRStmt::Spawn(spawn) => {
-            for stmt in &spawn.body.statements {
-                collect_generic_from_stmt(stmt, instantiations);
-            }
-        }
-        IRStmt::Select(sel) => {
-            for arm in &sel.recv_arms {
-                collect_generic_from_expr(&arm.channel, instantiations);
-                collect_generic_from_type(&arm.elem_type, instantiations);
-                let option_ty = Type::Generic {
-                    name: "Option".to_string(),
-                    params: vec![arm.elem_type.clone()],
-                };
-                collect_generic_from_type(&option_ty, instantiations);
-                for stmt in &arm.body.statements {
-                    collect_generic_from_stmt(stmt, instantiations);
-                }
-            }
-            if let Some(body) = &sel.default_body {
-                for stmt in &body.statements {
-                    collect_generic_from_stmt(stmt, instantiations);
-                }
-            }
-            if let Some(ms) = &sel.timeout_ms {
-                collect_generic_from_expr(ms, instantiations);
-            }
-            if let Some(body) = &sel.timeout_body {
-                for stmt in &body.statements {
-                    collect_generic_from_stmt(stmt, instantiations);
-                }
-            }
-        }
-        IRStmt::Defer(_) => {}
-        IRStmt::UnsafeBlock(unsafe_block) => {
-            for stmt in &unsafe_block.body.statements {
-                collect_generic_from_stmt(stmt, instantiations);
-            }
-        }
-    }
-}
-
-fn collect_generic_from_expr(
-    expr: &IREexpr,
-    instantiations: &mut std::collections::HashMap<String, (String, Vec<Type>)>,
-) {
-    match expr {
-        IREexpr::Var(_)
-        | IREexpr::Lit(_)
-        | IREexpr::IntLimit { .. }
-        | IREexpr::BoolLiteral(_)
-        | IREexpr::FloatLiteral(_)
-        | IREexpr::StringLit(_) => {}
-        IREexpr::BinOp { left, right, .. } => {
-            collect_generic_from_expr(left, instantiations);
-            collect_generic_from_expr(right, instantiations);
-        }
-        IREexpr::UnOp { operand, .. } => {
-            collect_generic_from_expr(operand, instantiations);
-        }
-        IREexpr::AddressOf { inner, .. } => {
-            collect_generic_from_expr(inner, instantiations);
-        }
-        IREexpr::Send {
-            channel,
-            value,
-            value_type,
-        } => {
-            collect_generic_from_expr(channel, instantiations);
-            collect_generic_from_expr(value, instantiations);
-            collect_generic_from_type(value_type, instantiations);
-            let send_result = Type::Generic {
-                name: "SendResult".to_string(),
-                params: vec![value_type.clone()],
-            };
-            collect_generic_from_type(&send_result, instantiations);
-        }
-        IREexpr::Recv {
-            channel, elem_type, ..
-        } => {
-            collect_generic_from_expr(channel, instantiations);
-            collect_generic_from_type(elem_type, instantiations);
-            let option_ty = Type::Generic {
-                name: "Option".to_string(),
-                params: vec![elem_type.clone()],
-            };
-            collect_generic_from_type(&option_ty, instantiations);
-        }
-        IREexpr::StructLit { fields, .. } => {
-            for field in fields {
-                collect_generic_from_expr(&field.value, instantiations);
-            }
-        }
-        IREexpr::FieldAccess { base, .. } => {
-            collect_generic_from_expr(base, instantiations);
-        }
-        IREexpr::EnumLit { args, ty, .. } => {
-            collect_generic_from_type(ty, instantiations);
-            for arg in args {
-                collect_generic_from_expr(arg, instantiations);
-            }
-        }
-        IREexpr::Match { expr, arms, .. } => {
-            collect_generic_from_expr(expr, instantiations);
-            // Also collect Option types from Vec::pop/Vec::get calls in match expressions
-            if let IREexpr::Call {
-                callee,
-                return_type,
-                ..
-            } = expr.as_ref()
-            {
-                let is_vec_option_call = callee == "Vec::pop"
-                    || callee == "Vec::get"
-                    || callee == "Vec::get_ref"
-                    || callee == "Slice::get_ref"
-                    || callee == "Arena::get_ref"
-                    || callee == "File::open"
-                    || callee == "File::create"
-                    || callee == "String::get"
-                    || callee == "String::from_utf8";
-
-                if is_vec_option_call {
-                    // First try to get Option type from return_type if available
-                    if let Some(Type::Generic { name, params }) = return_type
-                        && name == "Option"
-                        && params.len() == 1
-                    {
-                        let option_key = mangle_type_name("Option", params);
-                        instantiations
-                            .entry(option_key)
-                            .or_insert_with(|| ("Option".to_string(), params.clone()));
-                    } else if callee == "Vec::get_ref" || callee == "Slice::get_ref" {
-                        if let Some(elem_type) =
-                            instantiations
-                                .iter()
-                                .find_map(|(_mono_name, (base, params))| {
-                                    if (base == "Vec" || base == "Slice") && params.len() == 1 {
-                                        Some(params[0].clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                        {
-                            let ref_elem = Type::Ref {
-                                inner: Box::new(elem_type.clone()),
-                                mutable: false,
-                            };
-                            let option_key =
-                                mangle_type_name("Option", std::slice::from_ref(&ref_elem));
-                            instantiations
-                                .entry(option_key)
-                                .or_insert_with(|| ("Option".to_string(), vec![ref_elem]));
-                        }
-                    } else if callee == "String::get" {
-                        let option_key =
-                            mangle_type_name("Option", std::slice::from_ref(&Type::U8));
-                        instantiations
-                            .entry(option_key)
-                            .or_insert_with(|| ("Option".to_string(), vec![Type::U8]));
-                    } else if callee == "String::from_utf8" {
-                        let option_key =
-                            mangle_type_name("Option", std::slice::from_ref(&Type::String));
-                        instantiations
-                            .entry(option_key)
-                            .or_insert_with(|| ("Option".to_string(), vec![Type::String]));
-                    } else {
-                        // Otherwise, extract element type from Vec<T> in instantiations
-                        if let Some(elem_type) =
-                            instantiations
-                                .iter()
-                                .find_map(|(_mono_name, (base, params))| {
-                                    if base == "Vec" && params.len() == 1 {
-                                        Some(params[0].clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                        {
-                            // Add Option<T> to instantiations
-                            let option_key =
-                                mangle_type_name("Option", std::slice::from_ref(&elem_type));
-                            instantiations
-                                .entry(option_key)
-                                .or_insert_with(|| ("Option".to_string(), vec![elem_type]));
-                        }
-                    }
-                }
-            }
-            for arm in arms {
-                for stmt in &arm.body.statements {
-                    collect_generic_from_stmt(stmt, instantiations);
-                }
-            }
-        }
-        IREexpr::Call {
-            args, return_type, ..
-        } => {
-            if let Some(ret_ty) = return_type {
-                collect_generic_from_type(ret_ty, instantiations);
-            }
-            for arg in args {
-                collect_generic_from_expr(arg, instantiations);
-            }
-        }
-        IREexpr::TupleLit {
-            elements,
-            elem_types,
-        } => {
-            for ty in elem_types {
-                collect_generic_from_type(ty, instantiations);
-            }
-            for elem in elements {
-                collect_generic_from_expr(elem, instantiations);
-            }
-        }
-        IREexpr::ArrayLiteral { elements, repeat } => {
-            for elem in elements {
-                collect_generic_from_expr(elem, instantiations);
-            }
-            if let Some((value_expr, _)) = repeat {
-                collect_generic_from_expr(value_expr, instantiations);
-            }
-        }
-        IREexpr::Index {
-            target,
-            index,
-            target_type: _,
-        } => {
-            collect_generic_from_expr(target, instantiations);
-            collect_generic_from_expr(index, instantiations);
-        }
-        IREexpr::Cast { expr, .. } => {
-            collect_generic_from_expr(expr, instantiations);
-        }
-        IREexpr::Assign { target: _, value } => {
-            collect_generic_from_expr(value, instantiations);
-        }
-        IREexpr::AssignIndex {
-            target,
-            index,
-            value,
-            ..
-        } => {
-            collect_generic_from_expr(target, instantiations);
-            collect_generic_from_expr(index, instantiations);
-            collect_generic_from_expr(value, instantiations);
-        }
-        IREexpr::AssignField { target, value, .. } => {
-            collect_generic_from_expr(target, instantiations);
-            collect_generic_from_expr(value, instantiations);
-        }
-        IREexpr::FnLiteral(lit) => {
-            for param in &lit.params {
-                collect_generic_from_type(&param.ty, instantiations);
-            }
-            if let Some(ret) = &lit.return_type {
-                collect_generic_from_type(ret, instantiations);
-            }
-            for stmt in &lit.body.statements {
-                collect_generic_from_stmt(stmt, instantiations);
-            }
-        }
-        IREexpr::Spawn { body, .. } => {
-            for stmt in &body.statements {
-                collect_generic_from_stmt(stmt, instantiations);
-            }
-        }
     }
 }
 

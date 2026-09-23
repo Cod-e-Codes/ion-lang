@@ -290,19 +290,22 @@ pub(crate) fn types_equal(a: &Type, b: &Type) -> bool {
 pub fn type_to_string(ty: &Type) -> String {
     match ty {
         Type::Void => "void".to_string(),
-        Type::Int => "int".to_string(),
+        Type::Int
+        | Type::I8
+        | Type::I16
+        | Type::I32
+        | Type::I64
+        | Type::U8
+        | Type::U16
+        | Type::U32
+        | Type::U64
+        | Type::UInt => crate::integer_limits::integer_row(ty)
+            .expect("integer row")
+            .name
+            .to_string(),
         Type::Bool => "bool".to_string(),
         Type::F32 => "f32".to_string(),
         Type::F64 => "f64".to_string(),
-        Type::I8 => "i8".to_string(),
-        Type::I16 => "i16".to_string(),
-        Type::I32 => "i32".to_string(),
-        Type::I64 => "i64".to_string(),
-        Type::U8 => "u8".to_string(),
-        Type::U16 => "u16".to_string(),
-        Type::U32 => "u32".to_string(),
-        Type::U64 => "u64".to_string(),
-        Type::UInt => "uint".to_string(),
         Type::Ref { inner, mutable } => {
             if *mutable {
                 format!("&mut {}", type_to_string(inner))

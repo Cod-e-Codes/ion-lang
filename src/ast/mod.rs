@@ -185,6 +185,35 @@ pub struct EnumVariant {
     pub span: Span,
 }
 
+pub fn synthetic_option_enum(span: Span) -> EnumDecl {
+    EnumDecl {
+        doc: None,
+        pub_: false,
+        name: "Option".to_string(),
+        generics: vec![TypeParam::simple("T")],
+        variants: vec![
+            EnumVariant {
+                doc: None,
+                name: "Some".to_string(),
+                payload_types: vec![Type::Generic {
+                    name: "T".to_string(),
+                    params: vec![],
+                }],
+                named_fields: None,
+                span,
+            },
+            EnumVariant {
+                doc: None,
+                name: "None".to_string(),
+                payload_types: vec![],
+                named_fields: None,
+                span,
+            },
+        ],
+        span,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StructField {
     pub doc: Option<String>,
@@ -446,6 +475,36 @@ impl Expr {
         }
     }
 
+    pub fn span(&self) -> Span {
+        match self {
+            Expr::Lit(e) => e.span,
+            Expr::BoolLiteral(e) => e.span,
+            Expr::FloatLiteral(e) => e.span,
+            Expr::Var(e) => e.span,
+            Expr::BinOp(e) => e.span,
+            Expr::UnOp(e) => e.span,
+            Expr::Ref(e) => e.span,
+            Expr::Send(e) => e.span,
+            Expr::Recv(e) => e.span,
+            Expr::Spawn(e) => e.span,
+            Expr::StructLit(e) => e.span,
+            Expr::FieldAccess(e) => e.span,
+            Expr::EnumLit(e) => e.span,
+            Expr::Match(e) => e.span,
+            Expr::Try(e) => e.span,
+            Expr::Call(e) => e.span,
+            Expr::MethodCall(e) => e.span,
+            Expr::StringLit(e) => e.span,
+            Expr::ArrayLiteral(e) => e.span,
+            Expr::TupleLit(e) => e.span,
+            Expr::Index(e) => e.span,
+            Expr::Cast(e) => e.span,
+            Expr::Assign(e) => e.span,
+            Expr::FnLiteral(e) => e.span,
+            Expr::TypeConst(e) => e.span,
+        }
+    }
+
     pub fn set_id(&mut self, id: ExprId) {
         match self {
             Expr::Lit(e) => e.id = id,
@@ -479,67 +538,9 @@ impl Expr {
 
 /// Assign unique `ExprId`s in `program`, starting at `*next_id` (must be >= 1).
 pub fn substitute_self_type(ty: &Type, target: &Type) -> Type {
-    match ty {
-        Type::Struct(name) if name == "Self" => target.clone(),
-        Type::Ref { inner, mutable } => Type::Ref {
-            inner: Box::new(substitute_self_type(inner, target)),
-            mutable: *mutable,
-        },
-        Type::RawPtr { inner } => Type::RawPtr {
-            inner: Box::new(substitute_self_type(inner, target)),
-        },
-        Type::Box { inner } => Type::Box {
-            inner: Box::new(substitute_self_type(inner, target)),
-        },
-        Type::Vec { elem_type } => Type::Vec {
-            elem_type: Box::new(substitute_self_type(elem_type, target)),
-        },
-        Type::Array {
-            inner,
-            size,
-            len_name,
-        } => Type::Array {
-            inner: Box::new(substitute_self_type(inner, target)),
-            size: *size,
-            len_name: len_name.clone(),
-        },
-        Type::Slice { inner } => Type::Slice {
-            inner: Box::new(substitute_self_type(inner, target)),
-        },
-        Type::Generic { name, params } => Type::Generic {
-            name: name.clone(),
-            params: params
-                .iter()
-                .map(|p| substitute_self_type(p, target))
-                .collect(),
-        },
-        Type::Tuple { elements } => Type::Tuple {
-            elements: elements
-                .iter()
-                .map(|p| substitute_self_type(p, target))
-                .collect(),
-        },
-        Type::Fn {
-            params,
-            return_type,
-        } => Type::Fn {
-            params: params
-                .iter()
-                .map(|p| substitute_self_type(p, target))
-                .collect(),
-            return_type: Box::new(substitute_self_type(return_type, target)),
-        },
-        Type::Channel { elem_type } => Type::Channel {
-            elem_type: Box::new(substitute_self_type(elem_type, target)),
-        },
-        Type::Sender { elem_type } => Type::Sender {
-            elem_type: Box::new(substitute_self_type(elem_type, target)),
-        },
-        Type::Receiver { elem_type } => Type::Receiver {
-            elem_type: Box::new(substitute_self_type(elem_type, target)),
-        },
-        other => other.clone(),
-    }
+    let mut substitutions = std::collections::HashMap::new();
+    substitutions.insert("Self".to_string(), target.clone());
+    crate::types_util::substitute_type(ty, &substitutions)
 }
 
 pub fn number_program(program: &mut Program, next_id: &mut u32) {

@@ -4,7 +4,7 @@ use crate::tc::{TypeInfo, collect_captured_vars};
 /// Sentinel lowered into nested-match catch-all bindings. Codegen rewrites it to
 /// the parent match's C scrutinee temp so `other` is the whole outer value.
 pub(crate) const MATCH_PARENT_SCRUTINEE: &str = "__ion_match_parent_scrutinee";
-use crate::types_util::{infer_generic_substitutions, ref_to_vec_elem};
+use crate::types_util::{infer_generic_substitutions, ref_to_vec_elem, slice_elem_type};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -512,15 +512,19 @@ enum NestedSlot {
     Named(String),
 }
 
-fn struct_subst(decl: &StructDecl, scrutinee: &Type) -> HashMap<String, Type> {
+fn zip_generic_params(generics: &[TypeParam], scrutinee: &Type) -> HashMap<String, Type> {
     let Type::Generic { params, .. } = scrutinee else {
         return HashMap::new();
     };
-    decl.generics
+    generics
         .iter()
         .zip(params.iter())
         .map(|(param, ty)| (param.name.clone(), ty.clone()))
         .collect()
+}
+
+fn struct_subst(decl: &StructDecl, scrutinee: &Type) -> HashMap<String, Type> {
+    zip_generic_params(&decl.generics, scrutinee)
 }
 
 fn generic_subst_from_scrutinee(decl: &EnumDecl, scrutinee: &Type) -> HashMap<String, Type> {
@@ -528,15 +532,7 @@ fn generic_subst_from_scrutinee(decl: &EnumDecl, scrutinee: &Type) -> HashMap<St
         Type::Ref { inner, .. } => inner.as_ref(),
         other => other,
     };
-    if let Type::Generic { params, .. } = peeled {
-        decl.generics
-            .iter()
-            .zip(params.iter())
-            .map(|(tp, ty)| (tp.name.clone(), ty.clone()))
-            .collect()
-    } else {
-        HashMap::new()
-    }
+    zip_generic_params(&decl.generics, peeled)
 }
 
 fn peel_type_ref(ty: &Type) -> Type {
@@ -2025,16 +2021,7 @@ fn slice_elem_type_from_arg_expr(arg: &Expr, ctx: &LoweringContext) -> Option<Ty
         Expr::Ref(r) => ctx.resolve_expr_type(&r.inner)?,
         _ => ctx.resolve_expr_type(arg)?,
     };
-    match &ty {
-        Type::Slice { inner } => Some((**inner).clone()),
-        Type::Array { inner, .. } => Some((**inner).clone()),
-        Type::Ref { inner, .. } => match inner.as_ref() {
-            Type::Slice { inner } => Some((**inner).clone()),
-            Type::Array { inner, .. } => Some((**inner).clone()),
-            _ => None,
-        },
-        _ => None,
-    }
+    slice_elem_type(&ty)
 }
 
 fn builtin_option_vec_return(callee: &str, args: &[Expr], ctx: &LoweringContext) -> Option<Type> {
@@ -2913,35 +2900,60 @@ fn rewrite_generic_calls_in_expr(
     }
 }
 
+pub(crate) fn ir_expr_stored_type(expr: &IREexpr) -> Option<Type> {
+    match expr {
+        IREexpr::Var(_) => None,
+        IREexpr::Lit(_) => Some(Type::Int),
+        IREexpr::BoolLiteral(_) => Some(Type::Bool),
+        IREexpr::FloatLiteral(_) => Some(Type::F64),
+        IREexpr::IntLimit { ty, .. } => Some(ty.clone()),
+        IREexpr::StringLit(_) => Some(Type::String),
+        IREexpr::FieldAccess { ty, .. } => Some(ty.clone()),
+        IREexpr::AddressOf { ty, .. } => Some(ty.clone()),
+        IREexpr::BinOp { result_type, .. } | IREexpr::UnOp { result_type, .. } => {
+            Some(result_type.clone())
+        }
+        IREexpr::Call { return_type, .. } => return_type.clone(),
+        IREexpr::TupleLit { elem_types, .. } => Some(Type::Tuple {
+            elements: elem_types.clone(),
+        }),
+        IREexpr::Spawn { .. } => Some(Type::JoinHandle),
+        IREexpr::Cast { target_type, .. } => Some(target_type.clone()),
+        IREexpr::EnumLit { ty, .. } => Some(ty.clone()),
+        IREexpr::Match { result_type, .. } => Some(result_type.clone()),
+        IREexpr::Index { target_type, .. } => target_type.clone(),
+        IREexpr::FnLiteral(lit) => Some(Type::Fn {
+            params: lit.params.iter().map(|p| p.ty.clone()).collect(),
+            return_type: Box::new(lit.return_type.clone().unwrap_or(Type::Void)),
+        }),
+        IREexpr::Send { .. }
+        | IREexpr::Recv { .. }
+        | IREexpr::StructLit { .. }
+        | IREexpr::ArrayLiteral { .. }
+        | IREexpr::Assign { .. }
+        | IREexpr::AssignIndex { .. }
+        | IREexpr::AssignField { .. } => None,
+    }
+}
+
 fn stored_ir_expr_type(
     expr: &IREexpr,
     ctx: &GenericRewrite<'_>,
     var_types: &HashMap<String, Type>,
 ) -> Option<Type> {
-    match expr {
-        IREexpr::Var(name) => var_types
+    if let IREexpr::Var(name) = expr {
+        return var_types
             .get(name)
             .cloned()
-            .or_else(|| ctx.function_fn_types.get(name).cloned()),
-        IREexpr::Lit(_) => Some(Type::Int),
-        IREexpr::IntLimit { ty, .. } => Some(ty.clone()),
-        IREexpr::BoolLiteral(_) => Some(Type::Bool),
-        IREexpr::FloatLiteral(_) => Some(Type::F64),
-        IREexpr::StringLit(_) => Some(Type::String),
-        IREexpr::Call {
-            return_type: Some(ty),
-            ..
-        } => Some(ty.clone()),
-        IREexpr::FnLiteral(lit) => Some(Type::Fn {
-            params: lit.params.iter().map(|p| p.ty.clone()).collect(),
-            return_type: Box::new(lit.return_type.clone().unwrap_or(Type::Void)),
-        }),
-        IREexpr::TupleLit { elem_types, .. } if !elem_types.is_empty() => Some(Type::Tuple {
-            elements: elem_types.clone(),
-        }),
-        IREexpr::AddressOf { ty, .. } => Some(ty.clone()),
-        IREexpr::FieldAccess { ty, .. } => Some(ty.clone()),
-        _ => None,
+            .or_else(|| ctx.function_fn_types.get(name).cloned());
+    }
+    // Index stores the container type. Using it as the value type would infer the wrong parameter.
+    if matches!(expr, IREexpr::Index { .. }) {
+        return None;
+    }
+    match ir_expr_stored_type(expr) {
+        Some(Type::Tuple { elements }) if elements.is_empty() => None,
+        other => other,
     }
 }
 
@@ -3401,96 +3413,7 @@ fn substitute_types_in_expr(expr: &IREexpr, substitutions: &HashMap<String, Type
 }
 
 fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
-    match ty {
-        Type::Generic { name, params } => {
-            if params.is_empty() {
-                substitutions
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| ty.clone())
-            } else {
-                Type::Generic {
-                    name: name.clone(),
-                    params: params
-                        .iter()
-                        .map(|p| substitute_type(p, substitutions))
-                        .collect(),
-                }
-            }
-        }
-        Type::Struct(name) | Type::Enum(name) => substitutions
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| ty.clone()),
-        Type::Ref { inner, mutable } => Type::Ref {
-            inner: Box::new(substitute_type(inner, substitutions)),
-            mutable: *mutable,
-        },
-        Type::RawPtr { inner } => Type::RawPtr {
-            inner: Box::new(substitute_type(inner, substitutions)),
-        },
-        Type::Box { inner } => Type::Box {
-            inner: Box::new(substitute_type(inner, substitutions)),
-        },
-        Type::Vec { elem_type } => Type::Vec {
-            elem_type: Box::new(substitute_type(elem_type, substitutions)),
-        },
-        Type::Channel { elem_type } => Type::Channel {
-            elem_type: Box::new(substitute_type(elem_type, substitutions)),
-        },
-        Type::Array {
-            inner,
-            size,
-            len_name,
-        } => Type::Array {
-            inner: Box::new(substitute_type(inner, substitutions)),
-            size: *size,
-            len_name: len_name.clone(),
-        },
-        Type::Slice { inner } => Type::Slice {
-            inner: Box::new(substitute_type(inner, substitutions)),
-        },
-        Type::Sender { elem_type } => Type::Sender {
-            elem_type: Box::new(substitute_type(elem_type, substitutions)),
-        },
-        Type::Receiver { elem_type } => Type::Receiver {
-            elem_type: Box::new(substitute_type(elem_type, substitutions)),
-        },
-        Type::Tuple { elements } => Type::Tuple {
-            elements: elements
-                .iter()
-                .map(|e| substitute_type(e, substitutions))
-                .collect(),
-        },
-        Type::Fn {
-            params,
-            return_type,
-        } => Type::Fn {
-            params: params
-                .iter()
-                .map(|p| substitute_type(p, substitutions))
-                .collect(),
-            return_type: Box::new(substitute_type(return_type, substitutions)),
-        },
-        Type::Void
-        | Type::Int
-        | Type::Bool
-        | Type::F32
-        | Type::F64
-        | Type::I8
-        | Type::I16
-        | Type::I32
-        | Type::I64
-        | Type::U8
-        | Type::U16
-        | Type::U32
-        | Type::U64
-        | Type::UInt
-        | Type::String
-        | Type::Str
-        | Type::JoinHandle
-        | Type::File => ty.clone(),
-    }
+    crate::types_util::substitute_type(ty, substitutions)
 }
 
 /// Parse, number, type-check, and lower `src`. Panics on compile errors (tests/helpers).

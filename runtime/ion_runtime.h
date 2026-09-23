@@ -416,36 +416,19 @@ static inline int ion_hash_mix(uint64_t x) {
   x ^= x >> 31;
   return (int)x;
 }
-static inline int ion_hash_int(const int *value) {
-  return ion_hash_mix((uint64_t)(int64_t)(*value));
-}
-static inline int ion_hash_i8(const int8_t *value) {
-  return ion_hash_mix((uint64_t)(int64_t)(*value));
-}
-static inline int ion_hash_i16(const int16_t *value) {
-  return ion_hash_mix((uint64_t)(int64_t)(*value));
-}
-static inline int ion_hash_i32(const int32_t *value) {
-  return ion_hash_mix((uint64_t)(int64_t)(*value));
-}
-static inline int ion_hash_i64(const int64_t *value) {
-  return ion_hash_mix((uint64_t)(*value));
-}
-static inline int ion_hash_u8(const uint8_t *value) {
-  return ion_hash_mix((uint64_t)(*value));
-}
-static inline int ion_hash_u16(const uint16_t *value) {
-  return ion_hash_mix((uint64_t)(*value));
-}
-static inline int ion_hash_u32(const uint32_t *value) {
-  return ion_hash_mix((uint64_t)(*value));
-}
-static inline int ion_hash_u64(const uint64_t *value) {
-  return ion_hash_mix(*value);
-}
-static inline int ion_hash_uint(const unsigned *value) {
-  return ion_hash_mix((uint64_t)(*value));
-}
+#define ION_DEFINE_INT_HASH(name, ctype, loaded) \
+  static inline int name(const ctype *value) { return ion_hash_mix(loaded); }
+ION_DEFINE_INT_HASH(ion_hash_int, int, (uint64_t)(int64_t)(*value))
+ION_DEFINE_INT_HASH(ion_hash_i8, int8_t, (uint64_t)(int64_t)(*value))
+ION_DEFINE_INT_HASH(ion_hash_i16, int16_t, (uint64_t)(int64_t)(*value))
+ION_DEFINE_INT_HASH(ion_hash_i32, int32_t, (uint64_t)(int64_t)(*value))
+ION_DEFINE_INT_HASH(ion_hash_i64, int64_t, (uint64_t)(*value))
+ION_DEFINE_INT_HASH(ion_hash_u8, uint8_t, (uint64_t)(*value))
+ION_DEFINE_INT_HASH(ion_hash_u16, uint16_t, (uint64_t)(*value))
+ION_DEFINE_INT_HASH(ion_hash_u32, uint32_t, (uint64_t)(*value))
+ION_DEFINE_INT_HASH(ion_hash_u64, uint64_t, (*value))
+ION_DEFINE_INT_HASH(ion_hash_uint, unsigned, (uint64_t)(*value))
+#undef ION_DEFINE_INT_HASH
 /** `value` is `&String`, which is `ion_string_t**` in C. */
 static inline int ion_hash_string(ion_string_t *const *value) {
   const ion_string_t *s = (value != NULL) ? *value : NULL;

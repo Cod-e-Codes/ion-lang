@@ -55,7 +55,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 - **`Vec::set`**: wrap runtime int in `SetResult`; statement form still emits the enum then `(void)` (`test_vec_set_result.ion`).
 - **`select`**: copy in the same `try_recv`. Register waiters, recheck empty, then wait. Try-then-register lost a concurrent send (`test_select_blocking_send.ion`). `default` is timeout 0; no default/timeout is `-1`; Ion `timeout(ms)` with `ms < 0` panics at runtime and a literal is a type error (`test_select.ion`, `test_select_timeout.ion`).
 - **`spawn` statement vs expr**: `spawn { };` stays `ion_spawn`. `let h = spawn { };` is `ion_spawn_joinable`. Drop of `JoinHandle` is `ion_thread_detach` (`test_join.ion`).
-- **`Vec` typedef collect**: `collect_vec_types_from_expr` must walk `Match` arm bodies. A `let buf: Vec<u8>` only inside `Option::Some` otherwise never emits `Vec_uint8_t` (`test_file_rw.ion`).
+- **`Vec` typedef collect**: `walk_referenced_expr` must walk `Match` arm bodies (`collect_vec_types_impl` reads that pass). A `let buf: Vec<u8>` only inside `Option::Some` otherwise never emits `Vec_uint8_t` (`test_file_rw.ion`).
 - **String literal call args**: parameters typed `String` need `ion_string_from_literal` at the call site, not only on `let s: String = "…"`. Pass compilation-wide `TypeInfo.function_params` into multi-file cgen (`println`, `io::println`, `io_println`) so imported callees see `String` (`test_string_call_arg_literal.ion`, `test_multi_fmt_io.ion`).
 - **Reborrowed field → `&Vec` / `&String` param**: non-copy `FieldAccess` through `&Struct` is already `&T` in Ion but loads as `T*` in C; user calls need `&(base->field)` so arity matches `T**` (see `test_ref_struct_field_to_ref_vec_param.ion`). Nested embedded paths use `.` after the first hop (`&(w->inner.data)`). Builtins keep bare field loads via `vec_ion_ptr_expr`.
 - Single-file merge (`merge_modules`) vs `--mode multi` divergences. Public functions are renamed `{alias}_{name}`. Bare calls inside that module are rewritten to the mangled name. Private names stay bare (`math::clamp` calls `min` / `max`; `string::trim_ascii` calls `slice`).
@@ -66,7 +66,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 
 - `register_imports` (LSP) vs full `parse_module` (CLI) import resolution
 - Import cycles and duplicate symbol registration
-- Keyword additions: lexer + parser + `src/lsp/util.rs` `KEYWORDS` + TextMate grammar
+- Keyword additions: lexer `KEYWORDS` table, LSP `EXTRA_COMPLETION_WORDS` for words that are not lexer keywords, TextMate grammar. `lexer_keywords_are_completed_and_highlighted` checks completion and the grammar
 
 ## Integration harness
 

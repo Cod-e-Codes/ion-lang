@@ -217,7 +217,6 @@ int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
   if (!ion_utf8_valid((const uint8_t *)other, append_len))
     return -1;
 
-  // Grow if needed
   if (s->len + append_len + 1 > s->capacity) {
     size_t new_capacity = s->capacity;
     while (new_capacity < s->len + append_len + 1) {
@@ -230,7 +229,6 @@ int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
     s->capacity = new_capacity;
   }
 
-  // Append
   memcpy(s->data + s->len, other, append_len);
   s->len += append_len;
   s->data[s->len] = '\0';

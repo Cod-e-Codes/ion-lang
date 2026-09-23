@@ -131,105 +131,11 @@ pub(crate) fn mangle_module_callee(callee: &str) -> Option<String> {
     Some(format!("{}_{}", module, func))
 }
 
-/// Substitute generic type parameters in a type using the substitution map
 pub(crate) fn substitute_type_params(
     ty: &Type,
     substitutions: &std::collections::HashMap<String, &Type>,
 ) -> Type {
-    match ty {
-        Type::Struct(name) | Type::Enum(name) => {
-            // Check if this is a generic parameter that needs substitution
-            substitutions
-                .get(name)
-                .map(|&sub_ty| sub_ty.clone())
-                .unwrap_or_else(|| ty.clone())
-        }
-        Type::Generic { name, params } => {
-            // First check if the generic type itself is a parameter (e.g., T where T is a generic)
-            if let Some(&sub_ty) = substitutions.get(name) {
-                sub_ty.clone()
-            } else {
-                // Otherwise, recursively substitute parameters
-                let substituted_params: Vec<Type> = params
-                    .iter()
-                    .map(|p| substitute_type_params(p, substitutions))
-                    .collect();
-                Type::Generic {
-                    name: name.clone(),
-                    params: substituted_params,
-                }
-            }
-        }
-        Type::Ref { inner, mutable } => Type::Ref {
-            inner: Box::new(substitute_type_params(inner, substitutions)),
-            mutable: *mutable,
-        },
-        Type::RawPtr { inner } => Type::RawPtr {
-            inner: Box::new(substitute_type_params(inner, substitutions)),
-        },
-        Type::Box { inner } => Type::Box {
-            inner: Box::new(substitute_type_params(inner, substitutions)),
-        },
-        Type::Vec { elem_type } => Type::Vec {
-            elem_type: Box::new(substitute_type_params(elem_type, substitutions)),
-        },
-        Type::Channel { elem_type } => Type::Channel {
-            elem_type: Box::new(substitute_type_params(elem_type, substitutions)),
-        },
-        Type::Array {
-            inner,
-            size,
-            len_name,
-        } => Type::Array {
-            inner: Box::new(substitute_type_params(inner, substitutions)),
-            size: *size,
-            len_name: len_name.clone(),
-        },
-        Type::Slice { inner } => Type::Slice {
-            inner: Box::new(substitute_type_params(inner, substitutions)),
-        },
-        Type::Sender { elem_type } => Type::Sender {
-            elem_type: Box::new(substitute_type_params(elem_type, substitutions)),
-        },
-        Type::Receiver { elem_type } => Type::Receiver {
-            elem_type: Box::new(substitute_type_params(elem_type, substitutions)),
-        },
-        Type::Tuple { elements } => Type::Tuple {
-            elements: elements
-                .iter()
-                .map(|e| substitute_type_params(e, substitutions))
-                .collect(),
-        },
-        Type::Fn {
-            params,
-            return_type,
-        } => Type::Fn {
-            params: params
-                .iter()
-                .map(|p| substitute_type_params(p, substitutions))
-                .collect(),
-            return_type: Box::new(substitute_type_params(return_type, substitutions)),
-        },
-        // Primitive types don't need substitution
-        Type::Void
-        | Type::Int
-        | Type::Bool
-        | Type::F32
-        | Type::F64
-        | Type::I8
-        | Type::I16
-        | Type::I32
-        | Type::I64
-        | Type::U8
-        | Type::U16
-        | Type::U32
-        | Type::U64
-        | Type::UInt
-        | Type::String
-        | Type::Str
-        | Type::JoinHandle
-        | Type::File => ty.clone(),
-    }
+    crate::types_util::substitute_type_params(ty, substitutions)
 }
 
 /// Resolve type aliases recursively
@@ -331,16 +237,17 @@ pub(crate) fn fn_type_to_c_ptr(ty: &Type) -> String {
 }
 
 pub(crate) fn fn_type_to_c_decl(ty: &Type, name: &str) -> String {
-    let Type::Fn {
-        params,
-        return_type,
-    } = ty
-    else {
-        panic!("fn_type_to_c_decl called on non-fn type");
+    let ptr = fn_type_to_c_ptr(ty);
+    let Some(pos) = ptr.rfind("(*)") else {
+        return ptr;
     };
-    let ret = type_to_c_impl(return_type);
-    let param_strs: Vec<String> = params.iter().map(type_to_c_impl).collect();
-    format!("{} (*{})({})", ret, name, param_strs.join(", "))
+    let mut out = String::with_capacity(ptr.len() + name.len());
+    out.push_str(&ptr[..pos]);
+    out.push_str("(*");
+    out.push_str(name);
+    out.push(')');
+    out.push_str(&ptr[pos + 3..]);
+    out
 }
 
 /// C prototype/definition header for a function whose return type is `fn(...) -> ...`.
@@ -352,19 +259,22 @@ pub(crate) fn fn_type_to_c_function_header(name: &str, param_list: &str, ret_ty:
 pub(crate) fn type_to_c_impl(ty: &Type) -> String {
     match ty {
         Type::Void => "void".to_string(),
-        Type::Int => "int".to_string(),
+        Type::Int
+        | Type::I8
+        | Type::I16
+        | Type::I32
+        | Type::I64
+        | Type::U8
+        | Type::U16
+        | Type::U32
+        | Type::U64
+        | Type::UInt => crate::integer_limits::integer_row(ty)
+            .expect("integer row")
+            .c_type
+            .to_string(),
         Type::Bool => "int".to_string(), // C doesn't have native bool, use int with 0/1
         Type::F32 => "float".to_string(),
         Type::F64 => "double".to_string(),
-        Type::I8 => "int8_t".to_string(),
-        Type::I16 => "int16_t".to_string(),
-        Type::I32 => "int32_t".to_string(),
-        Type::I64 => "int64_t".to_string(),
-        Type::U8 => "uint8_t".to_string(),
-        Type::U16 => "uint16_t".to_string(),
-        Type::U32 => "uint32_t".to_string(),
-        Type::U64 => "uint64_t".to_string(),
-        Type::UInt => "unsigned int".to_string(),
         Type::Ref { inner, mutable: _ } => {
             // References map to C pointers: &T -> T*
             format!("{}*", type_to_c_impl(inner))
@@ -451,44 +361,20 @@ pub(crate) fn type_to_c_return_type(ty: &Type) -> String {
 
 /// Signed/unsigned C types and bitwidth for defined integer lowering.
 pub(crate) fn int_c_repr(ty: &Type) -> Option<(&'static str, &'static str, Option<u32>, bool)> {
-    match ty {
-        Type::Int => Some(("int", "unsigned int", None, true)),
-        Type::UInt => Some(("unsigned int", "unsigned int", None, false)),
-        Type::I8 => Some(("int8_t", "uint8_t", Some(8), true)),
-        Type::U8 => Some(("uint8_t", "uint8_t", Some(8), false)),
-        Type::I16 => Some(("int16_t", "uint16_t", Some(16), true)),
-        Type::U16 => Some(("uint16_t", "uint16_t", Some(16), false)),
-        Type::I32 => Some(("int32_t", "uint32_t", Some(32), true)),
-        Type::U32 => Some(("uint32_t", "uint32_t", Some(32), false)),
-        Type::I64 => Some(("int64_t", "uint64_t", Some(64), true)),
-        Type::U64 => Some(("uint64_t", "uint64_t", Some(64), false)),
-        _ => None,
-    }
+    crate::integer_limits::integer_row(ty)
+        .map(|row| (row.c_type, row.c_unsigned, row.width, row.signed))
 }
 
 /// C-safe literal for `Type::MIN` / `Type::MAX` (avoids `-2147483648`-style overflow in C).
 pub(crate) fn c_int_limit(ty: &Type, max: bool) -> String {
-    match (ty, max) {
-        (Type::Int | Type::I32, false) => "(0 - 2147483647 - 1)".to_string(),
-        (Type::Int | Type::I32, true) => "2147483647".to_string(),
-        (Type::I8, false) => "(-128)".to_string(),
-        (Type::I8, true) => "127".to_string(),
-        (Type::I16, false) => "(-32768)".to_string(),
-        (Type::I16, true) => "32767".to_string(),
-        (Type::I64, false) => {
-            "((int64_t)0 - (int64_t)9223372036854775807LL - (int64_t)1)".to_string()
+    match crate::integer_limits::integer_row(ty) {
+        Some(row) => {
+            if max {
+                row.c_max.to_string()
+            } else {
+                row.c_min.to_string()
+            }
         }
-        (Type::I64, true) => "9223372036854775807LL".to_string(),
-        (Type::U8, false)
-        | (Type::U16, false)
-        | (Type::U32, false)
-        | (Type::U64, false)
-        | (Type::UInt, false) => "0".to_string(),
-        (Type::U8, true) => "255".to_string(),
-        (Type::U16, true) => "65535".to_string(),
-        (Type::U32, true) => "4294967295U".to_string(),
-        (Type::U64, true) => "18446744073709551615ULL".to_string(),
-        (Type::UInt, true) => "4294967295U".to_string(),
-        _ => "0".to_string(),
+        None => "0".to_string(),
     }
 }

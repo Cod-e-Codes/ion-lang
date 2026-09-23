@@ -1,9 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Locate `runtime/` by walking up from the current working directory.
-pub fn find_runtime_dir() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
+fn runtime_dir_from(start: &Path) -> Option<PathBuf> {
+    let mut dir = if start.is_dir() {
+        start.to_path_buf()
+    } else {
+        start.parent()?.to_path_buf()
+    };
     loop {
         let header = dir.join("runtime").join("ion_runtime.h");
         if header.exists() {
@@ -16,24 +19,14 @@ pub fn find_runtime_dir() -> Option<PathBuf> {
     None
 }
 
+/// Locate `runtime/` by walking up from the current working directory.
+pub fn find_runtime_dir() -> Option<PathBuf> {
+    runtime_dir_from(&std::env::current_dir().ok()?)
+}
+
 /// Locate runtime relative to a known project root (walks upward).
 pub fn find_runtime_dir_from(root: &Path) -> Option<PathBuf> {
-    let mut dir = if root.is_dir() {
-        root.to_path_buf()
-    } else {
-        root.parent()?.to_path_buf()
-    };
-
-    loop {
-        let header = dir.join("runtime").join("ion_runtime.h");
-        if header.exists() {
-            return Some(dir.join("runtime"));
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    find_runtime_dir()
+    runtime_dir_from(root).or_else(find_runtime_dir)
 }
 
 pub fn runtime_include_args(runtime_dir: &Path) -> Vec<String> {
