@@ -57,6 +57,8 @@ struct ScopeBinding {
 struct ScopeFrame {
     bindings: Vec<ScopeBinding>,
     defers: Vec<IREexpr>,
+    /// Join `JoinHandle` bindings still owned here instead of detaching them.
+    join_handles: bool,
 }
 
 pub struct Codegen {
@@ -65,6 +67,7 @@ pub struct Codegen {
     enum_map: HashMap<String, EnumDecl>, // Map enum names to declarations for variant lookups
     generated_types: HashMap<String, bool>, // Track which monomorphized types have been generated
     struct_map: HashMap<String, StructDecl>, // Map struct names to declarations
+    drop_impls: HashMap<String, String>,
     generic_instantiations: HashMap<String, (String, Vec<Type>)>, // Map base name to (monomorphized_name, params)
     match_counter: usize, // Counter for unique match variable names
     type_aliases: HashMap<String, TypeAliasDecl>, // Map type alias names to their declarations
@@ -75,12 +78,19 @@ pub struct Codegen {
     /// Compilation-wide callee env from TypeInfo (Ion names, alias::name, prefix_name).
     compilation_param_types: HashMap<String, Vec<Type>>,
     compilation_return_types: HashMap<String, Option<Type>>,
+    closures: HashMap<String, crate::tc::ClosureSig>,
+    protocols: HashMap<String, crate::ast::ProtocolDecl>,
+    proto_emitted: std::collections::HashSet<String>,
     in_unsafe_block: bool, // Track if we're in an unsafe block
+    /// Address-of an index must apply `&` to the element, which is an lvalue.
+    addressing_index: bool,
     /// When true, enum literals emit nested designated initializers without a type cast.
     nested_designated_init: bool,
     temp_var_counter: usize, // Counter for unique temporary variable names
     current_function_params: HashMap<String, Type>, // Track current function parameter types for field access
     spawn_counter: usize,
+    /// The next `generate_block` joins owned handles at exit.
+    next_block_joins: bool,
     spawn_forward_decls: String,
     spawn_definitions: String,
     fn_literal_forward_decls: String,
@@ -120,6 +130,7 @@ impl Codegen {
             enum_map: HashMap::new(),
             generated_types: HashMap::new(),
             struct_map: HashMap::new(),
+            drop_impls: HashMap::new(),
             generic_instantiations: HashMap::new(),
             match_counter: 0,
             type_aliases: HashMap::new(),
@@ -129,11 +140,16 @@ impl Codegen {
             function_param_types: HashMap::new(),
             compilation_param_types: HashMap::new(),
             compilation_return_types: HashMap::new(),
+            closures: HashMap::new(),
+            protocols: HashMap::new(),
+            proto_emitted: std::collections::HashSet::new(),
             in_unsafe_block: false,
+            addressing_index: false,
             nested_designated_init: false,
             temp_var_counter: 0,
             current_function_params: HashMap::new(),
             spawn_counter: 0,
+            next_block_joins: false,
             spawn_forward_decls: String::new(),
             spawn_definitions: String::new(),
             fn_literal_forward_decls: String::new(),
@@ -157,6 +173,8 @@ impl Codegen {
     pub fn set_type_info(&mut self, types: &TypeInfo) {
         self.compilation_param_types = types.function_params.clone();
         self.compilation_return_types = types.function_returns.clone();
+        self.closures = types.closures.clone();
+        self.protocols = types.protocols.clone();
     }
 
     fn lookup_param_types(&self, resolved_callee: &str, func_name: &str) -> Option<&Vec<Type>> {
@@ -307,6 +325,92 @@ impl Codegen {
         ));
     }
 
+    fn ensure_proto_typedef(&mut self, name: &str) {
+        if !self.proto_emitted.insert(name.to_string()) {
+            return;
+        }
+        let Some(proto) = self.protocols.get(name).cloned() else {
+            return;
+        };
+        let mut def = "typedef struct {\n    int tag;\n    union {\n".to_string();
+        for (i, step) in proto.steps.iter().enumerate() {
+            let ty = match step {
+                crate::ast::ProtocolStep::Send(ty) | crate::ast::ProtocolStep::Recv(ty) => ty,
+            };
+            def.push_str(&format!("        {} p{i};\n", self.type_to_c(ty)));
+        }
+        def.push_str(&format!("    }} payload;\n}} ion_proto_{name};\n"));
+        self.spawn_forward_decls.push_str(&def);
+    }
+
+    fn endpoint_pair_code(&mut self, name: &str) -> String {
+        self.ensure_proto_typedef(name);
+        let msg = format!("ion_proto_{name}");
+        let ep = Type::Endpoint {
+            protocol: name.to_string(),
+            step: 0,
+            dual: false,
+        };
+        let tuple = Type::Tuple {
+            elements: vec![ep.clone(), ep],
+        };
+        let tuple_c = self.type_to_c(&tuple);
+        format!(
+            "({{ ion_sender_t _c_tx, _s_tx; ion_receiver_t _c_rx, _s_rx; if (ion_channel_new(sizeof({msg}), 1, NULL, &_c_tx, &_s_rx) != 0 || ion_channel_new(sizeof({msg}), 1, NULL, &_s_tx, &_c_rx) != 0) ion_panic(\"endpoint create failed\"); {tuple_c} _pair; _pair.f0 = (ion_endpoint_t){{ _c_tx, _c_rx }}; _pair.f1 = (ion_endpoint_t){{ _s_tx, _s_rx }}; _pair; }})"
+        )
+    }
+
+    fn emit_endpoint_send(
+        &mut self,
+        protocol: &str,
+        step: usize,
+        channel: &IREexpr,
+        value: &IREexpr,
+        value_type: &Type,
+    ) {
+        self.ensure_proto_typedef(protocol);
+        let msg = format!("ion_proto_{protocol}");
+        self.write("({ ion_endpoint_t _ep = ");
+        self.generate_expr(channel);
+        self.write(&format!(
+            "; {msg} _msg = {{0}}; _msg.tag = {step}; _msg.payload.p{step} = "
+        ));
+        self.generate_expr_with_type(value, Some(value_type));
+        self.write(
+            "; if (ion_channel_send(&_ep.tx, &_msg) != 0) ion_panic(\"session send failed\"); _ep; })",
+        );
+    }
+
+    fn emit_endpoint_recv(&mut self, protocol: &str, step: usize, channel: &IREexpr) {
+        self.ensure_proto_typedef(protocol);
+        let proto = self
+            .protocols
+            .get(protocol)
+            .cloned()
+            .expect("protocol exists");
+        let payload = match proto.steps.get(step) {
+            Some(crate::ast::ProtocolStep::Send(ty) | crate::ast::ProtocolStep::Recv(ty)) => {
+                ty.clone()
+            }
+            None => Type::Void,
+        };
+        let next = Type::Endpoint {
+            protocol: protocol.to_string(),
+            step: step + 1,
+            dual: false,
+        };
+        let tuple = Type::Tuple {
+            elements: vec![payload, next],
+        };
+        let tuple_c = self.type_to_c(&tuple);
+        let msg = format!("ion_proto_{protocol}");
+        self.write("({ ion_endpoint_t _ep = ");
+        self.generate_expr(channel);
+        self.write(&format!(
+            "; {msg} _msg = {{0}}; if (ion_channel_recv(&_ep.rx, &_msg) != 0) ion_panic(\"session recv failed\"); {tuple_c} _got; _got.f0 = _msg.payload.p{step}; _got.f1 = _ep; _got; }})"
+        ));
+    }
+
     fn sender_addr_code(&mut self, channel: &IREexpr) -> String {
         if let IREexpr::AddressOf { inner, .. } = channel {
             format!("&{}", self.capture_expr_code(inner))
@@ -444,6 +548,7 @@ impl Codegen {
         for s in &program.structs {
             self.struct_map.insert(s.name.clone(), s.clone());
         }
+        self.drop_impls = program.drop_impls.clone();
         // Build type alias map for type resolution
         self.type_aliases.clear();
         for alias in &program.type_aliases {
@@ -671,6 +776,7 @@ impl Codegen {
         for s in &program.structs {
             self.struct_map.insert(s.name.clone(), s.clone());
         }
+        self.drop_impls = program.drop_impls.clone();
         self.generated_types.clear();
         self.spawn_counter = 0;
         self.spawn_forward_decls.clear();
@@ -1036,6 +1142,7 @@ impl Codegen {
         self.scope_stack.push(ScopeFrame {
             bindings: Vec::new(),
             defers: defers.to_vec(),
+            join_handles: false,
         });
     }
 
@@ -1059,7 +1166,7 @@ impl Codegen {
 
     fn scope_mark_binding_read(&mut self, name: &str) {
         for frame in self.scope_stack.iter_mut().rev() {
-            if let Some(binding) = frame.bindings.iter_mut().find(|b| b.name == name) {
+            if let Some(binding) = frame.bindings.iter_mut().rev().find(|b| b.name == name) {
                 binding.read = true;
                 return;
             }
@@ -1068,7 +1175,7 @@ impl Codegen {
 
     fn scope_mark_moved(&mut self, name: &str) {
         for frame in self.scope_stack.iter_mut().rev() {
-            if let Some(binding) = frame.bindings.iter_mut().find(|b| b.name == name) {
+            if let Some(binding) = frame.bindings.iter_mut().rev().find(|b| b.name == name) {
                 binding.dropped = true;
                 return;
             }
@@ -1077,7 +1184,7 @@ impl Codegen {
 
     fn lookup_binding_type(&self, name: &str) -> Option<Type> {
         for frame in self.scope_stack.iter().rev() {
-            if let Some(binding) = frame.bindings.iter().find(|b| b.name == name) {
+            if let Some(binding) = frame.bindings.iter().rev().find(|b| b.name == name) {
                 return Some(binding.ty.clone());
             }
         }
@@ -1923,7 +2030,12 @@ impl Codegen {
                     }
                 }
             }
-            IREexpr::Send { value, .. } => self.mark_moves_in_expr(value),
+            IREexpr::Send { channel, value, .. } => {
+                if matches!(self.stored_expr_type(channel), Some(Type::Endpoint { .. })) {
+                    self.mark_moves_in_expr(channel);
+                }
+                self.mark_moves_in_expr(value);
+            }
             IREexpr::Call { args, .. } => {
                 for arg in args {
                     self.mark_moves_in_expr(arg);
@@ -1944,6 +2056,11 @@ impl Codegen {
             IREexpr::AssignIndex { value, .. } => self.mark_moves_in_expr(value),
             IREexpr::AssignField { value, .. } => self.mark_moves_in_expr(value),
             IREexpr::Match { expr, .. } => self.mark_moves_in_expr(expr),
+            IREexpr::Recv { channel, .. } => {
+                if matches!(self.stored_expr_type(channel), Some(Type::Endpoint { .. })) {
+                    self.mark_moves_in_expr(channel);
+                }
+            }
             _ => {}
         }
     }
@@ -1995,9 +2112,46 @@ impl Codegen {
         }
         for binding in frame.bindings.iter().rev() {
             if !binding.dropped && self.needs_drop(&binding.ty) {
-                self.emit_drop(&binding.name, &binding.ty);
+                if frame.join_handles && matches!(binding.ty, Type::JoinHandle { .. }) {
+                    self.emit_scope_join(&binding.name, &binding.ty);
+                } else {
+                    self.emit_drop(&binding.name, &binding.ty);
+                }
             }
         }
+    }
+
+    fn emit_scope_join(&mut self, name: &str, ty: &Type) {
+        let Type::JoinHandle { result } = ty else {
+            return;
+        };
+        if matches!(result.as_ref(), Type::Void) {
+            self.write_indent();
+            self.writeln(&format!(
+                "if (ion_join(&({name})) != 0) ion_panic(\"join failed\");"
+            ));
+            return;
+        }
+        let c_ty = self.type_to_c(result);
+        let tmp = format!("_ion_scope_ret_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        self.write_indent();
+        self.writeln("{");
+        self.indent_level += 1;
+        self.write_indent();
+        self.writeln(&format!(
+            "{c_ty}* _ion_slot = 0; if (ion_join_value(&({name}), (void**)&_ion_slot) != 0 || !_ion_slot) ion_panic(\"join failed\");"
+        ));
+        self.write_indent();
+        self.writeln(&format!("{c_ty} {tmp} = *_ion_slot;"));
+        self.write_indent();
+        self.writeln("free(_ion_slot);");
+        if self.needs_drop(result) {
+            self.emit_drop(&tmp, result);
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.writeln("}");
     }
 
     /// Drop owned bindings in the current scope frame without popping it.
@@ -2248,6 +2402,16 @@ impl Codegen {
             return;
         }
         self.generated_fn_literals.insert(lit.symbol.clone());
+        if let Some(struct_name) = &lit.env_struct {
+            self.fn_literal_forward_decls
+                .push_str(&format!("typedef struct {struct_name} {{\n"));
+            for (name, ty) in &lit.captures {
+                self.fn_literal_forward_decls
+                    .push_str(&format!("    {} {name};\n", self.type_to_c(ty)));
+            }
+            self.fn_literal_forward_decls
+                .push_str(&format!("}} {struct_name};\n"));
+        }
 
         let return_type_c = lit
             .return_type
@@ -2345,6 +2509,14 @@ impl Codegen {
     }
 
     fn generate_spawn(&mut self, spawn: &IRSpawn) {
+        if self
+            .scope_stack
+            .last()
+            .is_some_and(|frame| frame.join_handles)
+        {
+            self.generate_scoped_statement_spawn(spawn);
+            return;
+        }
         let spawn_id = self.spawn_counter;
         self.spawn_counter += 1;
         let ctx_name = format!("ion_spawn_ctx_{}", spawn_id);
@@ -2380,6 +2552,40 @@ impl Codegen {
         self.indent_level -= 1;
         self.write_indent();
         self.writeln("}");
+    }
+
+    fn generate_scoped_statement_spawn(&mut self, spawn: &IRSpawn) {
+        let spawn_id = self.spawn_counter;
+        self.spawn_counter += 1;
+        let ctx_name = format!("ion_spawn_ctx_{}", spawn_id);
+        let entry_name = format!("ion_spawn_entry_{}", spawn_id);
+        let handle = format!("_ion_scope_jh_{spawn_id}");
+        self.emit_spawn_entry(spawn, spawn_id, &ctx_name, &entry_name);
+        self.write_indent();
+        self.writeln(&format!("ion_thread_t {handle};"));
+        self.scope_register_binding(
+            &handle,
+            &Type::JoinHandle {
+                result: Box::new(spawn.result.clone()),
+            },
+        );
+        self.write_indent();
+        if spawn.captures.is_empty() {
+            self.writeln(&format!(
+                "if (ion_spawn_joinable({entry_name}, NULL, &{handle}) != 0) {{ ion_panic(\"spawn failed\"); }}"
+            ));
+        } else {
+            for line in self.spawn_capture_fill_lines(spawn, &ctx_name) {
+                self.writeln(&line);
+                self.write_indent();
+            }
+            for (name, _) in &spawn.captures {
+                self.scope_mark_moved(name);
+            }
+            self.writeln(&format!(
+                "if (ion_spawn_joinable({entry_name}, ctx, &{handle}) != 0) {{ free(ctx); ion_panic(\"spawn failed\"); }}"
+            ));
+        }
     }
 
     fn generate_spawn_expr(&mut self, spawn: &IRSpawn) {
@@ -2432,6 +2638,12 @@ impl Codegen {
         }
         let mut def = String::new();
         def.push_str(&format!("static void* {}(void* arg) {{\n", entry_name));
+        let returns_value = !matches!(spawn.result, Type::Void);
+        if returns_value {
+            def.push_str("    ");
+            def.push_str(&format_ret_val_decl(&ret_val_decl(&spawn.result)));
+            def.push('\n');
+        }
         if !spawn.captures.is_empty() {
             def.push_str(&format!("    {}* ctx = ({}*)arg;\n", ctx_name, ctx_name));
             def.push_str("    if (!ctx) { ion_panic(\"spawn null context\"); }\n");
@@ -2451,9 +2663,13 @@ impl Codegen {
         let saved_indent = self.indent_level;
         let saved_scope = std::mem::take(&mut self.scope_stack);
         let saved_epilogue = self.epilogue_label.clone();
+        let saved_return = self.current_return_type.clone();
         self.indent_level = 1;
         self.scope_stack.clear();
         self.epilogue_label = spawn_epilogue.clone();
+        if returns_value {
+            self.current_return_type = Some(spawn.result.clone());
+        }
         self.scope_begin(&[]);
         for (name, ty) in &spawn.captures {
             self.scope_register_param_binding(name, ty);
@@ -2467,9 +2683,17 @@ impl Codegen {
         self.indent_level = saved_indent;
         self.scope_stack = saved_scope;
         self.epilogue_label = saved_epilogue;
+        self.current_return_type = saved_return;
         def.push_str(&body_code);
         def.push_str(&format!("{}:\n", spawn_epilogue));
-        def.push_str("    return NULL;\n");
+        if returns_value {
+            let c_ty = self.type_to_c(&spawn.result);
+            def.push_str(&format!(
+                "    {{ {c_ty}* _ion_slot = ({c_ty}*)malloc(sizeof({c_ty})); if (!_ion_slot) ion_panic(\"spawn result allocation failed\"); *_ion_slot = ret_val; return _ion_slot; }}\n"
+            ));
+        } else {
+            def.push_str("    return NULL;\n");
+        }
         def.push_str("}\n\n");
         self.spawn_definitions.push_str(&def);
     }
@@ -2606,7 +2830,13 @@ impl Codegen {
 
     fn generate_block(&mut self, block: &IRBlock) {
         let depth_at_entry = self.scope_stack.len();
-        self.scope_begin(&block.defers);
+        let join_handles = self.next_block_joins;
+        self.next_block_joins = false;
+        self.scope_stack.push(ScopeFrame {
+            bindings: Vec::new(),
+            defers: block.defers.clone(),
+            join_handles,
+        });
         let mut i = 0;
         while i < block.statements.len() {
             // Check for consecutive channel tuple destructuring
@@ -3081,6 +3311,16 @@ impl Codegen {
 
                 self.in_unsafe_block = prev_unsafe;
             }
+            IRStmt::Scope(scope) => {
+                self.write_indent();
+                self.writeln("{");
+                self.indent_level += 1;
+                self.next_block_joins = true;
+                self.generate_block(&scope.body);
+                self.indent_level -= 1;
+                self.write_indent();
+                self.writeln("}");
+            }
         }
     }
 
@@ -3140,9 +3380,14 @@ impl Codegen {
             IREexpr::AddressOf {
                 inner, mutable: _, ..
             } => {
-                // Generate address-of: &x
-                self.write("&");
-                self.generate_expr(inner);
+                if matches!(inner.as_ref(), IREexpr::Index { .. }) {
+                    self.addressing_index = true;
+                    self.generate_expr(inner);
+                    self.addressing_index = false;
+                } else {
+                    self.write("&");
+                    self.generate_expr(inner);
+                }
             }
             IREexpr::BinOp {
                 op,
@@ -3162,56 +3407,75 @@ impl Codegen {
                 value,
                 value_type,
             } => {
-                let sender_addr = self.sender_addr_code(channel);
-                let val_tmp = format!("_send_val_{}", self.temp_var_counter);
-                self.temp_var_counter += 1;
-                let st_tmp = format!("_send_st_{}", self.temp_var_counter);
-                self.temp_var_counter += 1;
-                let c_ty = self.type_to_c(value_type);
-                let result_ty = Type::Generic {
-                    name: "SendResult".to_string(),
-                    params: vec![value_type.clone()],
-                };
-                let result_c = self.type_to_c(&result_ty);
-                let sent = self.c_enum_literal(&result_c, "SendResult", "Sent", None);
-                let closed = self.c_enum_literal(&result_c, "SendResult", "Closed", Some(&val_tmp));
-                self.write("({ ");
-                self.write(&format!("{c_ty} {val_tmp} = "));
-                self.generate_expr_with_type(value, Some(value_type));
-                self.write("; ");
-                self.write(&format!(
-                    "int {st_tmp} = ion_channel_send({sender_addr}, &{val_tmp}); "
-                ));
-                self.write(&format!("{result_c} _send_res; "));
-                self.write(&format!(
+                if let Some(Type::Endpoint {
+                    protocol,
+                    step,
+                    dual: _,
+                }) = self.stored_expr_type(channel)
+                {
+                    self.emit_endpoint_send(&protocol, step, channel, value, value_type);
+                } else {
+                    let sender_addr = self.sender_addr_code(channel);
+                    let val_tmp = format!("_send_val_{}", self.temp_var_counter);
+                    self.temp_var_counter += 1;
+                    let st_tmp = format!("_send_st_{}", self.temp_var_counter);
+                    self.temp_var_counter += 1;
+                    let c_ty = self.type_to_c(value_type);
+                    let result_ty = Type::Generic {
+                        name: "SendResult".to_string(),
+                        params: vec![value_type.clone()],
+                    };
+                    let result_c = self.type_to_c(&result_ty);
+                    let sent = self.c_enum_literal(&result_c, "SendResult", "Sent", None);
+                    let closed =
+                        self.c_enum_literal(&result_c, "SendResult", "Closed", Some(&val_tmp));
+                    self.write("({ ");
+                    self.write(&format!("{c_ty} {val_tmp} = "));
+                    self.generate_expr_with_type(value, Some(value_type));
+                    self.write("; ");
+                    self.write(&format!(
+                        "int {st_tmp} = ion_channel_send({sender_addr}, &{val_tmp}); "
+                    ));
+                    self.write(&format!("{result_c} _send_res; "));
+                    self.write(&format!(
                     "if ({st_tmp} == 0) {{ _send_res = {sent}; }} else {{ _send_res = {closed}; }} "
                 ));
-                self.write("_send_res; })");
+                    self.write("_send_res; })");
+                }
             }
             IREexpr::Recv { channel, elem_type } => {
-                let recv_addr = self.sender_addr_code(channel);
-                let tmp = format!("_recv_tmp_{}", self.temp_var_counter);
-                self.temp_var_counter += 1;
-                let st_tmp = format!("_recv_st_{}", self.temp_var_counter);
-                self.temp_var_counter += 1;
-                let c_ty = self.type_to_c(elem_type);
-                let option_ty = Type::Generic {
-                    name: "Option".to_string(),
-                    params: vec![elem_type.clone()],
-                };
-                let option_c = self.type_to_c(&option_ty);
-                let some = self.c_enum_literal(&option_c, "Option", "Some", Some(&tmp));
-                let none = self.c_enum_literal(&option_c, "Option", "None", None);
-                self.write("({ ");
-                self.write(&format!("{c_ty} {tmp} = {{0}}; "));
-                self.write(&format!(
-                    "int {st_tmp} = ion_channel_recv({recv_addr}, &{tmp}); "
-                ));
-                self.write(&format!("{option_c} _recv_opt; "));
-                self.write(&format!(
+                if let Some(Type::Endpoint {
+                    protocol,
+                    step,
+                    dual: _,
+                }) = self.stored_expr_type(channel)
+                {
+                    self.emit_endpoint_recv(&protocol, step, channel);
+                } else {
+                    let recv_addr = self.sender_addr_code(channel);
+                    let tmp = format!("_recv_tmp_{}", self.temp_var_counter);
+                    self.temp_var_counter += 1;
+                    let st_tmp = format!("_recv_st_{}", self.temp_var_counter);
+                    self.temp_var_counter += 1;
+                    let c_ty = self.type_to_c(elem_type);
+                    let option_ty = Type::Generic {
+                        name: "Option".to_string(),
+                        params: vec![elem_type.clone()],
+                    };
+                    let option_c = self.type_to_c(&option_ty);
+                    let some = self.c_enum_literal(&option_c, "Option", "Some", Some(&tmp));
+                    let none = self.c_enum_literal(&option_c, "Option", "None", None);
+                    self.write("({ ");
+                    self.write(&format!("{c_ty} {tmp} = {{0}}; "));
+                    self.write(&format!(
+                        "int {st_tmp} = ion_channel_recv({recv_addr}, &{tmp}); "
+                    ));
+                    self.write(&format!("{option_c} _recv_opt; "));
+                    self.write(&format!(
                     "if ({st_tmp} == 0) {{ _recv_opt = {some}; }} else {{ _recv_opt = {none}; }} "
                 ));
-                self.write("_recv_opt; })");
+                    self.write("_recv_opt; })");
+                }
             }
             IREexpr::StructLit { type_name, fields } => {
                 // C99 compound literal: (Type){ .field1 = v1, .field2 = v2 }
@@ -3466,6 +3730,24 @@ impl Codegen {
                     for arg in args {
                         self.mark_moves_in_expr(arg);
                     }
+                } else if let Some(sig) = self.lookup_var_type(&resolved_callee).and_then(|ty| {
+                    let Type::Struct(name) = ty else {
+                        return None;
+                    };
+                    self.closures.get(&name).cloned()
+                }) {
+                    self.write(&sig.symbol);
+                    self.write("(&");
+                    self.write(&resolved_callee);
+                    for arg in args {
+                        self.write(", ");
+                        self.generate_expr(arg);
+                        self.mark_moves_in_expr(arg);
+                    }
+                    self.write(")");
+                    if sig.consumes {
+                        self.scope_mark_moved(&resolved_callee);
+                    }
                 } else {
                     // Regular function call.
                     let func_name = self.resolve_c_function_name(&resolved_callee);
@@ -3646,10 +3928,16 @@ impl Codegen {
                             self.write(" >= 0 && ");
                             self.write(&temp_var);
                             self.write(&format!(" < {}) ? ", len));
+                            if self.addressing_index {
+                                self.write("&");
+                            }
                             self.generate_expr(target);
                             self.write("[");
                             self.write(&temp_var);
                             self.write("] : (ion_panic(\"Array index out of bounds\"), ");
+                            if self.addressing_index {
+                                self.write("&");
+                            }
                             self.generate_expr(target);
                             self.write("[0]); })");
                         }
@@ -3665,12 +3953,21 @@ impl Codegen {
                             self.write(" < (int)(");
                             self.generate_expr(target);
                             self.write("->len)) ? ");
+                            if self.addressing_index {
+                                self.write("&");
+                            }
                             self.generate_expr(target);
                             self.write("->data[");
                             self.write(&temp_var);
-                            self.write(
-                                "] : (ion_panic(\"String index out of bounds\"), (uint8_t)0); })",
-                            );
+                            if self.addressing_index {
+                                self.write("] : (ion_panic(\"String index out of bounds\"), &");
+                                self.generate_expr(target);
+                                self.write("->data[0]); })");
+                            } else {
+                                self.write(
+                                    "] : (ion_panic(\"String index out of bounds\"), (uint8_t)0); })",
+                                );
+                            }
                         }
                         Some(BoundsCheck::SliceLen { by_ref }) => {
                             self.write("({ int ");
@@ -3684,8 +3981,14 @@ impl Codegen {
                             self.write(" < ");
                             self.emit_slice_len(target, by_ref);
                             self.write(") ? ");
+                            if self.addressing_index {
+                                self.write("&");
+                            }
                             self.emit_slice_data_index(target, &temp_var, by_ref);
                             self.write(" : (ion_panic(\"Slice index out of bounds\"), ");
+                            if self.addressing_index {
+                                self.write("&");
+                            }
                             self.emit_slice_data_index(target, "0", by_ref);
                             self.write("); })");
                         }
@@ -3803,12 +4106,34 @@ impl Codegen {
             }
             IREexpr::FnLiteral(lit) => {
                 self.generate_fn_literal(lit);
-                self.write(&lit.symbol);
+                if lit.captures.is_empty() {
+                    self.write(&lit.symbol);
+                } else {
+                    let struct_name = lit.env_struct.as_deref().unwrap_or("ion_closure");
+                    self.write(&format!("({struct_name}){{"));
+                    for (i, (name, _)) in lit.captures.iter().enumerate() {
+                        if i > 0 {
+                            self.write(", ");
+                        }
+                        self.write(&format!(".{name} = {name}"));
+                        if let Some(ty) = lit.captures.get(i).map(|(_, ty)| ty)
+                            && self.type_needs_drop(ty)
+                        {
+                            self.scope_mark_moved(name);
+                        }
+                    }
+                    self.write("}");
+                }
             }
-            IREexpr::Spawn { captures, body } => {
+            IREexpr::Spawn {
+                captures,
+                body,
+                result,
+            } => {
                 self.generate_spawn_expr(&IRSpawn {
                     captures: captures.clone(),
                     body: body.clone(),
+                    result: result.clone(),
                 });
             }
         }
@@ -3864,15 +4189,24 @@ impl Codegen {
         match bounds_check {
             Some(BoundsCheck::SliceLen { by_ref }) => {
                 let index_c = self.capture_expr_code(index);
+                if self.addressing_index {
+                    self.write("&");
+                }
                 self.emit_slice_data_index(target, &index_c, *by_ref);
             }
             Some(BoundsCheck::StringLen) => {
+                if self.addressing_index {
+                    self.write("&");
+                }
                 self.generate_expr(target);
                 self.write("->data[");
                 self.generate_expr(index);
                 self.write("]");
             }
             _ => {
+                if self.addressing_index {
+                    self.write("&");
+                }
                 self.generate_expr(target);
                 self.write("[");
                 self.generate_expr(index);
@@ -3889,8 +4223,10 @@ impl Codegen {
             | Type::Enum(_)
             | Type::Sender { .. }
             | Type::Receiver { .. }
-            | Type::JoinHandle
-            | Type::File => {
+            | Type::JoinHandle { .. }
+            | Type::File
+            | Type::Allocator
+            | Type::Endpoint { .. } => {
                 format!("({}){{0}}", type_to_c_impl(&resolved))
             }
             _ => "0".to_string(),
@@ -3910,7 +4246,9 @@ impl Codegen {
             | Type::Sender { .. }
             | Type::Receiver { .. }
             | Type::File
-            | Type::JoinHandle => {
+            | Type::Allocator
+            | Type::Endpoint { .. }
+            | Type::JoinHandle { .. } => {
                 format!("({}){{0}}", self.type_to_c(&resolved))
             }
             _ => "0".to_string(),
@@ -4400,7 +4738,9 @@ impl Codegen {
     /// Bind `src`. Through `&` / `&mut`, a non-copy place is a reborrow (`&src`)
     /// and is not cleared or dropped. An owned non-copy place is moved out.
     fn emit_pattern_binding(&mut self, ty: &Type, name: &str, src: &str, through_ref: bool) {
-        if through_ref && !crate::tc::TypeChecker::is_copy_type(ty) {
+        if through_ref
+            && !crate::tc::type_is_copy(ty, &self.struct_map, &self.enum_map, &self.drop_impls)
+        {
             let ref_ty = Type::Ref {
                 inner: Box::new(ty.clone()),
                 mutable: false,
@@ -5209,6 +5549,7 @@ fn walk_referenced_stmt(stmt: &IRStmt, refs: &mut ReferencedTypes) {
             }
         }
         IRStmt::UnsafeBlock(unsafe_block) => walk_referenced_block(&unsafe_block.body, refs),
+        IRStmt::Scope(scope) => walk_referenced_block(&scope.body, refs),
     }
 }
 
@@ -5246,11 +5587,18 @@ fn walk_referenced_expr(expr: &IREexpr, refs: &mut ReferencedTypes) {
         } => {
             walk_referenced_expr(channel, refs);
             note_referenced_type(elem_type, refs);
-            let option_ty = Type::Generic {
-                name: "Option".to_string(),
-                params: vec![elem_type.clone()],
-            };
-            collect_generic_from_type(&option_ty, &mut refs.generics);
+            let endpoint_result = matches!(
+                elem_type,
+                Type::Tuple { elements }
+                    if elements.len() == 2 && matches!(elements[1], Type::Endpoint { .. })
+            );
+            if !endpoint_result {
+                let option_ty = Type::Generic {
+                    name: "Option".to_string(),
+                    params: vec![elem_type.clone()],
+                };
+                collect_generic_from_type(&option_ty, &mut refs.generics);
+            }
         }
         IREexpr::Spawn { body, .. } => walk_referenced_block(body, refs),
         IREexpr::StructLit { fields, .. } => {
@@ -5503,8 +5851,10 @@ fn collect_slice_types_from_type(ty: &Type, slice_types: &mut std::collections::
         | Type::UInt
         | Type::String
         | Type::Str
-        | Type::JoinHandle
-        | Type::File => {}
+        | Type::JoinHandle { .. }
+        | Type::File
+        | Type::Allocator
+        | Type::Endpoint { .. } => {}
         Type::Slice { inner } => {
             let slice_type_name = format!(
                 "ion_slice_{}",
@@ -5864,10 +6214,11 @@ impl Codegen {
     }
 
     fn generate_vec_struct(&mut self, vec_type_name: &str) {
-        // Generate Vec struct definition matching ion_vec_t layout
-        // Format: typedef struct Vec_T { void* data; size_t len; size_t capacity; size_t elem_size; } Vec_T;
+        // Layout matches ion_vec_t: allocator header, then pointer, length, capacity, element size.
         self.write(&format!("typedef struct {} {{\n", vec_type_name));
         self.indent_level += 1;
+        self.write_indent();
+        self.writeln("ion_alloc_t alloc;");
         self.write_indent();
         self.writeln("void* data;");
         self.write_indent();
@@ -6151,8 +6502,10 @@ fn type_complete_with_struct_forwards(ty: &Type) -> bool {
         | Type::UInt
         | Type::String
         | Type::Str
-        | Type::JoinHandle
+        | Type::JoinHandle { .. }
         | Type::File
+        | Type::Allocator
+        | Type::Endpoint { .. }
         | Type::Fn { .. }
         | Type::Slice { .. } => true,
         Type::Box { .. } | Type::Vec { .. } | Type::RawPtr { .. } | Type::Ref { .. } => true,
@@ -6160,7 +6513,7 @@ fn type_complete_with_struct_forwards(ty: &Type) -> bool {
             type_complete_with_struct_forwards(elem_type)
         }
         Type::Array { inner, .. } => type_complete_with_struct_forwards(inner),
-        Type::Tuple { elements } => elements.iter().all(type_complete_with_struct_forwards),
+        Type::Tuple { .. } => false,
         Type::Struct(_) | Type::Enum(_) | Type::Generic { .. } => false,
     }
 }
@@ -6187,8 +6540,10 @@ fn type_ready_for_by_value(
         | Type::UInt
         | Type::String
         | Type::Str
-        | Type::JoinHandle
+        | Type::JoinHandle { .. }
         | Type::File
+        | Type::Allocator
+        | Type::Endpoint { .. }
         | Type::Fn { .. }
         | Type::Slice { .. }
         | Type::Box { .. }

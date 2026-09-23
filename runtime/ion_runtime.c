@@ -42,14 +42,58 @@ void ion_abort_bytes(uint8_t *message) {
 }
 
 // ============================================================================
+// Allocator
+// ============================================================================
+
+static void *ion_heap_alloc(void *ctx, size_t size) {
+  (void)ctx;
+  return malloc(size);
+}
+
+static void *ion_heap_resize(void *ctx, void *ptr, size_t size) {
+  (void)ctx;
+  return realloc(ptr, size);
+}
+
+static void ion_heap_dealloc(void *ctx, void *ptr) {
+  (void)ctx;
+  free(ptr);
+}
+
+ion_alloc_t ion_heap(void) {
+  ion_alloc_t alloc;
+  alloc.alloc = ion_heap_alloc;
+  alloc.resize = ion_heap_resize;
+  alloc.dealloc = ion_heap_dealloc;
+  alloc.ctx = NULL;
+  return alloc;
+}
+
+static void *ion_alloc_alloc(ion_alloc_t alloc, size_t size) {
+  if (!alloc.alloc)
+    return malloc(size);
+  return alloc.alloc(alloc.ctx, size);
+}
+
+static void ion_alloc_dealloc(ion_alloc_t alloc, void *ptr) {
+  if (!ptr)
+    return;
+  if (alloc.dealloc)
+    alloc.dealloc(alloc.ctx, ptr);
+  else
+    free(ptr);
+}
+
+// ============================================================================
 // Vec Implementation
 // ============================================================================
 
-ion_vec_t *ion_vec_new(size_t elem_size) {
-  ion_vec_t *vec = (ion_vec_t *)malloc(sizeof(ion_vec_t));
+ion_vec_t *ion_vec_new_in(ion_alloc_t alloc, size_t elem_size) {
+  ion_vec_t *vec = (ion_vec_t *)ion_alloc_alloc(alloc, sizeof(ion_vec_t));
   if (!vec)
     return NULL;
 
+  vec->alloc = alloc;
   vec->data = NULL;
   vec->len = 0;
   vec->capacity = 0;
@@ -58,15 +102,19 @@ ion_vec_t *ion_vec_new(size_t elem_size) {
   return vec;
 }
 
+ion_vec_t *ion_vec_new(size_t elem_size) {
+  return ion_vec_new_in(ion_heap(), elem_size);
+}
+
 ion_vec_t *ion_vec_with_capacity(size_t elem_size, int capacity) {
   ion_vec_t *vec = ion_vec_new(elem_size);
   if (!vec)
     return NULL;
 
   if (capacity > 0) {
-    vec->data = malloc(elem_size * capacity);
+    vec->data = ion_alloc_alloc(vec->alloc, elem_size * (size_t)capacity);
     if (!vec->data) {
-      free(vec);
+      ion_alloc_dealloc(vec->alloc, vec);
       return NULL;
     }
     vec->capacity = capacity;
@@ -88,25 +136,27 @@ int ion_vec_set(ion_vec_t *vec, int index, const void *value,
 }
 
 void ion_vec_free(ion_vec_t *vec) {
+  ion_alloc_t alloc;
   if (!vec)
     return;
-  if (vec->data)
-    free(vec->data);
-  free(vec);
+  alloc = vec->alloc;
+  ion_alloc_dealloc(alloc, vec->data);
+  ion_alloc_dealloc(alloc, vec);
 }
 
 // ============================================================================
 // String Implementation
 // ============================================================================
 
-ion_string_t *ion_string_new(void) {
-  ion_string_t *s = (ion_string_t *)malloc(sizeof(ion_string_t));
+ion_string_t *ion_string_new_in(ion_alloc_t alloc) {
+  ion_string_t *s = (ion_string_t *)ion_alloc_alloc(alloc, sizeof(ion_string_t));
   if (!s)
     return NULL;
 
-  s->data = (uint8_t *)malloc(1);
+  s->alloc = alloc;
+  s->data = (uint8_t *)ion_alloc_alloc(alloc, 1);
   if (!s->data) {
-    free(s);
+    ion_alloc_dealloc(alloc, s);
     return NULL;
   }
   s->data[0] = '\0';
@@ -115,6 +165,8 @@ ion_string_t *ion_string_new(void) {
 
   return s;
 }
+
+ion_string_t *ion_string_new(void) { return ion_string_new_in(ion_heap()); }
 
 int ion_utf8_valid(const uint8_t *data, size_t len) {
   size_t i = 0;
@@ -168,18 +220,19 @@ int ion_utf8_valid(const uint8_t *data, size_t len) {
   return 1;
 }
 
-ion_string_t *ion_string_from_literal(const char *lit, size_t len) {
+ion_string_t *ion_string_from_literal_in(ion_alloc_t alloc, const char *lit, size_t len) {
   ion_string_t *s;
   if (!ion_utf8_valid((const uint8_t *)lit, len))
     return NULL;
 
-  s = (ion_string_t *)malloc(sizeof(ion_string_t));
+  s = (ion_string_t *)ion_alloc_alloc(alloc, sizeof(ion_string_t));
   if (!s)
     return NULL;
 
-  s->data = (uint8_t *)malloc(len + 1);
+  s->alloc = alloc;
+  s->data = (uint8_t *)ion_alloc_alloc(alloc, len + 1);
   if (!s->data) {
-    free(s);
+    ion_alloc_dealloc(alloc, s);
     return NULL;
   }
   if (len > 0 && lit)
@@ -191,10 +244,14 @@ ion_string_t *ion_string_from_literal(const char *lit, size_t len) {
   return s;
 }
 
+ion_string_t *ion_string_from_literal(const char *lit, size_t len) {
+  return ion_string_from_literal_in(ion_heap(), lit, len);
+}
+
 ion_string_t *ion_string_clone(const ion_string_t *s) {
   if (!s)
     return NULL;
-  return ion_string_from_literal((const char *)s->data, s->len);
+  return ion_string_from_literal_in(s->alloc, (const char *)s->data, s->len);
 }
 
 int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
@@ -215,7 +272,7 @@ int ion_string_push_str(ion_string_t *s, const char *other, size_t other_len) {
     while (new_capacity < s->len + append_len + 1) {
       new_capacity *= 2;
     }
-    uint8_t *new_data = (uint8_t *)realloc(s->data, new_capacity);
+    uint8_t *new_data = (uint8_t *)s->alloc.resize(s->alloc.ctx, s->data, new_capacity);
     if (!new_data)
       return -1;
     s->data = new_data;
@@ -240,7 +297,7 @@ int ion_string_push_byte(ion_string_t *s, unsigned char b) {
     while (new_capacity < s->len + 2) {
       new_capacity *= 2;
     }
-    uint8_t *new_data = (uint8_t *)realloc(s->data, new_capacity);
+    uint8_t *new_data = (uint8_t *)s->alloc.resize(s->alloc.ctx, s->data, new_capacity);
     if (!new_data)
       return -1;
     s->data = new_data;
@@ -265,11 +322,12 @@ int ion_string_equals(const ion_string_t *a, const ion_string_t *b) {
 }
 
 void ion_string_free(ion_string_t *s) {
+  ion_alloc_t alloc;
   if (!s)
     return;
-  if (s->data)
-    free(s->data);
-  free(s);
+  alloc = s->alloc;
+  ion_alloc_dealloc(alloc, s->data);
+  ion_alloc_dealloc(alloc, s);
 }
 
 // ============================================================================
@@ -332,6 +390,20 @@ int ion_join(ion_thread_t *thread) {
   thread->live = 0;
   memset(thread->thread, 0, sizeof(thread->thread));
   return rc;
+}
+
+int ion_join_value(ion_thread_t *thread, void **out) {
+  void *value = NULL;
+  int rc;
+  if (!thread || !thread->live || !out)
+    return -1;
+  rc = pthread_join(ion_thread_load(thread), &value);
+  thread->live = 0;
+  memset(thread->thread, 0, sizeof(thread->thread));
+  if (rc != 0)
+    return rc;
+  *out = value;
+  return 0;
 }
 
 void ion_thread_detach(ion_thread_t *thread) {

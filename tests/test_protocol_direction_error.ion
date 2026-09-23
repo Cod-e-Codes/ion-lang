@@ -1,0 +1,10 @@
+protocol Ping {
+    recv int;
+    end;
+}
+
+fn main() -> int {
+    let (client, _server) = endpoint<Ping>();
+    let _nope = send(client, 1);
+    return 0;
+}

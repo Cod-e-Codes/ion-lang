@@ -1,0 +1,8 @@
+// Box::unwrap inside + still moves the box. A second unwrap is use-after-move.
+fn main() -> int {
+    let extra: Box<int> = Box::new(1);
+    let mut sum: int = 0;
+    sum = sum + Box::unwrap(extra);
+    let again: int = Box::unwrap(extra);
+    return sum + again;
+}

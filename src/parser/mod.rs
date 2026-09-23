@@ -39,6 +39,7 @@ fn stmt_end_span(stmt: &Stmt) -> Span {
         Stmt::Loop(s) => s.span,
         Stmt::For(s) => s.span,
         Stmt::UnsafeBlock(s) => s.span,
+        Stmt::Scope(s) => s.span,
     }
 }
 
@@ -141,6 +142,7 @@ fn subst_stmt_self(stmt: &mut Stmt, target: &Type) {
             subst_block_self(&mut for_stmt.body, target);
         }
         Stmt::UnsafeBlock(block) => subst_block_self(&mut block.body, target),
+        Stmt::Scope(block) => subst_block_self(&mut block.body, target),
         Stmt::Break(_) | Stmt::Continue(_) => {}
     }
 }
@@ -317,6 +319,7 @@ impl Parser {
         let mut enums = Vec::new();
         let mut type_aliases = Vec::new();
         let mut capabilities = Vec::new();
+        let mut protocols = Vec::new();
         let mut impls = Vec::new();
         let mut functions = Vec::new();
         let mut consts = Vec::new();
@@ -391,6 +394,12 @@ impl Parser {
                     decl.doc = doc;
                     capabilities.push(decl);
                 }
+                TokenKind::Protocol => {
+                    let mut decl = self.parse_protocol()?;
+                    decl.pub_ = is_pub;
+                    decl.doc = doc;
+                    protocols.push(decl);
+                }
                 TokenKind::Impl => {
                     if is_pub {
                         return Err(ParseError::UnexpectedToken {
@@ -425,7 +434,7 @@ impl Parser {
                 ref other => {
                     return Err(ParseError::UnexpectedToken {
                         expected:
-                            "import, extern, struct, enum, type, capability, impl, const, or fn"
+                            "import, extern, struct, enum, type, capability, protocol, impl, const, or fn"
                                 .to_string(),
                         got: other.clone(),
                         span: Span::from_token(self.peek()),
@@ -443,6 +452,7 @@ impl Parser {
             enums,
             type_aliases,
             capabilities,
+            protocols,
             impls,
             functions,
             consts,
@@ -652,6 +662,79 @@ impl Parser {
         })
     }
 
+    fn parse_protocol(&mut self) -> Result<ProtocolDecl, ParseError> {
+        let start = Span::from_token(self.expect(TokenKind::Protocol)?);
+        let name = self.expect_ident("protocol name")?;
+        self.expect(TokenKind::LBrace)?;
+        let mut steps = Vec::new();
+        while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
+            match &self.peek().kind {
+                TokenKind::Send => {
+                    self.advance();
+                    let ty = self.parse_type()?;
+                    self.expect(TokenKind::Semicolon)?;
+                    steps.push(ProtocolStep::Send(ty));
+                }
+                TokenKind::Recv => {
+                    self.advance();
+                    let ty = self.parse_type()?;
+                    self.expect(TokenKind::Semicolon)?;
+                    steps.push(ProtocolStep::Recv(ty));
+                }
+                TokenKind::Ident(word) if word == "end" => {
+                    self.advance();
+                    self.expect(TokenKind::Semicolon)?;
+                    break;
+                }
+                _ => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "send, recv, or end".to_string(),
+                        got: self.peek().kind.clone(),
+                        span: Span::from_token(self.peek()),
+                    });
+                }
+            }
+        }
+        let end = Span::from_token(self.expect(TokenKind::RBrace)?);
+        if steps.is_empty() {
+            return Err(ParseError::UnexpectedToken {
+                expected: "at least one send or recv".to_string(),
+                got: TokenKind::RBrace,
+                span: end,
+            });
+        }
+        Ok(ProtocolDecl {
+            name,
+            steps,
+            span: start.merge(&end),
+            doc: None,
+            pub_: false,
+        })
+    }
+
+    fn parse_endpoint_call(&mut self, span: Span) -> Result<Expr, ParseError> {
+        self.advance();
+        self.expect(TokenKind::Less)?;
+        let (Type::Struct(name) | Type::Enum(name)) = self.parse_type()? else {
+            return Err(ParseError::UnexpectedToken {
+                expected: "protocol name".to_string(),
+                got: TokenKind::Less,
+                span,
+            });
+        };
+        self.expect(TokenKind::Greater)?;
+        self.expect(TokenKind::LParen)?;
+        self.expect(TokenKind::RParen)?;
+        let end_span = Span::from_token(self.previous());
+        Ok(Expr::Call(CallExpr {
+            id: ExprId::UNASSIGNED,
+            callee: format!("endpoint:{name}"),
+            args: Vec::new(),
+            span: span.merge(&end_span),
+            callee_span: span,
+        }))
+    }
+
     fn parse_capability(&mut self) -> Result<CapabilityDecl, ParseError> {
         let start = Span::from_token(self.expect(TokenKind::Capability)?);
         let name = self.expect_ident("capability name")?;
@@ -660,6 +743,7 @@ impl Parser {
                 "capability name '{name}' is reserved"
             )));
         }
+        let generics = self.parse_generic_params()?;
         self.expect(TokenKind::LBrace)?;
         let mut methods = Vec::new();
         while !self.is_at_end() && !matches!(self.peek().kind, TokenKind::RBrace) {
@@ -670,6 +754,7 @@ impl Parser {
             doc: None,
             pub_: false,
             name,
+            generics,
             methods,
             span: start.merge(&end),
         })
@@ -701,6 +786,7 @@ impl Parser {
         let start = Span::from_token(self.expect(TokenKind::Impl)?);
         let generics = self.parse_generic_params()?;
         let capability = self.expect_ident("capability name")?;
+        let cap_args = self.parse_type_arg_list()?;
         self.expect(TokenKind::For)?;
         let target = self.parse_type()?;
         let type_name = match &target {
@@ -721,6 +807,7 @@ impl Parser {
         Ok(ImplDecl {
             capability,
             generics,
+            cap_args,
             type_name,
             target,
             methods,
@@ -1004,6 +1091,10 @@ impl Parser {
                         self.advance();
                         Ok(Type::Str)
                     }
+                    TokenKind::Ident(name) if name == "Allocator" => {
+                        self.advance();
+                        Ok(Type::Allocator)
+                    }
                     TokenKind::String => {
                         self.advance();
                         Ok(Type::String)
@@ -1044,7 +1135,17 @@ impl Parser {
                         let type_name = name.clone();
                         self.advance();
                         if type_name == "JoinHandle" {
-                            return Ok(Type::JoinHandle);
+                            if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Less) {
+                                self.advance();
+                                let inner = self.parse_type()?;
+                                self.expect_type_greater()?;
+                                return Ok(Type::JoinHandle {
+                                    result: Box::new(inner),
+                                });
+                            }
+                            return Ok(Type::JoinHandle {
+                                result: Box::new(Type::Void),
+                            });
                         }
                         if type_name == "File" {
                             return Ok(Type::File);
@@ -1096,6 +1197,24 @@ impl Parser {
                 }
             }
         }
+    }
+
+    fn parse_type_arg_list(&mut self) -> Result<Vec<Type>, ParseError> {
+        if self.is_at_end() || !matches!(self.peek().kind, TokenKind::Less) {
+            return Ok(Vec::new());
+        }
+        self.advance();
+        let mut args = Vec::new();
+        loop {
+            args.push(self.parse_type()?);
+            if !self.is_at_end() && matches!(self.peek().kind, TokenKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_type_greater()?;
+        Ok(args)
     }
 
     fn parse_generic_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {
@@ -1391,6 +1510,10 @@ impl Parser {
             TokenKind::Unsafe => {
                 let stmt = self.parse_unsafe_block()?;
                 Ok(Stmt::UnsafeBlock(stmt))
+            }
+            TokenKind::Scope => {
+                let stmt = self.parse_scope_block()?;
+                Ok(Stmt::Scope(stmt))
             }
             TokenKind::Match => {
                 // Statement-form match (ION_SPEC match_stmt): trailing `;` is optional
@@ -2223,6 +2346,18 @@ impl Parser {
         Ok(UnsafeBlockStmt { body, span })
     }
 
+    fn parse_scope_block(&mut self) -> Result<ScopeStmt, ParseError> {
+        let scope_token_span = Span::from_token(self.expect(TokenKind::Scope)?);
+        let body = self.parse_block()?;
+        let end_span = body
+            .statements
+            .last()
+            .map(stmt_end_span)
+            .unwrap_or(scope_token_span);
+        let span = scope_token_span.merge(&end_span);
+        Ok(ScopeStmt { body, span })
+    }
+
     // Expression parsing with operator precedence
     // Precedence (lowest to highest):
     // 1. <, >, <=, >=, ==, != (comparison)
@@ -2572,7 +2707,8 @@ impl Parser {
                 | TokenKind::Defer
                 | TokenKind::Spawn
                 | TokenKind::Select
-                | TokenKind::Unsafe => {
+                | TokenKind::Unsafe
+                | TokenKind::Scope => {
                     break;
                 }
                 // Other expression-ending tokens
@@ -2628,6 +2764,7 @@ impl Parser {
                             | TokenKind::Spawn
                             | TokenKind::Select
                             | TokenKind::Unsafe
+                            | TokenKind::Scope
                     ) {
                         return Err(ParseError::UnexpectedToken {
                             expected: "field name".to_string(),
@@ -2868,6 +3005,7 @@ impl Parser {
                 let match_expr = self.parse_match_expr()?;
                 Ok(Expr::Match(match_expr))
             }
+            TokenKind::Endpoint => self.parse_endpoint_call(span),
             TokenKind::Channel => {
                 // channel<T>() is a function call, not a type
                 // Check if followed by < (generic) and then ( (function call)
@@ -3123,7 +3261,8 @@ impl Parser {
                             | TokenKind::Defer
                             | TokenKind::Spawn
                             | TokenKind::Select
-                            | TokenKind::Unsafe => true,
+                            | TokenKind::Unsafe
+                            | TokenKind::Scope => true,
                             TokenKind::Ident(_) => {
                                 // Struct fields are `name: expr`. Calls (`f(`), assigns
                                 // (`x =`), etc. belong to a block body, not a struct lit.

@@ -18,7 +18,7 @@ enum SendResult<T> {
 extern "C" {
     fn ion_net_init();
     fn read(fd: int, buf: *u8, count: int) -> int;
-    fn socket(domain: int, sock_type: int, protocol: int) -> int;
+    fn socket(domain: int, sock_type: int, proto: int) -> int;
     fn bind(sockfd: &int, addr: &SockAddrIn, addrlen: int) -> int;
     fn listen(sockfd: &int, backlog: int) -> int;
     fn accept(sockfd: &int, addr: &mut u8, addrlen: &mut int) -> int;

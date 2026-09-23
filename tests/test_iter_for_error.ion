@@ -1,0 +1,7 @@
+fn main() -> int {
+    let n: int = 1;
+    for x in n {
+        return x;
+    }
+    return 0;
+}

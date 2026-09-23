@@ -1,0 +1,10 @@
+fn main() -> int {
+    let a = heap();
+    let b = a;
+    let mut v: Vec<int> = Vec::new_in(a);
+    Vec::push(&mut v, 4);
+    let mut w: Vec<int> = Vec::new_in(b);
+    Vec::push(&mut w, 3);
+    let boxed = Box::new_in(10, heap());
+    return Vec::len(&v) + Vec::len(&w) + Box::unwrap(boxed);
+}

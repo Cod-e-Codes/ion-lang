@@ -1,0 +1,18 @@
+protocol Ping {
+    send int;
+    recv bool;
+    end;
+}
+
+fn main() -> int {
+    let (client0, server0) = endpoint<Ping>();
+    let client1 = send(client0, 7);
+    let (n, server1) = recv(server0);
+    let server2 = send(server1, true);
+    let (ok, _client2) = recv(client1);
+    let _ = server2;
+    if ok {
+        return n;
+    }
+    return 0;
+}

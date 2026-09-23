@@ -1,0 +1,4 @@
+fn main() -> int {
+    let _a = make_allocator(0, 0, 0, 0);
+    return 0;
+}

@@ -248,6 +248,7 @@ impl Compiler {
             enums: main_program.enums.clone(),
             type_aliases: main_program.type_aliases.clone(),
             capabilities: main_program.capabilities.clone(),
+            protocols: main_program.protocols.clone(),
             impls: main_program.impls.clone(),
             functions: main_program.functions.clone(),
             consts: main_program.consts.clone(),
@@ -304,6 +305,15 @@ impl Compiler {
                     .any(|existing| existing.name == cap.name)
                 {
                     merged.capabilities.push(cap.clone());
+                }
+            }
+            for proto in &module_program.protocols {
+                if !merged
+                    .protocols
+                    .iter()
+                    .any(|existing| existing.name == proto.name)
+                {
+                    merged.protocols.push(proto.clone());
                 }
             }
             for imp in &module_program.impls {
@@ -481,6 +491,7 @@ fn rewrite_stmt_calls(stmt: &mut Stmt, alias: &str, pub_names: &HashSet<String>)
             rewrite_block_calls(&mut for_stmt.body, alias, pub_names);
         }
         Stmt::UnsafeBlock(block) => rewrite_block_calls(&mut block.body, alias, pub_names),
+        Stmt::Scope(block) => rewrite_block_calls(&mut block.body, alias, pub_names),
         Stmt::Break(_) | Stmt::Continue(_) => {}
     }
 }

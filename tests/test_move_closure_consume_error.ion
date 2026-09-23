@@ -1,0 +1,9 @@
+fn main() -> int {
+    let extra: Box<int> = Box::new(7);
+    let f = fn() -> int {
+        return Box::unwrap(extra);
+    };
+    let n: int = f();
+    let m: int = f();
+    return n + m;
+}

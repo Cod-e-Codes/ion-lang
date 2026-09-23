@@ -1,5 +1,6 @@
 use super::*;
-use std::collections::HashMap;
+use crate::types_util::substitute_type;
+use std::collections::{HashMap, HashSet};
 
 /// Join ownership states from reachable control-flow edges (ION_SPEC §5.2).
 /// Empty `states` is a caller error; prefer skipping the join when no edges reach.
@@ -151,8 +152,13 @@ impl TypeChecker {
 
             let merged_state = if exit_states.is_empty() {
                 prev_info.state
+            } else if exit_states.iter().all(|s| *s == OwnershipState::Valid) {
+                OwnershipState::Valid
             } else {
-                join_ownership_states(&exit_states, name, span)?
+                // One exit moved the binding and another did not. It is moved
+                // after the loop, so a later use is UseAfterMove. The exit that
+                // still owns it drops the value on that path.
+                OwnershipState::Moved
             };
 
             if let Some(info) = merged.get_mut(name) {
@@ -240,6 +246,7 @@ impl TypeChecker {
                 || self.loan_ignored_as_match_sibling(idx)
                 || borrow.released
                 || borrow.owner != owner
+                || self.loan_ignored_in_branch(idx)
             {
                 continue;
             }
@@ -722,6 +729,47 @@ impl TypeChecker {
             .any(|frame| frame.contains(&idx))
     }
 
+    fn loan_ignored_in_branch(&self, idx: usize) -> bool {
+        self.branch_ignored_loans
+            .iter()
+            .any(|frame| frame.contains(&idx))
+    }
+
+    /// Loans whose carriers are not used in `branch` and are not used again
+    /// after the current statement. The other arm of an `if` may borrow the
+    /// same place.
+    pub(crate) fn loans_unused_in_branch(&self, branch: &Block) -> Vec<usize> {
+        let mut names = Vec::new();
+        for stmt in &branch.statements {
+            collect_borrow_use_names(stmt, &mut names);
+        }
+        let used: HashSet<String> = names.into_iter().collect();
+        let mut ignore = Vec::new();
+        for (idx, borrow) in self.live_borrows.iter().enumerate() {
+            if borrow.released {
+                continue;
+            }
+            let carriers: Vec<&String> = self
+                .borrow_names
+                .iter()
+                .filter(|(_, loans)| loans.contains(&idx))
+                .map(|(name, _)| name)
+                .collect();
+            if carriers.is_empty() || carriers.iter().any(|name| used.contains(*name)) {
+                continue;
+            }
+            let used_later = carriers.iter().any(|name| {
+                self.borrow_last_use
+                    .get(*name)
+                    .is_some_and(|at| self.current_stmt_index.is_some_and(|current| *at > current))
+            });
+            if !used_later {
+                ignore.push(idx);
+            }
+        }
+        ignore
+    }
+
     /// Keep loans the arm yields. A loan created on a local in the arm would
     /// otherwise end with that local, while the match result still holds the
     /// pointer. Loans that already belonged to an outer binding stay put.
@@ -937,9 +985,14 @@ impl TypeChecker {
                     fields.push(acc.field.clone());
                     current = &acc.base;
                 }
-                Expr::Index(_) => {
-                    let (owner, span) = self.borrow_owner_from_expr(expr)?;
-                    return Some((owner, None, span));
+                Expr::Index(index_expr) => {
+                    if let Expr::Lit(lit) = index_expr.index.as_ref() {
+                        fields.push(lit.value.to_string());
+                        current = &index_expr.target;
+                    } else {
+                        let (owner, span) = self.borrow_owner_from_expr(expr)?;
+                        return Some((owner, None, span));
+                    }
                 }
                 Expr::Var(var) => {
                     if !self.variables.contains_key(&var.name) {
@@ -1050,7 +1103,7 @@ impl TypeChecker {
                 }
                 let base_ty = self.check_expr_with_context(&acc.base, true)?;
                 if let Some(field_ty) = self.struct_field_type(&base_ty, &acc.field)
-                    && !Self::is_copy_type(&field_ty)
+                    && !self.is_copy_type(&field_ty)
                     && (self.type_has_user_drop(&base_ty) || self.chain_has_user_drop(&acc.base))
                 {
                     return Err(TypeCheckError::Message(
@@ -1060,25 +1113,28 @@ impl TypeChecker {
                 Ok(())
             }
             Expr::BinOp(bin_op_expr) => {
-                // Binary operations use their operands (read), but don't move them
-                // They only read the values
-                self.check_expr(&bin_op_expr.left)?;
-                self.check_expr(&bin_op_expr.right)?;
+                self.check_operand_for_nested_moves(&bin_op_expr.left)?;
+                self.check_operand_for_nested_moves(&bin_op_expr.right)?;
                 Ok(())
             }
             Expr::UnOp(un_op_expr) => {
-                // Unary operations use their operand (read), but don't move it
-                self.check_expr(&un_op_expr.operand)?;
+                self.check_operand_for_nested_moves(&un_op_expr.operand)?;
                 Ok(())
             }
             Expr::Send(send_expr) => {
-                // Sending moves the value operand; the channel itself is only read.
+                let channel_ty = self.type_info.expr_types.get(&send_expr.channel.id());
+                if matches!(channel_ty, Some(Type::Endpoint { .. })) {
+                    self.check_expr_for_moves(&send_expr.channel)?;
+                }
                 self.check_expr_for_moves(&send_expr.value)
             }
             Expr::Recv(recv_expr) => {
-                // Receiving from a channel does not move any existing variable;
-                // it produces a fresh value.
-                self.check_expr(&recv_expr.channel)?;
+                let channel_ty = self.type_info.expr_types.get(&recv_expr.channel.id());
+                if matches!(channel_ty, Some(Type::Endpoint { .. })) {
+                    self.check_expr_for_moves(&recv_expr.channel)?;
+                } else {
+                    self.check_expr(&recv_expr.channel)?;
+                }
                 Ok(())
             }
             Expr::Spawn(_) => Ok(()),
@@ -1107,8 +1163,50 @@ impl TypeChecker {
             }
             Expr::Try(try_expr) => self.check_expr_for_moves(&try_expr.operand),
             Expr::Call(call_expr) => {
+                if let Some(var_ty) = self
+                    .variables
+                    .get(&call_expr.callee)
+                    .map(|info| (info.ty.clone(), info.state))
+                    && let (Type::Struct(name), state) = &var_ty
+                    && self
+                        .type_info
+                        .closures
+                        .get(name)
+                        .is_some_and(|sig| sig.consumes)
+                {
+                    if *state == OwnershipState::Moved {
+                        return Err(TypeCheckError::UseAfterMove {
+                            name: call_expr.callee.clone(),
+                            span: call_expr.span,
+                        });
+                    }
+                    self.variables
+                        .get_mut(&call_expr.callee)
+                        .expect("closure binding")
+                        .state = OwnershipState::Moved;
+                }
                 for arg in &call_expr.args {
                     self.check_expr_for_moves(arg)?;
+                }
+                Ok(())
+            }
+            Expr::FnLiteral(lit) => {
+                let Some(ty) = self.type_info.expr_types.get(&lit.id).cloned() else {
+                    return Ok(());
+                };
+                let Type::Struct(name) = ty else {
+                    return Ok(());
+                };
+                let Some(sig) = self.type_info.closures.get(&name).cloned() else {
+                    return Ok(());
+                };
+                for (name, cap_ty) in &sig.captures {
+                    if self.is_copy_type(cap_ty) {
+                        continue;
+                    }
+                    if let Some(info) = self.variables.get_mut(name) {
+                        info.state = OwnershipState::Moved;
+                    }
                 }
                 Ok(())
             }
@@ -1131,9 +1229,8 @@ impl TypeChecker {
                 Ok(())
             }
             Expr::Index(index_expr) => {
-                // Indexing reads from the target but doesn't move it
-                self.check_expr(&index_expr.target)?;
-                self.check_expr(&index_expr.index)?;
+                self.check_operand_for_nested_moves(&index_expr.target)?;
+                self.check_operand_for_nested_moves(&index_expr.index)?;
                 Ok(())
             }
             Expr::Cast(cast_expr) => {
@@ -1147,32 +1244,156 @@ impl TypeChecker {
                 self.check_expr_for_moves(&assign_expr.value)?; // Move the value
                 Ok(())
             }
-            Expr::FnLiteral(_) => Ok(()),
+        }
+    }
+
+    /// A place read (`x`, `s.f`, `a[i]`) is not moved. A call nested in that
+    /// operand still moves its arguments (`sum + Box::unwrap(extra)`).
+    fn check_operand_for_nested_moves(&mut self, expr: &Expr) -> Result<(), TypeCheckError> {
+        match expr {
+            Expr::Var(_)
+            | Expr::Lit(_)
+            | Expr::BoolLiteral(_)
+            | Expr::FloatLiteral(_)
+            | Expr::StringLit(_)
+            | Expr::TypeConst(_)
+            | Expr::Ref(_) => Ok(()),
+            Expr::FieldAccess(acc) => self.check_operand_for_nested_moves(&acc.base),
+            Expr::Index(index_expr) => {
+                self.check_operand_for_nested_moves(&index_expr.target)?;
+                self.check_operand_for_nested_moves(&index_expr.index)
+            }
+            Expr::BinOp(op) => {
+                self.check_operand_for_nested_moves(&op.left)?;
+                self.check_operand_for_nested_moves(&op.right)
+            }
+            Expr::UnOp(op) => self.check_operand_for_nested_moves(&op.operand),
+            other => self.check_expr_for_moves(other),
         }
     }
 
     /// Types copied rather than moved at the ownership level (ION_SPEC §5.2).
-    pub(crate) fn is_copy_type(ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::Void
-                | Type::Int
-                | Type::Bool
-                | Type::F32
-                | Type::F64
-                | Type::I8
-                | Type::I16
-                | Type::I32
-                | Type::I64
-                | Type::U8
-                | Type::U16
-                | Type::U32
-                | Type::U64
-                | Type::UInt
-                | Type::Ref { .. }
-                | Type::Fn { .. }
-        )
+    pub(crate) fn is_copy_type(&self, ty: &Type) -> bool {
+        let resolved = match ty {
+            Type::Struct(name) | Type::Enum(name) => {
+                if let Some(alias) = self.type_aliases.get(name) {
+                    return self.is_copy_type(&alias.target);
+                }
+                ty
+            }
+            _ => ty,
+        };
+        type_is_copy(resolved, &self.structs, &self.enums, &self.drop_impls)
     }
+}
+
+/// Structural `Copy`: primitives, references, function pointers, and aggregates
+/// whose fields are `Copy` and that have no `impl Drop`.
+pub(crate) fn type_is_copy(
+    ty: &Type,
+    structs: &HashMap<String, StructDecl>,
+    enums: &HashMap<String, EnumDecl>,
+    drop_impls: &HashMap<String, String>,
+) -> bool {
+    type_is_copy_rec(ty, structs, enums, drop_impls, &mut HashSet::new())
+}
+
+fn type_is_copy_rec(
+    ty: &Type,
+    structs: &HashMap<String, StructDecl>,
+    enums: &HashMap<String, EnumDecl>,
+    drop_impls: &HashMap<String, String>,
+    visiting: &mut HashSet<String>,
+) -> bool {
+    match ty {
+        Type::Void
+        | Type::Int
+        | Type::Bool
+        | Type::F32
+        | Type::F64
+        | Type::I8
+        | Type::I16
+        | Type::I32
+        | Type::I64
+        | Type::U8
+        | Type::U16
+        | Type::U32
+        | Type::U64
+        | Type::UInt
+        | Type::Ref { .. }
+        | Type::Fn { .. }
+        | Type::Allocator => true,
+        Type::RawPtr { .. }
+        | Type::Channel { .. }
+        | Type::Sender { .. }
+        | Type::Receiver { .. }
+        | Type::Box { .. }
+        | Type::Vec { .. }
+        | Type::String
+        | Type::Str
+        | Type::Slice { .. }
+        | Type::JoinHandle { .. }
+        | Type::File
+        | Type::Endpoint { .. } => false,
+        Type::Array { inner, .. } => type_is_copy_rec(inner, structs, enums, drop_impls, visiting),
+        Type::Tuple { elements } => elements
+            .iter()
+            .all(|elem| type_is_copy_rec(elem, structs, enums, drop_impls, visiting)),
+        Type::Struct(name) => copy_named(name, &[], structs, enums, drop_impls, visiting),
+        Type::Enum(name) => copy_named(name, &[], structs, enums, drop_impls, visiting),
+        Type::Generic { name, params } => {
+            copy_named(name, params, structs, enums, drop_impls, visiting)
+        }
+    }
+}
+
+fn copy_named(
+    name: &str,
+    args: &[Type],
+    structs: &HashMap<String, StructDecl>,
+    enums: &HashMap<String, EnumDecl>,
+    drop_impls: &HashMap<String, String>,
+    visiting: &mut HashSet<String>,
+) -> bool {
+    if drop_impls.contains_key(name) {
+        return false;
+    }
+    if !visiting.insert(name.to_string()) {
+        return true;
+    }
+    let result = if let Some(decl) = structs.get(name) {
+        let subst = generic_subst(&decl.generics, args);
+        decl.fields.iter().all(|field| {
+            let ty = substitute_type(&field.ty, &subst);
+            type_is_copy_rec(&ty, structs, enums, drop_impls, visiting)
+        })
+    } else if let Some(decl) = enums.get(name) {
+        let subst = generic_subst(&decl.generics, args);
+        decl.variants.iter().all(|variant| {
+            variant.payload_types.iter().all(|ty| {
+                let ty = substitute_type(ty, &subst);
+                type_is_copy_rec(&ty, structs, enums, drop_impls, visiting)
+            }) && variant.named_fields.as_ref().is_none_or(|fields| {
+                fields.iter().all(|(_, ty)| {
+                    let ty = substitute_type(ty, &subst);
+                    type_is_copy_rec(&ty, structs, enums, drop_impls, visiting)
+                })
+            })
+        })
+    } else {
+        false
+    };
+    visiting.remove(name);
+    result
+}
+
+fn generic_subst(params: &[TypeParam], args: &[Type]) -> HashMap<String, Type> {
+    params
+        .iter()
+        .filter(|param| param.const_ty.is_none())
+        .zip(args.iter())
+        .map(|(param, arg)| (param.name.clone(), arg.clone()))
+        .collect()
 }
 
 pub(crate) fn lasting_borrow_uses(stmts: &[Stmt]) -> HashMap<String, usize> {
@@ -1224,6 +1445,11 @@ fn collect_borrow_use_names(stmt: &Stmt, names: &mut Vec<String>) {
             }
         }
         Stmt::UnsafeBlock(block) => {
+            for inner in &block.body.statements {
+                collect_borrow_use_names(inner, names);
+            }
+        }
+        Stmt::Scope(block) => {
             for inner in &block.body.statements {
                 collect_borrow_use_names(inner, names);
             }

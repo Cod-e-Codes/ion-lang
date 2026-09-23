@@ -10,9 +10,68 @@ impl TypeChecker {
         let callee = &call_expr.callee;
         self.expect_builtin_arity(call_expr)?;
 
+        if let Some(name) = call_expr.callee.strip_prefix("endpoint:") {
+            if !call_expr.args.is_empty() {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "0 arguments".to_string(),
+                    got: format!("{} arguments", call_expr.args.len()),
+                    span: call_expr.span,
+                });
+            }
+            let proto = self
+                .protocols
+                .get(name)
+                .cloned()
+                .ok_or_else(|| TypeCheckError::Message(format!("unknown protocol '{name}'")))?;
+            for step in &proto.steps {
+                let payload = match step {
+                    ProtocolStep::Send(ty) | ProtocolStep::Recv(ty) => ty,
+                };
+                if !self.is_copy_type(payload) || !self.is_send(payload) {
+                    return Err(TypeCheckError::Message(format!(
+                        "protocol '{}' payload {} must be Copy and Send",
+                        name,
+                        type_to_string(payload)
+                    )));
+                }
+            }
+            let client = Type::Endpoint {
+                protocol: name.to_string(),
+                step: 0,
+                dual: false,
+            };
+            let server = Type::Endpoint {
+                protocol: name.to_string(),
+                step: 0,
+                dual: true,
+            };
+            return Ok(Some(Type::Tuple {
+                elements: vec![client, server],
+            }));
+        }
+
         if crate::integer_limits::is_builtin_hash_callee(callee) {
             let _arg_ty = self.check_expr(&call_expr.args[0])?;
             return Ok(Some(Type::Int));
+        }
+
+        // Box::new_in<T>(value: T, alloc: Allocator) -> Box<T>
+        if callee == "Box::new_in" {
+            let value_ty = self.check_expr(&call_expr.args[0])?;
+            let alloc_got = self.check_expr(&call_expr.args[1])?;
+            let alloc_ty = self.resolve_type_name(&alloc_got)?;
+            if !matches!(alloc_ty, Type::Allocator) {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "Allocator".to_string(),
+                    got: type_to_string(&alloc_ty),
+                    span: call_expr.args[1].span(),
+                });
+            }
+            let box_ty = Type::Box {
+                inner: Box::new(value_ty),
+            };
+            self.check_no_off_stack_reference(&box_ty, call_expr.span)?;
+            return Ok(Some(box_ty));
         }
 
         // Box::new<T>(value: T) -> Box<T>
@@ -54,6 +113,21 @@ impl TypeChecker {
         // For now, we'll return Vec<Int> as a default and let codegen handle it
         if callee == "Vec::new" {
             // Return Vec<Int> as default - actual type should come from context
+            return Ok(Some(Type::Vec {
+                elem_type: Box::new(Type::Int),
+            }));
+        }
+
+        if callee == "Vec::new_in" {
+            let alloc_got = self.check_expr(&call_expr.args[0])?;
+            let alloc_ty = self.resolve_type_name(&alloc_got)?;
+            if !matches!(alloc_ty, Type::Allocator) {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "Allocator".to_string(),
+                    got: type_to_string(&alloc_ty),
+                    span: call_expr.args[0].span(),
+                });
+            }
             return Ok(Some(Type::Vec {
                 elem_type: Box::new(Type::Int),
             }));
@@ -323,6 +397,59 @@ impl TypeChecker {
             return Ok(Some(Type::String));
         }
 
+        if callee == "String::new_in" {
+            let alloc_got = self.check_expr(&call_expr.args[0])?;
+            let alloc_ty = self.resolve_type_name(&alloc_got)?;
+            if !matches!(alloc_ty, Type::Allocator) {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: "Allocator".to_string(),
+                    got: type_to_string(&alloc_ty),
+                    span: call_expr.args[0].span(),
+                });
+            }
+            return Ok(Some(Type::String));
+        }
+
+        if callee == "heap" {
+            return Ok(Some(Type::Allocator));
+        }
+
+        if callee == "make_allocator" {
+            if !self.is_in_unsafe_context() {
+                return Err(TypeCheckError::Message(
+                    "make_allocator must be inside an unsafe block".to_string(),
+                ));
+            }
+            let ptr = Type::RawPtr {
+                inner: Box::new(Type::U8),
+            };
+            let alloc_fn = Type::Fn {
+                params: vec![ptr.clone(), Type::UInt],
+                return_type: Box::new(ptr.clone()),
+            };
+            let resize_fn = Type::Fn {
+                params: vec![ptr.clone(), ptr.clone(), Type::UInt],
+                return_type: Box::new(ptr.clone()),
+            };
+            let free_fn = Type::Fn {
+                params: vec![ptr.clone(), ptr.clone()],
+                return_type: Box::new(Type::Void),
+            };
+            let expected = [alloc_fn, resize_fn, free_fn, ptr];
+            for (arg, expect) in call_expr.args.iter().zip(expected.iter()) {
+                let got_ty = self.check_expr(arg)?;
+                let got = self.resolve_type_name(&got_ty)?;
+                if !types_equal(&got, expect) {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: type_to_string(expect),
+                        got: type_to_string(&got),
+                        span: arg.span(),
+                    });
+                }
+            }
+            return Ok(Some(Type::Allocator));
+        }
+
         // String::from(s: &str) -> String
         if callee == "String::from" {
             let arg_ty = self.check_expr(&call_expr.args[0])?;
@@ -545,14 +672,14 @@ impl TypeChecker {
 
         if callee == "join" {
             let handle_ty = self.check_expr(&call_expr.args[0])?;
-            if !matches!(handle_ty, Type::JoinHandle) {
+            let Type::JoinHandle { result } = handle_ty else {
                 return Err(TypeCheckError::TypeMismatch {
                     expected: "JoinHandle".to_string(),
                     got: type_to_string(&handle_ty),
                     span: call_expr.args[0].span(),
                 });
-            }
-            return Ok(Some(Type::Void));
+            };
+            return Ok(Some(*result));
         }
 
         if callee == "Arena::get_ref" {
@@ -802,7 +929,7 @@ impl TypeChecker {
 
     fn check_integer_operand(&mut self, expr: &Expr) -> Result<Type, TypeCheckError> {
         let raw_ty = self.check_expr(expr)?;
-        let ty = Self::comparison_operand_type(&raw_ty);
+        let ty = self.comparison_operand_type(&raw_ty);
         if !self.is_integer_type(&ty) {
             return Err(TypeCheckError::TypeMismatch {
                 expected: "integer type".to_string(),

@@ -20,9 +20,9 @@ promise that every internal helper symbol is stable before 1.0.
 ## `String`
 
 `String` is an owned runtime allocation for well-formed UTF-8 (RFC 3629). Its C
-layout uses a `uint8_t*` data pointer plus length and capacity fields. String
-iteration in the beta subset is byte iteration (`u8`) over a validated buffer,
-not Unicode scalar-value or grapheme iteration.
+layout starts with `ion_alloc_t`, then a `uint8_t*` data pointer plus length and
+capacity. String iteration in the beta subset is byte iteration (`u8`) over a
+validated buffer, not Unicode scalar-value or grapheme iteration.
 
 Stable beta expectations:
 
@@ -40,19 +40,21 @@ Stable beta expectations:
 - `String::push_str` appends string literals or owned `String` values (the
   latter reads `.data`/`.len` from the source heap buffer) after UTF-8
   validation.
-- Dropping a `String` releases its backing allocation once.
+- Dropping a `String` releases its backing allocation once, through the stored allocator.
+- `String::new` uses `heap()`. `String::new_in(alloc)` stores that `Allocator`.
 - `String == String` and `String != String` compare byte contents.
 - Mutating the buffer through `.data` is an FFI contract violation.
 
 ## `Vec<T>`
 
-`Vec<T>` is an owned dynamic array with pointer, length, and capacity. The C
-backend monomorphizes element-specific helpers where needed.
+`Vec<T>` is an owned dynamic array. The runtime header `ion_vec_t` starts with
+`ion_alloc_t`, then pointer, length, capacity, and element size. The C backend
+monomorphizes element-specific helpers where needed.
 
 Stable beta expectations:
 
 - `Vec::new`, `Vec::push`, `Vec::pop`, `Vec::get`, `Vec::get_ref`, `Vec::set`, `Vec::len`, and
-  `Vec::capacity` remain available through the stdlib/builtin surface.
+  `Vec::capacity` remain available through the stdlib/builtin surface. `Vec::new` and `Vec::with_capacity` use `heap()`. `Vec::new_in(alloc)` stores that `Allocator`. Growth calls the stored `resize`.
 - Dropping `Vec<T>` drops owned elements when `T` needs destruction (compiler drop glue over `0..len`, then `ion_vec_free`). The runtime helper does not take a destructor callback.
 - A user `impl Drop` compiles to `void {Type}_Drop_drop({Type} *self)`. Compiler drop glue calls that function once, then drops fields in declaration order. The symbol is part of the generated C for that type. It is not a runtime callback.
 - `Vec::get` of a dropping `T` copies the element into `Option<T>` and hollows the slot. `Vec::set` of a dropping `T` drops the previous element before overwrite. Generated C wraps the runtime status in conventional `SetResult` (`Ok` / `OutOfBounds`).
@@ -92,13 +94,16 @@ Stable beta expectations:
 
 Stable beta expectations:
 
-- `Box::new` allocates and owns a value.
-- `ion_box_alloc` and `ion_box_free` are `static inline` `malloc` and `free` in
-  `runtime/ion_runtime.h`. They are not symbols in `ion_runtime.o`.
+- `Box::new` allocates and owns a value. `Box::new_in(value, alloc)` stores that `Allocator` in the header.
+- `ion_box_alloc` and `ion_box_free` are `static inline` in `runtime/ion_runtime.h`. They are not symbols in `ion_runtime.o`. The allocation is an `ion_alloc_t` header followed by `T`. The returned pointer addresses `T`. `ion_box_free` steps back one header and calls the stored `dealloc`, or `free` when that function pointer is null.
 - `Box::unwrap` consumes the box, copies the payload out by value, and
   `ion_box_free`s the allocation. It does not drop `T`; the caller owns the copy.
 - Dropping a `Box<T>` drops the payload when `T` needs destruction, then
   releases the allocation once.
+
+## `Allocator`
+
+`ion_alloc_t` is a `Copy` value: `alloc`, `resize`, and `dealloc` function pointers plus a `void *` context. `ion_heap()` is malloc, realloc, and free. A null function pointer falls back to malloc, realloc, or free. `Vec`, `Box`, and `String` store a copy. Channels and spawn context allocations stay on malloc. `make_allocator` is only legal in `unsafe` because the context is a raw pointer.
 
 ## Arrays and slices
 
@@ -167,7 +172,8 @@ Stable beta expectations:
 - `ion_channel_clone_sender` copies a sender handle and increments `sender_count`.
 - Generated Ion `send` / `recv` consume those status codes (`SendResult<T>` / `Option<T>`). Statement `send` still drops `Closed(T)`.
 - Channel handles are runtime resources released by `ion_channel_sender_drop` / `ion_channel_receiver_drop`.
-- Statement `spawn { };` uses `ion_spawn` (detach). Expression `let h = spawn { };` uses `ion_spawn_joinable` into `ion_thread_t` (`JoinHandle`). Drop of a live handle calls `ion_thread_detach`. `join` calls `ion_join`.
+- Statement `spawn { };` outside `scope` uses `ion_spawn` (detach). Expression `let h = spawn { };` uses `ion_spawn_joinable` into `ion_thread_t` (`JoinHandle<T>`). A non-void block mallocs a result slot and returns that pointer from the thread entry. `join` on `JoinHandle<void>` calls `ion_join`. `join` on `JoinHandle<T>` calls `ion_join_value`, copies `T` out, and frees the slot. Drop of a live handle calls `ion_thread_detach`. `scope { ... }` joins `JoinHandle` values still owned in that block, in reverse creation order.
+- `endpoint<Name>()` builds two channels of `ion_proto_Name` and crosses them. `ion_endpoint_t` is `{ ion_sender_t tx; ion_receiver_t rx; }`. `ion_proto_Name` is `{ int tag; union { ... } payload; }`. Drop calls `ion_channel_sender_drop` and `ion_channel_receiver_drop`. Channels and the spawn context stay on malloc.
 - Runtime failures such as allocation or thread creation failures call the Ion
   panic path.
 

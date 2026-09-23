@@ -157,6 +157,20 @@ test_box_unwrap_struct_let.ion	cgen			Node* _box	int\* _box
 test_box_unwrap_struct_let.ion	cgen			ion_box_free(_box)	
 test_box_unwrap_same_scope.ion	run	3			
 test_box_unwrap_same_scope.ion	cgen			ion_box_free(_box)	ion_box_free(boxed)
+test_box_unwrap_binop.ion	run	42
+test_box_unwrap_binop_error.ion	error		UseAfterMove
+test_copy_struct.ion	run	3
+test_copy_drop_error.ion	error		UseAfterMove
+test_index_borrow_split.ion	run	0
+test_index_borrow_distinct.ion	run	0
+test_index_borrow_same_error.ion	error		BorrowConflict
+test_index_borrow_var_error.ion	error		BorrowConflict
+test_loop_dead_after_break.ion	run	1
+test_loop_exit_disagree.ion	run	7
+test_loop_exit_disagree_error.ion	error		UseAfterMove
+test_borrow_if_arm.ion	run	3
+test_const_match_cast.ion	run	65
+
 test_vec_new.ion	run	0			
 test_vec_push_pop.ion	run	0
 test_vec_push_pop.ion	cgen			_ion_pop.tag = 0	ion_vec_pop|ion_option_from_raw|memset			
@@ -286,7 +300,9 @@ test_fn_type_basic.ion	run	77
 test_fn_literal_basic.ion	run	12			
 test_fn_literal_callback.ion	run	40			
 test_fn_literal_return.ion	run	6			
-test_fn_literal_capture_error.ion	error		ClosureCapture
+test_fn_literal_capture_error.ion	error		fn(int) -> int
+test_move_closure.ion	run	21
+test_move_closure_consume_error.ion	error		UseAfterMove
 test_fn_literal_ref_capture_error.ion	error		ClosureCapture
 test_tuple_basic.ion	run	81			
 test_match_expr_rvalue.ion	run	91			
@@ -297,8 +313,8 @@ test_move_in_loop.ion	error		UseAfterMove
 test_move_in_loop_for.ion	error		UseAfterMove		
 test_move_in_loop_break_use_error.ion	error		UseAfterMove		
 test_move_in_loop_continue_error.ion	error		UseAfterMove		
-test_move_in_loop_break_disagree.ion	error		UseAfterMove		
-test_move_in_while_break_disagree.ion	error		UseAfterMove		
+test_move_in_loop_break_disagree.ion	run	0
+test_move_in_while_break_disagree.ion	run	0
 test_move_channel_error.ion	error		UseAfterMove		
 test_ref_return_error.ion	error		ReferenceEscape		
 test_ref_return_error2.ion	error		ReferenceEscape\|TypeMismatch		
@@ -441,7 +457,13 @@ test_try_on_int_error.ion	error		owned Option<T> or Result<T, E>
 test_try_in_int_fn_error.ion	error		function returning Result
 test_try_option_in_result_error.ion	error		function returning Option
 test_try_mismatched_e_error.ion	error		function returning Result<_, bool>
-test_try_readresult_error.ion	error		owned Option<T> or Result<T, E>
+test_try_readresult_error.ion	error		function returning ReadResult
+test_try_readresult.ion	run	2
+test_try_parse.ion	run	5
+test_try_math_error.ion	error		owned Option<T> or Result<T, E>
+test_iter_for.ion	run	33
+test_iter_for_error.ion	error		Vec<T>, String, Array<T>, or Iter<T>
+test_map_iter.ion	run	33
 test_try_setresult_error.ion	error		owned Option<T> or Result<T, E>
 test_try_spawn_error.ion	error		cannot be used inside spawn
 test_try_move_error.ion	error		UseAfterMove
@@ -503,3 +525,13 @@ test_stdlib_hash.ion	run	0
 test_stdlib_map.ion	run	170
 test_stdlib_time.ion	run	1
 test_stdlib_env.ion	run	1
+test_join_value.ion	run	7
+test_scope_join.ion	run	7
+test_scope_move_out.ion	run	0
+test_allocator.ion	run	12
+test_allocator_unsafe_error.ion	error		make_allocator must be inside an unsafe block
+test_protocol.ion	run	7
+test_protocol_move_error.ion	error		UseAfterMove
+test_protocol_direction_error.ion	error		expected recv, got send
+test_protocol_copy_error.ion	error		must be Copy and Send
+test_protocol_ended_error.ion	error		has ended

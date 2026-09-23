@@ -1,4 +1,3 @@
-// Two break paths disagree on ownership: error at the loop exit join.
 fn take(b: Box<int>) {
 }
 

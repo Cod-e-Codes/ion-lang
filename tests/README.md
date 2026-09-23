@@ -210,6 +210,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_box_new_struct_let.ion` - unannotated `let b = Box::new(Node { ... })` multi-field unwrap (exit 10)
 - `test_box_unwrap_struct_let.ion` - unannotated `let n = Box::unwrap(boxed)` for `Box<Node>` (exit 10); cgen asserts `Node* _box` not `int* _box`
 - `test_box_unwrap_same_scope.ion` - unwrap then more work in the same function; moved box is not freed again (exit 3)
+- `test_box_unwrap_binop.ion` - `sum + Box::unwrap(extra)` once (exit 42)
+- `test_box_unwrap_binop_error.ion` - second `Box::unwrap` after an unwrap inside `+` (`UseAfterMove`)
 - `test_recursive_struct_box.ion` - linked list via `Option<Box<Node>>` (exit 3)
 - `test_recursive_struct_mutual_box.ion` - mutual recursion through Box (exit 30)
 - `test_recursive_struct_vec.ion` - self-referential `Vec<Forest>` (exit 2)
@@ -432,7 +434,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_try_in_int_fn_error.ion` - `Result?` in `fn -> int` (negative)
 - `test_try_option_in_result_error.ion` - `Option?` in a `Result` function (negative)
 - `test_try_mismatched_e_error.ion` - mismatched `Result` error type (negative)
-- `test_try_readresult_error.ion` - `?` on `ReadResult` (negative)
+- `test_try_readresult_error.ion` - `ReadResult?` in `fn -> int` (negative)
+- `test_try_readresult.ion` - `ReadResult?` in a function that returns `ReadResult` (exit 2)
+- `test_try_parse.ion` - `?` on an enum whose only payload variant is the success case (exit 5)
+- `test_try_math_error.ion` - `?` on a bare error enum (negative)
 - `test_try_setresult_error.ion` - `?` on `SetResult` (negative)
 - `test_try_spawn_error.ion` - `?` inside `spawn` (negative)
 - `test_try_move_error.ion` - use-after-move of a `?` operand (negative)
@@ -447,8 +452,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_fn_literal_basic.ion` - Capture-free fn literal stored in `fn(int) -> int` and called (exit 12)
 - `test_fn_literal_callback.ion` - Pass capture-free fn literal to `fn(int) -> int` parameter (exit 40)
 - `test_fn_literal_return.ion` - Return capture-free fn literal from function (exit 6)
-- `test_fn_literal_capture_error.ion` - Fn literal referencing outer binding (negative, `ClosureCapture`)
+- `test_fn_literal_capture_error.ion` - Owned capture is a closure value, not `fn(int) -> int` (negative)
 - `test_fn_literal_ref_capture_error.ion` - Fn literal referencing outer reference (negative, `ClosureCapture`)
+- `test_move_closure.ion` - Move closure of `Copy` captures, called twice (exit 21)
+- `test_move_closure_consume_error.ion` - Second call after moving a non-`Copy` capture (negative)
 - `test_doc_comments.ion` - Adjacent `//` doc comments attach to AST without affecting compile or runtime (exit 42)
 - `test_tuple_basic.ion` - Tuple literals, `.0`/`.1` access, and destructuring (exit 81)
 - `test_nested_tuple_eq.ion` - nested tuples, `==`/`!=`, struct field tuple, generic `(T, int)` param (exit 0)
@@ -504,8 +511,8 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 - `test_move_in_loop_for.ion` - Same reentry rule for `for` loops (outer binding moved in body)
 - `test_move_in_loop_break_use_error.ion` - Move then break, then use after the loop
 - `test_move_in_loop_continue_error.ion` - Move then continue (reentry)
-- `test_move_in_loop_break_disagree.ion` - Break paths disagree on ownership at loop exit join
-- `test_move_in_while_break_disagree.ion` - while head Valid vs break Moved at loop exit join
+- `test_move_in_loop_break_disagree.ion` - Break paths disagree; the box is dropped on the path that still owns it (exit 0)
+- `test_move_in_while_break_disagree.ion` - `while` head still owns the box and the `break` path moved it (exit 0)
 - `test_move_channel_error.ion` - Use-after-move on channel receivers
 - `test_ref_return_error.ion` - Reference escape errors
 - `test_ref_return_error2.ion` - Additional reference escape errors
@@ -552,6 +559,33 @@ gcc test_slice_bounds_panic.c ../runtime/ion_runtime.c -o test_slice_bounds_pani
 ./test_slice_bounds_panic
 # Expect stderr: Ion panic: Slice index out of bounds
 ```
+
+## Checker precision, iterators, closures, threads, and protocols
+
+- `test_copy_struct.ion` - a struct of integers is `Copy` (exit 3)
+- `test_copy_drop_error.ion` - `impl Drop` keeps the struct move-only (negative)
+- `test_index_borrow_split.ion` - lasting borrow of one literal index (exit 0)
+- `test_index_borrow_distinct.ion` - `&mut a[0]` and `&mut a[1]` together (exit 0)
+- `test_index_borrow_same_error.ion` - the same literal index twice (negative)
+- `test_index_borrow_var_error.ion` - a non-literal index borrows the whole owner (negative)
+- `test_loop_dead_after_break.ion` - a statement after `break` is not reentry (exit 1)
+- `test_loop_exit_disagree.ion` - disagreeing `break` paths move the binding after the loop (exit 7)
+- `test_loop_exit_disagree_error.ion` - use after that loop (negative)
+- `test_borrow_if_arm.ion` - a loan used in one `if` arm does not block the other (exit 3)
+- `test_const_match_cast.ion` - const integer width, `as`, and `match` (exit 65)
+- `test_iter_for.ion` - `for` over `Iter<T>` (exit 33)
+- `test_iter_for_error.ion` - `for` over a type that is not iterable (negative)
+- `test_map_iter.ion` - consuming `HashMap` iterator (exit 33)
+- `test_join_value.ion` - `join` moves `int` out of `JoinHandle<int>` (exit 7)
+- `test_scope_join.ion` - `scope` joins a statement `spawn` (exit 7)
+- `test_scope_move_out.ion` - a handle returned from `scope` is not joined there (exit 0)
+- `test_allocator.ion` - `heap()` is `Copy`; `Vec::new_in` and `Box::new_in` (exit 12)
+- `test_allocator_unsafe_error.ion` - `make_allocator` outside `unsafe` (negative)
+- `test_protocol.ion` - unique endpoint send and recv (exit 7)
+- `test_protocol_move_error.ion` - a second `send` of the same endpoint (negative)
+- `test_protocol_direction_error.ion` - `send` when the step is `recv` (negative)
+- `test_protocol_copy_error.ion` - a non-`Copy` payload (negative)
+- `test_protocol_ended_error.ion` - `send` after `end` (negative)
 
 ## Adding Tests
 

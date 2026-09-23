@@ -1,0 +1,10 @@
+fn main() -> int {
+    let extra: Box<int> = Box::new(1);
+    let mut n: int = 0;
+    while n < 1 {
+        break;
+        let _gone: int = Box::unwrap(extra);
+    }
+    let v: int = Box::unwrap(extra);
+    return v;
+}

@@ -1,8 +1,9 @@
 fn main() -> int {
-    let x = 10;
-    let r = &x;
-    let f: fn() -> int = fn() -> int {
-        return x;
+    let x: int = 10;
+    let r: &int = &x;
+    let f = fn() -> int {
+        let _k: &int = r;
+        return 0;
     };
     return f();
 }

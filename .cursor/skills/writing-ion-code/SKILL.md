@@ -93,9 +93,9 @@ Tuple values: `let t: (int, int) = (1, 2);` then `t.0`, `t.1`, or `let (a, b) = 
 **Control flow**
 
 - `if` / `else if` / `else` conditions must be `bool`.
-- `while`, `loop`, `break`, `continue`, `for x in expr` over `Vec<T>`, `[T; N]`, or `String` (bytes as `u8`)
+- `while`, `loop`, `break`, `continue`, `for x in expr` over `Vec<T>`, `[T; N]`, `String` (bytes as `u8`), or `Iter<T>`
 - `match expr { Pattern => { ... } }` with guards `pattern if cond =>`.
-- postfix `?` on owned `Option<T>` / `Result<T, E>` (same `E`; not `ReadResult` / `SetResult` / `spawn`)
+- postfix `?` on owned `Option<T>` / `Result<T, E>` (same `E`) and on an owned enum with one success variant when the function returns that enum. Not legal on `SetResult` or inside `spawn`.
 - `select { let v = recv(&mut rx) => { ... } default => { ... } }` (or `timeout(ms)` instead of `default`). Without `default`/`timeout`, `select` waits until a recv arm is ready (`test_select_blocking_send.ion`).
 
 **Methods**
@@ -145,16 +145,18 @@ match recv(&mut rx_back_mut) {
 }
 ```
 
-`spawn` captures owned values by move. `T` in `channel<T>()` must be `Send`. `clone_sender(&tx)` shares one channel across producers. `try_send` / `try_recv` are nonblocking (`TrySendResult` / `TryRecvResult`). `let h: JoinHandle = spawn { }; join(h);` waits; unused handle drop detaches. Statement `spawn { };` stays fire-and-forget.
+`spawn` captures owned values by move. `T` in `channel<T>()` must be `Send`. `clone_sender(&tx)` shares one channel across producers. `try_send` / `try_recv` are nonblocking (`TrySendResult` / `TryRecvResult`). `let h: JoinHandle<int> = spawn { return 7; }; let n = join(h);` moves the result out. A void handle's `join` waits. Unused handle drop detaches. Statement `spawn { };` outside `scope` stays fire-and-forget. `scope { ... }` joins handles still owned in that block.
 
-**Fn literals (capture-free)**
+**Fn literals**
+
+A capture-free literal is a function pointer:
 
 ```ion
 let f: fn(int) -> int = fn(x: int) -> int { return x + 5; };
 return f(7);
 ```
 
-Fn literals lower to static C functions and must not reference outer bindings (owned or by reference). Use named functions with extra parameters for customized behavior. See [tests/test_fn_literal_basic.ion](../../../tests/test_fn_literal_basic.ion) and [tests/test_fn_literal_callback.ion](../../../tests/test_fn_literal_callback.ion).
+A literal that names an outer owned binding moves that binding into a closure value. The value is not a `fn(...) -> R`. A call that moves a non-`Copy` capture consumes the closure. A reference capture is `ClosureCapture`. See [tests/test_fn_literal_basic.ion](../../../tests/test_fn_literal_basic.ion), [tests/test_move_closure.ion](../../../tests/test_move_closure.ion), and [tests/test_fn_literal_ref_capture_error.ion](../../../tests/test_fn_literal_ref_capture_error.ion).
 
 ## Documentation comments
 

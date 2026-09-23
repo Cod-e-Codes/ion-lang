@@ -1,9 +1,9 @@
 import "stdlib/result.ion" as result;
 
-fn wrap(r: Result<int, int>) -> Result<int, int> {
+fn wrap(r: Result<String, int>) -> Result<String, int> {
     let x = r?;
     let y = r;
-    return Result::Ok(x + y);
+    return y;
 }
 
 fn main() -> int {

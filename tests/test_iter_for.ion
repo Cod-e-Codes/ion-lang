@@ -1,0 +1,28 @@
+import "stdlib/iter.ion" as iter;
+import "stdlib/option.ion" as option;
+
+struct Counter {
+    n: int;
+    left: int;
+}
+
+impl Iter<int> for Counter {
+    fn next(self: &mut Counter) -> Option<int> {
+        if self.left == 0 {
+            return Option::None;
+        }
+        let v: int = self.n;
+        self.n = v + 1;
+        self.left = self.left - 1;
+        return Option::Some(v);
+    }
+}
+
+fn main() -> int {
+    let c: Counter = Counter { n: 10, left: 3 };
+    let mut sum: int = 0;
+    for x in c {
+        sum = sum + x;
+    }
+    return sum;
+}

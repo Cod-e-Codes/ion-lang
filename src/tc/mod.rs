@@ -1,5 +1,6 @@
 mod builtins;
 mod ownership;
+pub(crate) use ownership::type_is_copy;
 mod trait_bounds;
 mod types;
 
@@ -228,6 +229,25 @@ pub fn format_type_errors(errors: &[TypeCheckError]) -> String {
     message
 }
 
+/// `impl Iter<T> for Name`. `element` may mention `generics`.
+#[derive(Debug, Clone)]
+pub struct IterImplInfo {
+    pub symbol: String,
+    pub generics: Vec<String>,
+    pub element: Type,
+}
+
+/// Call shape of a move closure. The value is the capture struct, not a function pointer.
+#[derive(Debug, Clone)]
+pub struct ClosureSig {
+    pub symbol: String,
+    pub params: Vec<Type>,
+    pub ret: Type,
+    /// A call moves the closure when the body moves a non-`Copy` capture.
+    pub consumes: bool,
+    pub captures: Vec<(String, Type)>,
+}
+
 /// Method call resolved by the type checker. IR copies this. It does not reclassify the receiver.
 #[derive(Debug, Clone)]
 pub struct ResolvedMethod {
@@ -246,6 +266,13 @@ pub struct TypeInfo {
     pub resolved_methods: HashMap<ExprId, ResolvedMethod>,
     /// Qualified capability calls (`Show::show`) lowered to the impl function.
     pub call_callees: HashMap<ExprId, String>,
+    /// `impl Drop` type names. Those aggregates are not `Copy`.
+    pub drop_impls: HashMap<String, String>,
+    /// Consuming `for` over `impl Iter<T>`. Key is the iterator type name.
+    pub iter_impls: HashMap<String, IterImplInfo>,
+    /// Move-closure created from a capturing `fn` literal. Keyed by its struct name.
+    pub closures: HashMap<String, ClosureSig>,
+    pub protocols: HashMap<String, ProtocolDecl>,
 }
 
 impl TypeInfo {
@@ -334,6 +361,8 @@ pub struct TypeChecker {
     impls: Vec<ImplDecl>,
     /// Type name to compiler-called `Type_Drop_drop` symbol.
     drop_impls: HashMap<String, String>,
+    iter_impls: HashMap<String, IterImplInfo>,
+    protocols: HashMap<String, ProtocolDecl>,
     extern_functions: HashMap<String, ExternFnDecl>,
     // Module imports: maps import alias to module exports
     module_imports: HashMap<String, ModuleExports>,
@@ -374,6 +403,12 @@ pub struct TypeChecker {
     /// A later arm does not run together with those arms, so it may borrow the
     /// same place. The frame is popped when the match check ends.
     match_sibling_loans: Vec<Vec<usize>>,
+    /// Loans unused in the `if` arm currently being checked. The other arm's
+    /// carriers are not live here.
+    branch_ignored_loans: Vec<Vec<usize>>,
+    /// Last statement index of each carrier in the statement sequence being checked.
+    borrow_last_use: HashMap<String, usize>,
+    current_stmt_index: Option<usize>,
     // When false, skip recording expression-level LSP data (avoids span collisions from merged imports).
     lsp_recording: bool,
 }
@@ -395,6 +430,7 @@ impl Default for TypeChecker {
 
 pub(crate) const BUILTIN_SIGNATURES: &[(&str, &str)] = &[
     ("Vec::new", "fn Vec::new() -> Vec<T>"),
+    ("Vec::new_in", "fn Vec::new_in(alloc: Allocator) -> Vec<T>"),
     (
         "Vec::with_capacity",
         "fn Vec::with_capacity(cap: int) -> Vec<T>",
@@ -439,6 +475,10 @@ pub(crate) const BUILTIN_SIGNATURES: &[(&str, &str)] = &[
     ),
     ("File::close", "fn File::close(file: &mut File)"),
     ("String::new", "fn String::new() -> String"),
+    (
+        "String::new_in",
+        "fn String::new_in(alloc: Allocator) -> String",
+    ),
     ("String::from", "fn String::from(s: &str) -> String"),
     (
         "String::from_utf8",
@@ -458,6 +498,10 @@ pub(crate) const BUILTIN_SIGNATURES: &[(&str, &str)] = &[
         "fn String::push_byte(s: &mut String, b: u8)",
     ),
     ("Box::new", "fn Box::new<T>(value: T) -> Box<T>"),
+    (
+        "Box::new_in",
+        "fn Box::new_in<T>(value: T, alloc: Allocator) -> Box<T>",
+    ),
     ("Box::unwrap", "fn Box::unwrap<T>(box: Box<T>) -> T"),
     (
         "channel",
@@ -480,7 +524,12 @@ pub(crate) const BUILTIN_SIGNATURES: &[(&str, &str)] = &[
         "try_recv",
         "fn try_recv(receiver: &mut Receiver<T>) -> TryRecvResult<T>",
     ),
-    ("join", "fn join(handle: JoinHandle)"),
+    ("join", "fn join<T>(handle: JoinHandle<T>) -> T"),
+    ("heap", "fn heap() -> Allocator"),
+    (
+        "make_allocator",
+        "fn make_allocator(alloc: *u8, resize: *u8, dealloc: *u8, ctx: *u8) -> Allocator",
+    ),
 ];
 
 pub(crate) fn is_option_producing_builtin(callee: &str) -> bool {
@@ -551,6 +600,8 @@ impl TypeChecker {
             unique_methods: HashMap::new(),
             impls: Vec::new(),
             drop_impls: HashMap::new(),
+            iter_impls: HashMap::new(),
+            protocols: HashMap::new(),
             extern_functions: HashMap::new(),
             module_imports: HashMap::new(),
             module_paths: HashMap::new(),
@@ -571,6 +622,9 @@ impl TypeChecker {
             match_result_loans: HashMap::new(),
             stored_ref_loans: HashMap::new(),
             match_sibling_loans: Vec::new(),
+            branch_ignored_loans: Vec::new(),
+            borrow_last_use: HashMap::new(),
+            current_stmt_index: None,
             lsp_recording: true,
         }
     }
@@ -1096,7 +1150,9 @@ impl TypeChecker {
         if crate::integer_limits::is_builtin_hash_callee(callee) {
             return Some(vec![1]);
         }
-        let name = if callee.starts_with("Box::new") {
+        let name = if callee == "Box::new_in" {
+            "Box::new_in"
+        } else if callee.starts_with("Box::new") {
             "Box::new"
         } else {
             callee
@@ -1201,6 +1257,8 @@ impl TypeChecker {
         self.unique_methods.clear();
         self.impls.clear();
         self.drop_impls.clear();
+        self.iter_impls.clear();
+        self.protocols.clear();
         for cap in &program.capabilities {
             if self.capabilities.contains_key(&cap.name) {
                 errors.push(TypeCheckError::Message(format!(
@@ -1209,6 +1267,15 @@ impl TypeChecker {
                 )));
             }
             self.capabilities.insert(cap.name.clone(), cap.clone());
+        }
+        for proto in &program.protocols {
+            if self.protocols.contains_key(&proto.name) {
+                errors.push(TypeCheckError::Message(format!(
+                    "protocol '{}' is declared more than once",
+                    proto.name
+                )));
+            }
+            self.protocols.insert(proto.name.clone(), proto.clone());
         }
         for imp in &program.impls {
             if imp.capability == "Drop" {
@@ -1229,6 +1296,14 @@ impl TypeChecker {
                 )));
                 continue;
             };
+            if cap.generics.len() != imp.cap_args.len() {
+                errors.push(TypeCheckError::Message(format!(
+                    "capability '{}' takes {} type argument(s)",
+                    imp.capability,
+                    cap.generics.len()
+                )));
+                continue;
+            }
             let prefix = format!("{}_{}_", imp.type_name, imp.capability);
             for method in &imp.methods {
                 let Some(short) = method.name.strip_prefix(&prefix) else {
@@ -1256,7 +1331,9 @@ impl TypeChecker {
                     )));
                     continue;
                 };
-                if let Err(e) = self.impl_method_matches(method, sig, &imp.target) {
+                if let Err(e) =
+                    self.impl_method_matches(method, sig, &imp.target, &cap, &imp.cap_args)
+                {
                     errors.push(e);
                     continue;
                 }
@@ -1276,6 +1353,27 @@ impl TypeChecker {
                 }
             }
             self.impls.push(imp.clone());
+            if imp.capability == "Iter"
+                && let Some(symbol) = self.impl_methods.get(&(
+                    imp.type_name.clone(),
+                    "Iter".to_string(),
+                    "next".to_string(),
+                ))
+                && let Some(element) = imp.cap_args.first()
+            {
+                self.iter_impls.insert(
+                    imp.type_name.clone(),
+                    IterImplInfo {
+                        symbol: symbol.clone(),
+                        generics: imp
+                            .generics
+                            .iter()
+                            .map(|param| param.name.clone())
+                            .collect(),
+                        element: element.clone(),
+                    },
+                );
+            }
         }
         let mut method_caps: HashMap<(String, String), Vec<String>> = HashMap::new();
         for ((ty, cap, method), symbol) in &self.impl_methods {
@@ -1408,6 +1506,9 @@ impl TypeChecker {
         self.lsp_recording = true;
 
         self.seed_type_info_functions(program);
+        self.type_info.drop_impls = self.drop_impls.clone();
+        self.type_info.iter_impls = self.iter_impls.clone();
+        self.type_info.protocols = self.protocols.clone();
 
         (
             TypeCheckResult {
@@ -1671,12 +1772,12 @@ impl TypeChecker {
             | Pattern::Lit { .. }
             | Pattern::Range { .. }
             | Pattern::Rest { .. } => false,
-            Pattern::Binding { .. } => !Self::is_copy_type(ty),
+            Pattern::Binding { .. } => !self.is_copy_type(ty),
             Pattern::At { pattern, .. } => {
-                !Self::is_copy_type(ty) || self.pattern_moves_owned(pattern, ty)
+                !self.is_copy_type(ty) || self.pattern_moves_owned(pattern, ty)
             }
             Pattern::Or { alts, .. } => alts.iter().any(|alt| self.pattern_moves_owned(alt, ty)),
-            Pattern::Struct { .. } | Pattern::Variant { .. } => !Self::is_copy_type(ty),
+            Pattern::Struct { .. } | Pattern::Variant { .. } => !self.is_copy_type(ty),
         }
     }
 
@@ -1736,6 +1837,8 @@ impl TypeChecker {
         method: &FnDecl,
         sig: &CapabilityMethod,
         target: &Type,
+        cap: &CapabilityDecl,
+        cap_args: &[Type],
     ) -> Result<(), TypeCheckError> {
         if method.params.len() != sig.params.len() {
             return Err(TypeCheckError::Message(format!(
@@ -1746,7 +1849,7 @@ impl TypeChecker {
             )));
         }
         for (got, expected) in method.params.iter().zip(sig.params.iter()) {
-            let expected_ty = substitute_self_type(&expected.ty, target);
+            let expected_ty = self.capability_method_type(&expected.ty, target, cap, cap_args);
             if !types_equal(&got.ty, &expected_ty) {
                 return Err(TypeCheckError::Message(format!(
                     "method '{}' parameter '{}' has type {}, capability requires {}",
@@ -1760,7 +1863,7 @@ impl TypeChecker {
         let expected_ret = sig
             .return_type
             .as_ref()
-            .map(|ty| substitute_self_type(ty, target));
+            .map(|ty| self.capability_method_type(ty, target, cap, cap_args));
         match (&method.return_type, &expected_ret) {
             (None, None) => Ok(()),
             (Some(got), Some(expected)) if types_equal(got, expected) => Ok(()),
@@ -1769,6 +1872,23 @@ impl TypeChecker {
                 sig.name
             ))),
         }
+    }
+
+    fn capability_method_type(
+        &self,
+        ty: &Type,
+        target: &Type,
+        cap: &CapabilityDecl,
+        cap_args: &[Type],
+    ) -> Type {
+        let substitutions = cap
+            .generics
+            .iter()
+            .zip(cap_args.iter())
+            .map(|(param, arg)| (param.name.clone(), arg.clone()))
+            .collect();
+        let substituted = crate::types_util::substitute_type(ty, &substitutions);
+        substitute_self_type(&substituted, target)
     }
 
     fn resolve_method_callee(&self, base: &str, method: &str) -> Result<String, TypeCheckError> {
@@ -2120,11 +2240,16 @@ impl TypeChecker {
 
     fn check_stmt_seq(&mut self, stmts: &[Stmt]) -> Result<(), TypeCheckError> {
         let last = ownership::lasting_borrow_uses(stmts);
+        let saved_last = std::mem::replace(&mut self.borrow_last_use, last);
+        let saved_index = self.current_stmt_index;
         let depth = self.borrow_scopes.len();
         for (index, stmt) in stmts.iter().enumerate() {
+            self.current_stmt_index = Some(index);
             self.check_stmt(stmt)?;
-            self.release_borrows_ending_at(index, &last, depth);
+            self.release_borrows_ending_at(index, &self.borrow_last_use.clone(), depth);
         }
+        self.borrow_last_use = saved_last;
+        self.current_stmt_index = saved_index;
         Ok(())
     }
 
@@ -2369,6 +2494,7 @@ impl TypeChecker {
                         .iter()
                         .position(|p| matches!(p, Pattern::Rest { .. }));
                     let tail = rest_at.map(|i| patterns.len() - i - 1).unwrap_or(0);
+                    self.check_expr_for_moves(init)?;
                     for (i, pattern) in patterns.iter().enumerate() {
                         if matches!(pattern, Pattern::Rest { .. }) {
                             continue;
@@ -2399,7 +2525,6 @@ impl TypeChecker {
                             }
                         }
                     }
-                    self.check_expr_for_moves(init)?;
                     return Ok(());
                 }
 
@@ -2676,7 +2801,11 @@ impl TypeChecker {
                 // Then-branch: type-check with its own copy of the environment
                 self.variables = before.clone();
                 self.push_borrow_scope();
-                self.check_stmt_seq(&if_stmt.then_block.statements)?;
+                let then_ignore = self.loans_unused_in_branch(&if_stmt.then_block);
+                self.branch_ignored_loans.push(then_ignore);
+                let then_result = self.check_stmt_seq(&if_stmt.then_block.statements);
+                self.branch_ignored_loans.pop();
+                then_result?;
                 self.pop_borrow_scope();
                 let then_env = self.variables.clone();
 
@@ -2684,7 +2813,11 @@ impl TypeChecker {
                 let else_env = if let Some(ref else_blk) = if_stmt.else_block {
                     self.variables = before.clone();
                     self.push_borrow_scope();
-                    self.check_stmt_seq(&else_blk.statements)?;
+                    let else_ignore = self.loans_unused_in_branch(else_blk);
+                    self.branch_ignored_loans.push(else_ignore);
+                    let else_result = self.check_stmt_seq(&else_blk.statements);
+                    self.branch_ignored_loans.pop();
+                    else_result?;
                     self.pop_borrow_scope();
                     self.variables.clone()
                 } else {
@@ -2733,7 +2866,7 @@ impl TypeChecker {
                 self.variables = merged;
             }
             Stmt::Spawn(spawn_stmt) => {
-                self.check_spawn_block(&spawn_stmt.body, spawn_stmt.span)?;
+                let _ = self.check_spawn_block(&spawn_stmt.body, spawn_stmt.span)?;
             }
             Stmt::Select(select_stmt) => {
                 self.check_select_stmt(select_stmt)?;
@@ -2813,8 +2946,11 @@ impl TypeChecker {
                     Type::String => Type::U8,
                     Type::Array { ref inner, .. } => (**inner).clone(),
                     other => {
+                        if let Some(elem) = self.iter_element_type(&other) {
+                            return self.check_iter_for(for_stmt, &other, elem);
+                        }
                         return Err(TypeCheckError::TypeMismatch {
-                            expected: "Vec<T>, String, or Array<T>".to_string(),
+                            expected: "Vec<T>, String, Array<T>, or Iter<T>".to_string(),
                             got: type_to_string(&other),
                             span: for_stmt.iterable.span(),
                         });
@@ -3090,6 +3226,13 @@ impl TypeChecker {
                 // Exit unsafe context
                 self.unsafe_context_depth -= 1;
             }
+            Stmt::Scope(scope_stmt) => {
+                self.push_borrow_scope();
+                for inner in &scope_stmt.body.statements {
+                    self.check_stmt(inner)?;
+                }
+                self.pop_borrow_scope();
+            }
         }
         Ok(())
     }
@@ -3356,7 +3499,112 @@ impl TypeChecker {
         Ok(Type::Struct(struct_name))
     }
 
-    fn check_spawn_block(&mut self, body: &Block, span: Span) -> Result<(), TypeCheckError> {
+    fn check_endpoint_send(
+        &mut self,
+        send_expr: &crate::ast::SendExpr,
+        protocol: &str,
+        step: usize,
+        dual: bool,
+    ) -> Result<Type, TypeCheckError> {
+        let (payload, next) = self.endpoint_send_step(protocol, step, dual, send_expr.span)?;
+        let value_type = self.check_expr_with_expected(&send_expr.value, &payload)?;
+        if !types_equal(&value_type, &payload) {
+            return Err(TypeCheckError::TypeMismatch {
+                expected: type_to_string(&payload),
+                got: type_to_string(&value_type),
+                span: send_expr.value.span(),
+            });
+        }
+        Ok(next)
+    }
+
+    fn check_endpoint_recv(
+        &mut self,
+        recv_expr: &crate::ast::RecvExpr,
+        protocol: &str,
+        step: usize,
+        dual: bool,
+    ) -> Result<Type, TypeCheckError> {
+        let (payload, next) = self.endpoint_recv_step(protocol, step, dual, recv_expr.span)?;
+        Ok(Type::Tuple {
+            elements: vec![payload, next],
+        })
+    }
+
+    fn endpoint_send_step(
+        &self,
+        protocol: &str,
+        step: usize,
+        dual: bool,
+        span: Span,
+    ) -> Result<(Type, Type), TypeCheckError> {
+        let (payload, is_send) = self.endpoint_action(protocol, step, dual, span)?;
+        if !is_send {
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "recv".to_string(),
+                got: "send".to_string(),
+                span,
+            });
+        }
+        Ok((
+            payload,
+            Type::Endpoint {
+                protocol: protocol.to_string(),
+                step: step + 1,
+                dual,
+            },
+        ))
+    }
+
+    fn endpoint_recv_step(
+        &self,
+        protocol: &str,
+        step: usize,
+        dual: bool,
+        span: Span,
+    ) -> Result<(Type, Type), TypeCheckError> {
+        let (payload, is_send) = self.endpoint_action(protocol, step, dual, span)?;
+        if is_send {
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "send".to_string(),
+                got: "recv".to_string(),
+                span,
+            });
+        }
+        Ok((
+            payload,
+            Type::Endpoint {
+                protocol: protocol.to_string(),
+                step: step + 1,
+                dual,
+            },
+        ))
+    }
+
+    fn endpoint_action(
+        &self,
+        protocol: &str,
+        step: usize,
+        dual: bool,
+        _span: Span,
+    ) -> Result<(Type, bool), TypeCheckError> {
+        let proto = self
+            .protocols
+            .get(protocol)
+            .ok_or_else(|| TypeCheckError::Message(format!("unknown protocol '{protocol}'")))?;
+        let Some(action) = proto.steps.get(step) else {
+            return Err(TypeCheckError::Message(format!(
+                "protocol '{protocol}' has ended"
+            )));
+        };
+        let (payload, send) = match action {
+            ProtocolStep::Send(ty) => (ty.clone(), true),
+            ProtocolStep::Recv(ty) => (ty.clone(), false),
+        };
+        Ok((payload, if dual { !send } else { send }))
+    }
+
+    fn check_spawn_block(&mut self, body: &Block, span: Span) -> Result<Type, TypeCheckError> {
         let captured_names = collect_captured_vars(body);
         let mut captured_infos = Vec::new();
         for name in captured_names {
@@ -3406,7 +3654,16 @@ impl TypeChecker {
         self.pop_borrow_scope();
         self.variables = parent_vars;
         self.in_spawn = prev_spawn;
-        body_result
+        body_result?;
+        let result = block_return_type(&self.type_info, body).unwrap_or(Type::Void);
+        if !matches!(result, Type::Void) && !self.is_send(&result) {
+            return Err(TypeCheckError::TypeMismatch {
+                expected: "Send spawn result".to_string(),
+                got: type_to_string(&result),
+                span,
+            });
+        }
+        Ok(result)
     }
 
     fn check_select_stmt(&mut self, select_stmt: &SelectStmt) -> Result<(), TypeCheckError> {
@@ -3836,7 +4093,7 @@ impl TypeChecker {
                         {
                             self.record_reference(acc.field_span, target);
                         }
-                        if Self::is_copy_type(&field_ty) {
+                        if self.is_copy_type(&field_ty) {
                             Ok(field_ty)
                         } else {
                             Ok(Type::Ref {
@@ -3859,13 +4116,13 @@ impl TypeChecker {
                 match bin_op_expr.op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => self
                         .check_arithmetic_op(
-                            &Self::comparison_operand_type(&left_type),
-                            &Self::comparison_operand_type(&right_type),
+                            &self.comparison_operand_type(&left_type),
+                            &self.comparison_operand_type(&right_type),
                             &bin_op_expr.span,
                         ),
                     BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
-                        let left_cmp = Self::comparison_operand_type(&left_type);
-                        let right_cmp = Self::comparison_operand_type(&right_type);
+                        let left_cmp = self.comparison_operand_type(&left_type);
+                        let right_cmp = self.comparison_operand_type(&right_type);
                         if self.is_numeric_type(&left_cmp) && self.is_numeric_type(&right_cmp) {
                             Ok(Type::Bool)
                         } else {
@@ -3881,8 +4138,8 @@ impl TypeChecker {
                         }
                     }
                     BinOp::Eq | BinOp::Ne => {
-                        let left_cmp = Self::comparison_operand_type(&left_type);
-                        let right_cmp = Self::comparison_operand_type(&right_type);
+                        let left_cmp = self.comparison_operand_type(&left_type);
+                        let right_cmp = self.comparison_operand_type(&right_type);
                         if (self.is_numeric_type(&left_cmp) && self.is_numeric_type(&right_cmp))
                             || (types_equal(&left_cmp, &right_cmp) && self.is_eq_type(&left_cmp))
                         {
@@ -3985,9 +4242,18 @@ impl TypeChecker {
                 }
             }
             Expr::Send(send_expr) => {
+                let channel_ty = self.check_expr(&send_expr.channel)?;
+                if let Type::Endpoint {
+                    protocol,
+                    step,
+                    dual,
+                } = channel_ty
+                {
+                    return self.check_endpoint_send(send_expr, &protocol, step, dual);
+                }
                 // send(sender, value): sender must be &Sender<T>, value must have type T,
                 // and T must be Send. Returns SendResult<T>.
-                let sender_ref_type = self.check_expr(&send_expr.channel)?;
+                let sender_ref_type = channel_ty;
                 let (elem_type, span) = match sender_ref_type {
                     Type::Ref { inner, .. } => match *inner {
                         Type::Sender { ref elem_type } => ((**elem_type).clone(), send_expr.span),
@@ -4041,8 +4307,17 @@ impl TypeChecker {
                 })
             }
             Expr::Recv(recv_expr) => {
+                let channel_ty = self.check_expr(&recv_expr.channel)?;
+                if let Type::Endpoint {
+                    protocol,
+                    step,
+                    dual,
+                } = channel_ty
+                {
+                    return self.check_endpoint_recv(recv_expr, &protocol, step, dual);
+                }
                 // recv(receiver): receiver must be &mut Receiver<T>, expression type is Option<T>.
-                let receiver_mut_ref_type = self.check_expr(&recv_expr.channel)?;
+                let receiver_mut_ref_type = channel_ty;
                 match receiver_mut_ref_type {
                     Type::Ref {
                         inner,
@@ -4073,8 +4348,10 @@ impl TypeChecker {
                 }
             }
             Expr::Spawn(spawn_expr) => {
-                self.check_spawn_block(&spawn_expr.body, spawn_expr.span)?;
-                Ok(Type::JoinHandle)
+                let result = self.check_spawn_block(&spawn_expr.body, spawn_expr.span)?;
+                Ok(Type::JoinHandle {
+                    result: Box::new(result),
+                })
             }
             Expr::EnumLit(enum_lit) => {
                 if self.capabilities.contains_key(&enum_lit.enum_name) {
@@ -4859,6 +5136,35 @@ impl TypeChecker {
                             }
                             return Ok(*return_type);
                         }
+                        Type::Struct(name) if self.type_info.closures.contains_key(&name) => {
+                            let sig = self.type_info.closures.get(&name).unwrap().clone();
+                            if call_expr.args.len() != sig.params.len() {
+                                return Err(TypeCheckError::TypeMismatch {
+                                    expected: format!("{} arguments", sig.params.len()),
+                                    got: format!("{} arguments", call_expr.args.len()),
+                                    span: call_expr.span,
+                                });
+                            }
+                            for (arg_expr, param_ty) in call_expr.args.iter().zip(sig.params.iter())
+                            {
+                                let resolved_param_ty = self.resolve_type_name(param_ty)?;
+                                let arg_ty =
+                                    self.check_expr_with_expected(arg_expr, &resolved_param_ty)?;
+                                let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
+                                let numeric_coerced =
+                                    Self::can_coerce_numeric(&resolved_arg_ty, &resolved_param_ty);
+                                if !numeric_coerced
+                                    && !types_equal(&resolved_arg_ty, &resolved_param_ty)
+                                {
+                                    return Err(TypeCheckError::TypeMismatch {
+                                        expected: type_to_string(&resolved_param_ty),
+                                        got: type_to_string(&resolved_arg_ty),
+                                        span: arg_expr.span(),
+                                    });
+                                }
+                            }
+                            return Ok(sig.ret);
+                        }
                         _ => {
                             return Err(TypeCheckError::TypeMismatch {
                                 expected: "function type".to_string(),
@@ -4942,93 +5248,18 @@ impl TypeChecker {
                 // Check if this is an extern function call
                 let is_extern = self.extern_functions.contains_key(&call_expr.callee);
 
-                // Check argument types and mark as moved
-                for (arg_expr, param) in call_expr.args.iter().zip(func_decl_params.iter()) {
-                    let resolved_param_ty = substitute_generic_types_impl(
-                        &self.resolve_type_name(&param.ty)?,
-                        &generic_substitutions,
-                    );
-                    let arg_ty = self.check_expr_with_expected(arg_expr, &resolved_param_ty)?;
-                    let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
-
-                    // Special case: allow string literals to be passed as *u8 for extern functions
-                    // This enables calling C functions like printf with string literals
-                    // In C, string literals are char* (which is *u8 in Ion)
-                    let types_match = if is_extern
-                        && matches!(arg_expr, Expr::StringLit(_))
-                        && matches!(resolved_param_ty, Type::RawPtr { ref inner } if matches!(**inner, Type::U8))
-                    {
-                        // Allow String literal to be passed as *u8 (char* in C) for extern functions
-                        true
-                    } else if is_extern
-                        && matches!(
-                            resolved_param_ty,
-                            Type::RawPtr { ref inner } if matches!(**inner, Type::U8)
-                        )
-                        && matches!(
-                            resolved_arg_ty,
-                            Type::Ref { ref inner, .. } if matches!(**inner, Type::U8)
-                        )
-                    {
-                        // Allow &u8 (e.g. &buf[0]) for *u8 FFI parameters
-                        true
-                    } else {
-                        // Check for array-to-slice coercion: &[T; N] can be coerced to &[]T
-                        let coerced = if let Type::Ref {
-                            inner: arg_inner,
-                            mutable: arg_mut,
-                        } = &resolved_arg_ty
-                        {
-                            if let Type::Ref {
-                                inner: param_inner,
-                                mutable: param_mut,
-                            } = &resolved_param_ty
-                            {
-                                if matches!(**arg_inner, Type::Array { .. })
-                                    && matches!(**param_inner, Type::Slice { .. })
-                                {
-                                    if let Type::Array {
-                                        inner: ref arg_elem,
-                                        ..
-                                    } = **arg_inner
-                                    {
-                                        if let Type::Slice {
-                                            inner: ref param_elem,
-                                        } = **param_inner
-                                        {
-                                            arg_mut == param_mut
-                                                && types_equal(arg_elem, param_elem)
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-
-                        if coerced {
-                            true
-                        } else {
-                            Self::arg_types_compatible(&resolved_arg_ty, &resolved_param_ty)
-                        }
-                    };
-
-                    if !types_match {
-                        return Err(TypeCheckError::TypeMismatch {
-                            expected: type_to_string(&resolved_param_ty),
-                            got: type_to_string(&resolved_arg_ty),
-                            span: arg_expr.span(),
-                        });
-                    }
-                }
+                // Check argument types and mark as moved.
+                // Reference arguments stay live together so two `&mut` of the
+                // same place conflict, including `a[0]` and `a[0]`.
+                self.push_borrow_scope();
+                let arg_check = self.check_call_arg_types(
+                    call_expr,
+                    &func_decl_params,
+                    &generic_substitutions,
+                    is_extern,
+                );
+                self.pop_borrow_scope();
+                arg_check?;
 
                 // Check if this is an extern function call - require unsafe context
                 if is_extern && !self.is_in_unsafe_context() {
@@ -5593,9 +5824,22 @@ impl TypeChecker {
                     exclude.insert(param.name.clone());
                 }
                 let captures = collect_captured_vars_excluding(&lit.body, &exclude);
-                if !captures.is_empty() {
+                let mut owned_captures: Vec<(String, Type)> = Vec::new();
+                let mut rejected: Vec<String> = Vec::new();
+                for name in &captures {
+                    let Some(info) = self.variables.get(name) else {
+                        continue;
+                    };
+                    let cap_ty = info.ty.clone();
+                    if matches!(cap_ty, Type::Ref { .. }) || block_borrows_name(&lit.body, name) {
+                        rejected.push(name.clone());
+                    } else {
+                        owned_captures.push((name.clone(), cap_ty));
+                    }
+                }
+                if !rejected.is_empty() {
                     return Err(TypeCheckError::ClosureCapture {
-                        names: captures,
+                        names: rejected,
                         span: lit.span,
                     });
                 }
@@ -5635,6 +5879,12 @@ impl TypeChecker {
                         Self::new_variable_info(param_ty.clone(), lit.span),
                     );
                 }
+                for (name, cap_ty) in &owned_captures {
+                    self.variables.insert(
+                        name.clone(),
+                        Self::new_variable_info(cap_ty.clone(), lit.span),
+                    );
+                }
 
                 self.push_borrow_scope();
                 for stmt in &lit.body.statements {
@@ -5646,12 +5896,52 @@ impl TypeChecker {
                 self.current_return_type = prev_return;
                 self.in_spawn = prev_spawn;
 
-                let fn_ty = Type::Fn {
-                    params: resolved_params,
-                    return_type: Box::new(resolved_return),
-                };
-                self.record_expr_type(lit.span, &fn_ty);
-                Ok(fn_ty)
+                if owned_captures.is_empty() {
+                    let fn_ty = Type::Fn {
+                        params: resolved_params,
+                        return_type: Box::new(resolved_return),
+                    };
+                    self.record_expr_type(lit.span, &fn_ty);
+                    return Ok(fn_ty);
+                }
+
+                let consumes = owned_captures.iter().any(|(name, cap_ty)| {
+                    !self.is_copy_type(cap_ty) && block_moves_name(&lit.body, name)
+                });
+                let struct_name = format!("ion_closure_{}", lit.id.0);
+                let symbol = format!("ion_closure_fn_{}", lit.id.0);
+                self.structs.insert(
+                    struct_name.clone(),
+                    StructDecl {
+                        doc: None,
+                        pub_: false,
+                        name: struct_name.clone(),
+                        generics: Vec::new(),
+                        fields: owned_captures
+                            .iter()
+                            .map(|(name, ty)| StructField {
+                                doc: None,
+                                name: name.clone(),
+                                ty: ty.clone(),
+                                span: lit.span,
+                            })
+                            .collect(),
+                        span: lit.span,
+                    },
+                );
+                self.type_info.closures.insert(
+                    struct_name.clone(),
+                    ClosureSig {
+                        symbol,
+                        params: resolved_params,
+                        ret: resolved_return.clone(),
+                        consumes,
+                        captures: owned_captures,
+                    },
+                );
+                let closure_ty = Type::Struct(struct_name);
+                self.record_expr_type(lit.span, &closure_ty);
+                Ok(closure_ty)
             }
         }
     }
@@ -5765,8 +6055,8 @@ impl TypeChecker {
         Ok(match_value_type.unwrap_or(Type::Void))
     }
 
-    fn ref_pattern_ty(ty: &Type, through_ref: bool, mutable: bool) -> Type {
-        if through_ref && !Self::is_copy_type(ty) {
+    fn ref_pattern_ty(&self, ty: &Type, through_ref: bool, mutable: bool) -> Type {
+        if through_ref && !self.is_copy_type(ty) {
             Type::Ref {
                 inner: Box::new(ty.clone()),
                 mutable,
@@ -5787,14 +6077,14 @@ impl TypeChecker {
         match pattern {
             Pattern::Wildcard { .. } => Ok(()),
             Pattern::Binding { name, .. } => {
-                let bound = Self::ref_pattern_ty(ty, through_ref, ref_mutability);
+                let bound = self.ref_pattern_ty(ty, through_ref, ref_mutability);
                 self.check_no_off_stack_reference(&bound, span)?;
                 self.variables
                     .insert(name.clone(), Self::new_variable_info(bound, span));
                 Ok(())
             }
             Pattern::At { name, pattern, .. } => {
-                let bound = Self::ref_pattern_ty(ty, through_ref, ref_mutability);
+                let bound = self.ref_pattern_ty(ty, through_ref, ref_mutability);
                 self.check_no_off_stack_reference(&bound, span)?;
                 self.variables
                     .insert(name.clone(), Self::new_variable_info(bound, span));
@@ -5901,6 +6191,215 @@ impl TypeChecker {
         }
     }
 
+    fn check_call_arg_types(
+        &mut self,
+        call_expr: &CallExpr,
+        func_decl_params: &[Param],
+        generic_substitutions: &HashMap<String, Type>,
+        is_extern: bool,
+    ) -> Result<(), TypeCheckError> {
+        for (arg_expr, param) in call_expr.args.iter().zip(func_decl_params.iter()) {
+            let resolved_param_ty = substitute_generic_types_impl(
+                &self.resolve_type_name(&param.ty)?,
+                generic_substitutions,
+            );
+            let arg_ty = self.check_expr_with_expected(arg_expr, &resolved_param_ty)?;
+            let resolved_arg_ty = self.resolve_type_name(&arg_ty)?;
+            let types_match = if is_extern
+                && matches!(resolved_param_ty, Type::RawPtr { ref inner } if matches!(**inner, Type::U8))
+                && (matches!(arg_expr, Expr::StringLit(_))
+                    || matches!(
+                        resolved_arg_ty,
+                        Type::Ref { ref inner, .. } if matches!(**inner, Type::U8)
+                    )) {
+                true
+            } else {
+                let coerced = if let Type::Ref {
+                    inner: arg_inner,
+                    mutable: arg_mut,
+                } = &resolved_arg_ty
+                {
+                    if let Type::Ref {
+                        inner: param_inner,
+                        mutable: param_mut,
+                    } = &resolved_param_ty
+                    {
+                        if matches!(**arg_inner, Type::Array { .. })
+                            && matches!(**param_inner, Type::Slice { .. })
+                        {
+                            if let Type::Array {
+                                inner: ref arg_elem,
+                                ..
+                            } = **arg_inner
+                            {
+                                if let Type::Slice {
+                                    inner: ref param_elem,
+                                } = **param_inner
+                                {
+                                    arg_mut == param_mut && types_equal(arg_elem, param_elem)
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if coerced {
+                    true
+                } else {
+                    Self::arg_types_compatible(&resolved_arg_ty, &resolved_param_ty)
+                }
+            };
+            if !types_match {
+                return Err(TypeCheckError::TypeMismatch {
+                    expected: type_to_string(&resolved_param_ty),
+                    got: type_to_string(&resolved_arg_ty),
+                    span: arg_expr.span(),
+                });
+            }
+            if let Expr::Ref(ref_expr) = arg_expr
+                && let Some((owner, fields, span)) = self.place_from_expr(&ref_expr.inner)
+            {
+                self.register_borrow(&owner, fields, ref_expr.mutable, span)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn iter_element_type(&self, ty: &Type) -> Option<Type> {
+        let name = match ty {
+            Type::Struct(name) | Type::Enum(name) => name.clone(),
+            Type::Generic { name, .. } => name.clone(),
+            _ => return None,
+        };
+        let info = self.iter_impls.get(&name)?;
+        let concrete = match ty {
+            Type::Generic { params, .. } => params.clone(),
+            _ => Vec::new(),
+        };
+        if info.generics.len() != concrete.len() {
+            return None;
+        }
+        let substitutions = info
+            .generics
+            .iter()
+            .cloned()
+            .zip(concrete)
+            .collect::<HashMap<_, _>>();
+        Some(crate::types_util::substitute_type(
+            &info.element,
+            &substitutions,
+        ))
+    }
+
+    fn check_iter_for(
+        &mut self,
+        for_stmt: &ForStmt,
+        iterable_ty: &Type,
+        elem: Type,
+    ) -> Result<(), TypeCheckError> {
+        let span = for_stmt.span;
+        let iter_var = format!("__for_iter_{}", span.start);
+        let opt_var = format!("__for_opt_{}", span.start);
+        let mut init = Stmt::Let(LetStmt {
+            name: iter_var.clone(),
+            name_span: span,
+            patterns: None,
+            mutable: true,
+            type_ann: Some(iterable_ty.clone()),
+            init: Some(for_stmt.iterable.clone()),
+            span,
+        });
+        crate::ast::number_stmt(&mut init, &mut self.next_expr_id);
+        self.check_stmt(&init)?;
+
+        let next_call = Expr::Call(CallExpr {
+            id: ExprId::UNASSIGNED,
+            callee: "Iter::next".to_string(),
+            args: vec![Expr::Ref(RefExpr {
+                id: ExprId::UNASSIGNED,
+                mutable: true,
+                inner: Box::new(Expr::Var(VarExpr {
+                    id: ExprId::UNASSIGNED,
+                    name: iter_var,
+                    span,
+                })),
+                span,
+            })],
+            span,
+            callee_span: span,
+        });
+        let opt_let = Stmt::Let(LetStmt {
+            name: opt_var.clone(),
+            name_span: span,
+            patterns: None,
+            mutable: false,
+            type_ann: Some(Type::Generic {
+                name: "Option".to_string(),
+                params: vec![elem],
+            }),
+            init: Some(next_call),
+            span,
+        });
+        let some_arm = MatchArm {
+            pattern: Pattern::Variant {
+                enum_name: "Option".to_string(),
+                variant: "Some".to_string(),
+                sub_patterns: vec![Pattern::Binding {
+                    name: for_stmt.var_name.clone(),
+                    span,
+                }],
+                named_fields: None,
+                span,
+            },
+            guard: None,
+            body: for_stmt.body.clone(),
+            span,
+        };
+        let none_arm = MatchArm {
+            pattern: Pattern::Variant {
+                enum_name: "Option".to_string(),
+                variant: "None".to_string(),
+                sub_patterns: Vec::new(),
+                named_fields: None,
+                span,
+            },
+            guard: None,
+            body: Block {
+                statements: vec![Stmt::Break(BreakStmt { span })],
+            },
+            span,
+        };
+        let match_stmt = Stmt::Expr(ExprStmt {
+            expr: Expr::Match(MatchExpr {
+                id: ExprId::UNASSIGNED,
+                expr: Box::new(Expr::Var(VarExpr {
+                    id: ExprId::UNASSIGNED,
+                    name: opt_var,
+                    span,
+                })),
+                arms: vec![some_arm, none_arm],
+                span,
+            }),
+        });
+        let mut loop_stmt = Stmt::Loop(LoopStmt {
+            body: Block {
+                statements: vec![opt_let, match_stmt],
+            },
+            span,
+        });
+        crate::ast::number_stmt(&mut loop_stmt, &mut self.next_expr_id);
+        self.check_stmt(&loop_stmt)
+    }
+
     fn check_try_expr(&mut self, try_expr: &TryExpr) -> Result<Type, TypeCheckError> {
         let prev_expected = self.expr_expected.take();
         let operand_ty = self.check_expr(&try_expr.operand);
@@ -5951,6 +6450,18 @@ impl TypeChecker {
                     span: try_expr.span,
                 }),
             },
+            TryKind::Enum { enum_name, payload } => {
+                let operand_resolved = self.resolve_type_name(&operand_ty)?;
+                if types_equal(&return_ty, &operand_resolved) {
+                    Ok(payload)
+                } else {
+                    Err(TypeCheckError::TypeMismatch {
+                        expected: format!("function returning {enum_name}"),
+                        got: type_to_string(&return_ty),
+                        span: try_expr.span,
+                    })
+                }
+            }
         }
     }
 
@@ -5990,11 +6501,37 @@ impl TypeChecker {
                     err: params[1].clone(),
                 })
             }
-            other => Err(TypeCheckError::TypeMismatch {
-                expected: "owned Option<T> or Result<T, E>".to_string(),
-                got: type_to_string(other),
-                span,
-            }),
+            other => {
+                let (enum_name, concrete) = match other {
+                    Type::Enum(name) => (name.clone(), Vec::new()),
+                    Type::Generic { name, params } if self.enums.contains_key(name) => {
+                        (name.clone(), params.clone())
+                    }
+                    _ => {
+                        return Err(TypeCheckError::TypeMismatch {
+                            expected: "owned Option<T> or Result<T, E>".to_string(),
+                            got: type_to_string(other),
+                            span,
+                        });
+                    }
+                };
+                let Some(decl) = self.enums.get(&enum_name) else {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "owned Option<T> or Result<T, E>".to_string(),
+                        got: type_to_string(other),
+                        span,
+                    });
+                };
+                let Some((success, payload)) = enum_try_success(decl, &concrete) else {
+                    return Err(TypeCheckError::TypeMismatch {
+                        expected: "owned Option<T> or Result<T, E>".to_string(),
+                        got: type_to_string(other),
+                        span,
+                    });
+                };
+                let _ = success;
+                Ok(TryKind::Enum { enum_name, payload })
+            }
         }
     }
 
@@ -6107,9 +6644,9 @@ impl TypeChecker {
     }
 
     /// For comparisons, `&T` compares as `T` when `T` is a copy type.
-    fn comparison_operand_type(ty: &Type) -> Type {
+    fn comparison_operand_type(&self, ty: &Type) -> Type {
         match ty {
-            Type::Ref { inner, .. } if Self::is_copy_type(inner) => (**inner).clone(),
+            Type::Ref { inner, .. } if self.is_copy_type(inner) => (**inner).clone(),
             other => other.clone(),
         }
     }
@@ -6276,6 +6813,15 @@ impl TypeChecker {
             }
             Stmt::UnsafeBlock(unsafe_stmt) => {
                 let inner_r = self.infer_block_result_type(&unsafe_stmt.body, span)?;
+                if is_last {
+                    Ok(inner_r)
+                } else {
+                    let rest_r = self.infer_stmts_result_from(stmts, idx + 1, span)?;
+                    Ok(Self::match_arm_path_after_block(inner_r, &rest_r))
+                }
+            }
+            Stmt::Scope(scope_stmt) => {
+                let inner_r = self.infer_block_result_type(&scope_stmt.body, span)?;
                 if is_last {
                     Ok(inner_r)
                 } else {
@@ -6610,7 +7156,12 @@ impl TypeChecker {
             // Still walk inners so Box<&T> / Vec<&T> fail no-escape.
             Type::Box { inner } => self.is_reference_containing_rec(inner, visiting),
             Type::Vec { elem_type } => self.is_reference_containing_rec(elem_type, visiting),
-            Type::String | Type::Str | Type::JoinHandle | Type::File => false,
+            Type::String
+            | Type::Str
+            | Type::JoinHandle { .. }
+            | Type::File
+            | Type::Allocator
+            | Type::Endpoint { .. } => false,
             Type::Array { inner, .. } => self.is_reference_containing_rec(inner, visiting),
             Type::Slice { .. } => true,
             Type::Sender { elem_type } => self.is_reference_containing_rec(elem_type, visiting),
@@ -6763,8 +7314,10 @@ impl TypeChecker {
             | Type::UInt
             | Type::String
             | Type::Str
-            | Type::JoinHandle
-            | Type::File => false,
+            | Type::JoinHandle { .. }
+            | Type::File
+            | Type::Allocator
+            | Type::Endpoint { .. } => false,
         }
     }
 
@@ -6861,7 +7414,9 @@ impl TypeChecker {
             Type::Receiver { elem_type } => self.is_send_rec(elem_type, visiting),
             Type::Tuple { elements } => elements.iter().all(|e| self.is_send_rec(e, visiting)),
             Type::Fn { .. } => true,
-            Type::JoinHandle => true,
+            Type::JoinHandle { .. } => true,
+            Type::Allocator => true,
+            Type::Endpoint { .. } => true,
             Type::File => false,
         }
     }
@@ -6870,7 +7425,7 @@ impl TypeChecker {
     fn mark_match_scrutinee_moved(&mut self, expr: &Expr) {
         if let Expr::Var(var_expr) = expr
             && let Some(info) = self.variables.get(&var_expr.name)
-            && !Self::is_copy_type(&info.ty)
+            && !self.is_copy_type(&info.ty)
         {
             self.variables
                 .get_mut(&var_expr.name)
@@ -7130,8 +7685,6 @@ impl TypeChecker {
         ref_mutability: bool,
         expr: &Expr,
     ) -> Result<(), TypeCheckError> {
-        let wrap_ref_binding =
-            |ty: Type| Self::ref_pattern_ty(&ty, match_through_ref, ref_mutability);
         match pattern {
             Pattern::Variant {
                 enum_name: _,
@@ -7185,7 +7738,11 @@ impl TypeChecker {
                                     // Substitute generic parameters in field type
                                     let concrete_field_ty =
                                         substitute_generic_types_impl(field_ty, &substitutions);
-                                    let binding_ty = wrap_ref_binding(concrete_field_ty.clone());
+                                    let binding_ty = self.ref_pattern_ty(
+                                        &concrete_field_ty,
+                                        match_through_ref,
+                                        ref_mutability,
+                                    );
                                     self.reject_drop_partial_move(
                                         expr_ty,
                                         &concrete_field_ty,
@@ -7246,7 +7803,11 @@ impl TypeChecker {
                                 // direct generic parameters and nested generic types correctly
                                 let concrete_payload_ty =
                                     substitute_generic_types_impl(payload_ty, &substitutions);
-                                let binding_ty = wrap_ref_binding(concrete_payload_ty.clone());
+                                let binding_ty = self.ref_pattern_ty(
+                                    &concrete_payload_ty,
+                                    match_through_ref,
+                                    ref_mutability,
+                                );
                                 self.reject_drop_partial_move(
                                     expr_ty,
                                     &concrete_payload_ty,
@@ -7416,6 +7977,51 @@ enum MatchArmValue {
 enum TryKind {
     Option { payload: Type },
     Result { ok: Type, err: Type },
+    Enum { enum_name: String, payload: Type },
+}
+
+/// Success variant of an owned enum used by `?`.
+/// `Ok` or `Some` with one positional payload wins. Otherwise the only
+/// payload variant qualifies, and every other variant is a failure.
+pub(crate) fn enum_try_success(decl: &EnumDecl, concrete: &[Type]) -> Option<(String, Type)> {
+    if decl
+        .variants
+        .iter()
+        .any(|variant| variant.named_fields.is_some())
+    {
+        return None;
+    }
+    let substitutions = decl
+        .generics
+        .iter()
+        .zip(concrete.iter())
+        .map(|(param, ty)| (param.name.clone(), ty.clone()))
+        .collect();
+    if let Some(variant) = decl
+        .variants
+        .iter()
+        .find(|variant| variant.name == "Ok" || variant.name == "Some")
+    {
+        if variant.payload_types.len() == 1 {
+            return Some((
+                variant.name.clone(),
+                crate::types_util::substitute_type(&variant.payload_types[0], &substitutions),
+            ));
+        }
+        return None;
+    }
+    let with_payload: Vec<_> = decl
+        .variants
+        .iter()
+        .filter(|variant| !variant.payload_types.is_empty())
+        .collect();
+    if with_payload.len() == 1 && with_payload[0].payload_types.len() == 1 {
+        return Some((
+            with_payload[0].name.clone(),
+            crate::types_util::substitute_type(&with_payload[0].payload_types[0], &substitutions),
+        ));
+    }
+    None
 }
 
 fn stmt_contains_break(stmt: &Stmt) -> bool {
@@ -7432,6 +8038,7 @@ fn stmt_contains_break(stmt: &Stmt) -> bool {
         Stmt::Loop(loop_stmt) => block_contains_break(&loop_stmt.body),
         Stmt::For(for_stmt) => block_contains_break(&for_stmt.body),
         Stmt::UnsafeBlock(unsafe_stmt) => block_contains_break(&unsafe_stmt.body),
+        Stmt::Scope(scope_stmt) => block_contains_break(&scope_stmt.body),
         Stmt::Expr(expr_stmt) => expr_contains_break(&expr_stmt.expr),
         _ => false,
     }
@@ -7454,10 +8061,12 @@ fn block_contains_break(block: &Block) -> bool {
 
 /// True when control flow can leave this block and continue at the enclosing merge point.
 fn block_falls_through(block: &Block) -> bool {
-    if block.statements.is_empty() {
-        return true;
+    for stmt in &block.statements {
+        if !stmt_falls_through(stmt) {
+            return false;
+        }
     }
-    stmt_falls_through(block.statements.last().unwrap())
+    true
 }
 
 fn stmt_falls_through(stmt: &Stmt) -> bool {
@@ -7471,6 +8080,8 @@ fn stmt_falls_through(stmt: &Stmt) -> bool {
             }
         }
         Stmt::Expr(expr_stmt) => expr_falls_through(&expr_stmt.expr),
+        Stmt::Scope(scope_stmt) => block_falls_through(&scope_stmt.body),
+        Stmt::UnsafeBlock(unsafe_stmt) => block_falls_through(&unsafe_stmt.body),
         _ => true,
     }
 }
@@ -7495,6 +8106,241 @@ fn substitute_generic_types_impl(
     substitutions: &std::collections::HashMap<String, Type>,
 ) -> Type {
     crate::types_util::substitute_type(ty, substitutions)
+}
+
+fn block_borrows_name(block: &Block, name: &str) -> bool {
+    block
+        .statements
+        .iter()
+        .any(|stmt| stmt_borrows_name(stmt, name))
+}
+
+fn block_moves_name(block: &Block, name: &str) -> bool {
+    block
+        .statements
+        .iter()
+        .any(|stmt| stmt_moves_name(stmt, name))
+}
+
+fn stmt_borrows_name(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Let(let_stmt) => let_stmt
+            .init
+            .as_ref()
+            .is_some_and(|init| expr_borrows_name(init, name)),
+        Stmt::Return(ret) => ret
+            .value
+            .as_ref()
+            .is_some_and(|value| expr_borrows_name(value, name)),
+        Stmt::Expr(expr) => expr_borrows_name(&expr.expr, name),
+        Stmt::Defer(defer) => expr_borrows_name(&defer.expr, name),
+        Stmt::If(if_stmt) => {
+            expr_borrows_name(&if_stmt.cond, name)
+                || block_borrows_name(&if_stmt.then_block, name)
+                || if_stmt
+                    .else_block
+                    .as_ref()
+                    .is_some_and(|else_block| block_borrows_name(else_block, name))
+        }
+        Stmt::While(while_stmt) => {
+            expr_borrows_name(&while_stmt.cond, name) || block_borrows_name(&while_stmt.body, name)
+        }
+        Stmt::Loop(loop_stmt) => block_borrows_name(&loop_stmt.body, name),
+        Stmt::For(for_stmt) => {
+            expr_borrows_name(&for_stmt.iterable, name) || block_borrows_name(&for_stmt.body, name)
+        }
+        Stmt::UnsafeBlock(unsafe_stmt) => block_borrows_name(&unsafe_stmt.body, name),
+        Stmt::Scope(scope_stmt) => block_borrows_name(&scope_stmt.body, name),
+        Stmt::Spawn(spawn) => block_borrows_name(&spawn.body, name),
+        Stmt::Select(_) | Stmt::Break(_) | Stmt::Continue(_) => false,
+    }
+}
+
+fn stmt_moves_name(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Let(let_stmt) => let_stmt
+            .init
+            .as_ref()
+            .is_some_and(|init| expr_moves_name(init, name)),
+        Stmt::Return(ret) => ret
+            .value
+            .as_ref()
+            .is_some_and(|value| expr_moves_name(value, name)),
+        Stmt::Expr(expr) => expr_moves_name(&expr.expr, name),
+        Stmt::Defer(defer) => expr_moves_name(&defer.expr, name),
+        Stmt::If(if_stmt) => {
+            expr_moves_name(&if_stmt.cond, name)
+                || block_moves_name(&if_stmt.then_block, name)
+                || if_stmt
+                    .else_block
+                    .as_ref()
+                    .is_some_and(|else_block| block_moves_name(else_block, name))
+        }
+        Stmt::While(while_stmt) => {
+            expr_moves_name(&while_stmt.cond, name) || block_moves_name(&while_stmt.body, name)
+        }
+        Stmt::Loop(loop_stmt) => block_moves_name(&loop_stmt.body, name),
+        Stmt::For(for_stmt) => {
+            expr_moves_name(&for_stmt.iterable, name) || block_moves_name(&for_stmt.body, name)
+        }
+        Stmt::UnsafeBlock(unsafe_stmt) => block_moves_name(&unsafe_stmt.body, name),
+        Stmt::Scope(scope_stmt) => block_moves_name(&scope_stmt.body, name),
+        Stmt::Spawn(spawn) => block_moves_name(&spawn.body, name),
+        Stmt::Select(_) | Stmt::Break(_) | Stmt::Continue(_) => false,
+    }
+}
+
+fn expr_borrows_name(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Ref(ref_expr) => {
+            matches!(ref_expr.inner.as_ref(), Expr::Var(var) if var.name == name)
+                || expr_borrows_name(&ref_expr.inner, name)
+        }
+        other => expr_children_borrow(other, name),
+    }
+}
+
+fn expr_children_borrow(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::BinOp(op) => expr_borrows_name(&op.left, name) || expr_borrows_name(&op.right, name),
+        Expr::UnOp(op) => expr_borrows_name(&op.operand, name),
+        Expr::FieldAccess(acc) => expr_borrows_name(&acc.base, name),
+        Expr::Index(index) => {
+            expr_borrows_name(&index.target, name) || expr_borrows_name(&index.index, name)
+        }
+        Expr::Call(call) => call.args.iter().any(|arg| expr_borrows_name(arg, name)),
+        Expr::MethodCall(call) => {
+            expr_borrows_name(&call.receiver, name)
+                || call.args.iter().any(|arg| expr_borrows_name(arg, name))
+        }
+        Expr::StructLit(lit) => lit
+            .fields
+            .iter()
+            .any(|field| expr_borrows_name(&field.value, name)),
+        Expr::TupleLit(lit) => lit
+            .elements
+            .iter()
+            .any(|elem| expr_borrows_name(elem, name)),
+        Expr::ArrayLiteral(lit) => lit
+            .elements
+            .iter()
+            .any(|elem| expr_borrows_name(elem, name)),
+        Expr::EnumLit(lit) => lit.args.iter().any(|arg| expr_borrows_name(arg, name)),
+        Expr::Send(send) => {
+            expr_borrows_name(&send.channel, name) || expr_borrows_name(&send.value, name)
+        }
+        Expr::Recv(recv) => expr_borrows_name(&recv.channel, name),
+        Expr::Match(match_expr) => {
+            expr_borrows_name(&match_expr.expr, name)
+                || match_expr.arms.iter().any(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .is_some_and(|guard| expr_borrows_name(guard, name))
+                        || block_borrows_name(&arm.body, name)
+                })
+        }
+        Expr::Try(try_expr) => expr_borrows_name(&try_expr.operand, name),
+        Expr::Cast(cast) => expr_borrows_name(&cast.expr, name),
+        Expr::Assign(assign) => {
+            expr_borrows_name(&assign.target, name) || expr_borrows_name(&assign.value, name)
+        }
+        Expr::FnLiteral(lit) => block_borrows_name(&lit.body, name),
+        Expr::Spawn(spawn) => block_borrows_name(&spawn.body, name),
+        Expr::Ref(_)
+        | Expr::Lit(_)
+        | Expr::BoolLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::Var(_)
+        | Expr::StringLit(_)
+        | Expr::TypeConst(_) => false,
+    }
+}
+
+fn expr_moves_name(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Ref(ref_expr) => {
+            if matches!(ref_expr.inner.as_ref(), Expr::Var(var) if var.name == name) {
+                false
+            } else {
+                expr_moves_name(&ref_expr.inner, name)
+            }
+        }
+        Expr::Var(var) => var.name == name,
+        Expr::BinOp(op) => expr_moves_name(&op.left, name) || expr_moves_name(&op.right, name),
+        Expr::UnOp(op) => expr_moves_name(&op.operand, name),
+        Expr::FieldAccess(acc) => expr_moves_name(&acc.base, name),
+        Expr::Index(index) => {
+            expr_moves_name(&index.target, name) || expr_moves_name(&index.index, name)
+        }
+        Expr::Call(call) => call.args.iter().any(|arg| expr_moves_name(arg, name)),
+        Expr::MethodCall(call) => {
+            expr_moves_name(&call.receiver, name)
+                || call.args.iter().any(|arg| expr_moves_name(arg, name))
+        }
+        Expr::StructLit(lit) => lit
+            .fields
+            .iter()
+            .any(|field| expr_moves_name(&field.value, name)),
+        Expr::TupleLit(lit) => lit.elements.iter().any(|elem| expr_moves_name(elem, name)),
+        Expr::ArrayLiteral(lit) => lit.elements.iter().any(|elem| expr_moves_name(elem, name)),
+        Expr::EnumLit(lit) => lit.args.iter().any(|arg| expr_moves_name(arg, name)),
+        Expr::Send(send) => {
+            expr_moves_name(&send.channel, name) || expr_moves_name(&send.value, name)
+        }
+        Expr::Recv(recv) => expr_moves_name(&recv.channel, name),
+        Expr::Match(match_expr) => {
+            expr_moves_name(&match_expr.expr, name)
+                || match_expr.arms.iter().any(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .is_some_and(|guard| expr_moves_name(guard, name))
+                        || block_moves_name(&arm.body, name)
+                })
+        }
+        Expr::Try(try_expr) => expr_moves_name(&try_expr.operand, name),
+        Expr::Cast(cast) => expr_moves_name(&cast.expr, name),
+        Expr::Assign(assign) => {
+            expr_moves_name(&assign.target, name) || expr_moves_name(&assign.value, name)
+        }
+        Expr::FnLiteral(lit) => block_moves_name(&lit.body, name),
+        Expr::Spawn(spawn) => block_moves_name(&spawn.body, name),
+        Expr::Lit(_)
+        | Expr::BoolLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::StringLit(_)
+        | Expr::TypeConst(_) => false,
+    }
+}
+
+fn block_return_type(types: &TypeInfo, block: &Block) -> Option<Type> {
+    for stmt in &block.statements {
+        if let Some(ty) = stmt_return_type(types, stmt) {
+            return Some(ty);
+        }
+    }
+    None
+}
+
+fn stmt_return_type(types: &TypeInfo, stmt: &Stmt) -> Option<Type> {
+    match stmt {
+        Stmt::Return(ret) => Some(match &ret.value {
+            Some(expr) => types
+                .expr_types
+                .get(&expr.id())
+                .cloned()
+                .unwrap_or(Type::Void),
+            None => Type::Void,
+        }),
+        Stmt::If(if_stmt) => block_return_type(types, &if_stmt.then_block).or_else(|| {
+            if_stmt
+                .else_block
+                .as_ref()
+                .and_then(|else_block| block_return_type(types, else_block))
+        }),
+        Stmt::UnsafeBlock(block) => block_return_type(types, &block.body),
+        Stmt::Scope(block) => block_return_type(types, &block.body),
+        _ => None,
+    }
 }
 
 /// Collect names of variables from the enclosing scope referenced inside a block.
@@ -7644,6 +8490,9 @@ fn collect_block_var_refs(
             }
             Stmt::UnsafeBlock(unsafe_stmt) => {
                 collect_block_var_refs(&unsafe_stmt.body, refs, locals);
+            }
+            Stmt::Scope(scope_stmt) => {
+                collect_block_var_refs(&scope_stmt.body, refs, locals);
             }
             Stmt::For(for_stmt) => {
                 collect_expr_var_refs(&for_stmt.iterable, refs, locals);

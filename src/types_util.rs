@@ -218,6 +218,9 @@ pub fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type
                     .map(|param| go(param, substitutions, expanding))
                     .collect(),
             },
+            Type::JoinHandle { result } => Type::JoinHandle {
+                result: Box::new(go(result, substitutions, expanding)),
+            },
             Type::Struct(_)
             | Type::Enum(_)
             | Type::Void
@@ -236,8 +239,9 @@ pub fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type
             | Type::UInt
             | Type::String
             | Type::Str
-            | Type::JoinHandle
-            | Type::File => ty.clone(),
+            | Type::File
+            | Type::Allocator
+            | Type::Endpoint { .. } => ty.clone(),
         }
     }
     go(ty, substitutions, &mut HashSet::new())
