@@ -114,6 +114,6 @@ Read these when the task matches:
 - Stdlib: `import "stdlib/io.ion" as io;` resolves via manifest `stdlib_paths`, `ION_STDLIB`, `{project_root}/stdlib`, then install-relative `stdlib/` next to the compiler. Bare `import "io.ion"` also resolves when `io.ion` is on a search path.
 - `ion build` (`ion-build` binary): project manifest at `ion.toml`; see ION_SPEC §10.1.
 - Integration tests: add `tests/test_*.ion` plus one row in `tests/test_expectations.tsv` (see `ion-integration-tests` skill). Run `cd tests && ./test_runner.sh` to verify.
-- Fn literals are capture-free only; references to outer bindings are rejected with `ClosureCapture`.
+- A capture-free fn literal is a function pointer. A literal that moves an owned outer binding is a closure value. A reference capture is `ClosureCapture`. Moving a non-`Copy` binding into a closure conflicts with a `&` or `&mut` of that binding that is still in scope.
 - LSP parses the **open buffer** in memory (lexer → parser with source for doc attachment), then `load_imports` which **fully `parse_module`s imported files from disk** (per-import errors are published). Number the buffer AST after imports, then `merge_modules` (do not re-number the merge). Parser/tc/import changes may need LSP updates (`ion-lsp-vscode` skill).
 - Documentation: contiguous `//` lines immediately above a declaration attach to AST nodes; LSP hover shows signature plus prose. No `///` syntax.

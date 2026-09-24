@@ -1,0 +1,10 @@
+fn use_box(p: &Box<int>) -> int {
+    return 1;
+}
+
+fn main() -> int {
+    let b: Box<int> = Box::new(1);
+    let r: &Box<int> = &b;
+    let k: int = use_box(r);
+    return Box::unwrap(b) + k - 1;
+}

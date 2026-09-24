@@ -1,0 +1,13 @@
+fn use_ref(p: &int) -> int {
+    return 0;
+}
+
+fn main() -> int {
+    let n: int = 10;
+    let r: &int = &n;
+    let k: int = use_ref(r);
+    let f = fn() -> int {
+        return n;
+    };
+    return f() + k;
+}

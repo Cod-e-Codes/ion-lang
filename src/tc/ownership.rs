@@ -302,6 +302,7 @@ impl TypeChecker {
             mutable,
             released: false,
             depth: self.borrow_scopes.len(),
+            carriers: Vec::new(),
         });
         if let Some(scope) = self.borrow_scopes.last_mut() {
             scope.push(idx);
@@ -347,6 +348,21 @@ impl TypeChecker {
             .is_some_and(|borrow| borrow.released)
         {
             return;
+        }
+        if let Some(borrow) = self.live_borrows.get_mut(idx)
+            && !borrow.carriers.iter().any(|(existing, _)| existing == name)
+        {
+            let span = self
+                .variables
+                .get(name)
+                .map(|info| info.definition_span)
+                .unwrap_or(Span {
+                    start: 0,
+                    end: 0,
+                    line: 0,
+                    column: 0,
+                });
+            borrow.carriers.push((name.to_string(), span));
         }
         let entry = self.borrow_names.entry(name.to_string()).or_default();
         if !entry.contains(&idx) {
@@ -1019,6 +1035,60 @@ impl TypeChecker {
         self.check_borrow_allowed(owner, None, true, span)
     }
 
+    /// A non-`Copy` move into a closure. A live loan is `BorrowConflict`.
+    /// So is a carrier that is still this binding, including one that was
+    /// never read after its `let` and whose loan already ended.
+    pub(crate) fn check_closure_capture_move(
+        &self,
+        owner: &str,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        self.check_owner_not_borrowed(owner, span)?;
+        for borrow in &self.live_borrows {
+            if borrow.owner != owner {
+                continue;
+            }
+            if !borrow_paths_conflict(borrow.mutable, borrow.fields.as_deref(), true, None) {
+                continue;
+            }
+            let still_held = borrow.carriers.iter().any(|(name, defined)| {
+                self.variables
+                    .get(name)
+                    .is_some_and(|info| info.definition_span == *defined)
+            });
+            if still_held {
+                return Err(TypeCheckError::BorrowConflict {
+                    name: owner.to_string(),
+                    description: "as mutable while it is already borrowed".to_string(),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// `let` registers the carrier before the binding exists. Fill its span
+    /// once the binding is in scope so a later `let` of the same name is not
+    /// the same carrier.
+    pub(crate) fn stamp_carrier_span(&mut self, name: &str) {
+        let Some(span) = self.variables.get(name).map(|info| info.definition_span) else {
+            return;
+        };
+        let blank = Span {
+            start: 0,
+            end: 0,
+            line: 0,
+            column: 0,
+        };
+        for borrow in &mut self.live_borrows {
+            for (carrier, defined) in &mut borrow.carriers {
+                if carrier == name && *defined == blank {
+                    *defined = span;
+                }
+            }
+        }
+    }
+
     /// Check expression for moves and mark variables as Moved.
     /// This is called before using an expression in contexts that move ownership
     /// (assignment, return, function call arguments).
@@ -1204,6 +1274,7 @@ impl TypeChecker {
                     if self.is_copy_type(cap_ty) {
                         continue;
                     }
+                    self.check_closure_capture_move(name, lit.span)?;
                     if let Some(info) = self.variables.get_mut(name) {
                         info.state = OwnershipState::Moved;
                     }
@@ -1565,7 +1636,8 @@ fn collect_expr_names(expr: &Expr, names: &mut Vec<String>) {
             }
         }
         Expr::Cast(cast) => collect_expr_names(&cast.expr, names),
-        // A function literal does not capture, so names in its body are not uses of this loan.
+        // Names in a fn literal are not uses of an outer loan. A non-Copy
+        // capture is checked at the move, including a carrier still in scope.
         Expr::FnLiteral(_)
         | Expr::Lit(_)
         | Expr::BoolLiteral(_)

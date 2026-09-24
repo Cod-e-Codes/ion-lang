@@ -37,6 +37,9 @@ pub(crate) struct LiveBorrow {
     /// `borrow_scopes.len()` when this loan was registered. An inner statement
     /// sequence must not end a loan from an outer scope.
     depth: usize,
+    /// Bindings that carry this loan, with the span of the `let` that took it.
+    /// A later binding of the same name is a different carrier.
+    carriers: Vec<(String, Span)>,
 }
 
 /// Structured edge snapshots for one loop nesting level (AST-level join, not a CFG).
@@ -2670,6 +2673,7 @@ impl TypeChecker {
                         let_stmt.name.clone(),
                         Self::new_variable_info(var_type.clone(), let_stmt.span),
                     );
+                    self.stamp_carrier_span(&let_stmt.name);
                     if !let_stmt.name.is_empty() {
                         self.record_expr_type(let_stmt.name_span, &var_type);
                     }
