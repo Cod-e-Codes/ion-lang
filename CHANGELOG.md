@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-09-23
+
+- **Fix**: A move of a non-`Copy` binding into a closure is `BorrowConflict` while a `&` or `&mut` of that binding is still in scope, including a reference that is never read. This impacts that closure. A use of the owner after the reference's last use, outside a closure, is unchanged. Generated C and the runtime are unchanged, so other programs do not need to be regenerated or relinked.
+
 ## 0.4.0 - 2026-09-23
 
 - **Language**: A consuming call inside `+`, a unary operator, or an index expression is a move. `Box::unwrap` in `sum + Box::unwrap(extra)` no longer leaves the box to be freed again at scope exit.

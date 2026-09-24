@@ -303,6 +303,9 @@ test_fn_literal_return.ion	run	6
 test_fn_literal_capture_error.ion	error		fn(int) -> int
 test_move_closure.ion	run	21
 test_move_closure_consume_error.ion	error		UseAfterMove
+test_closure_unused_borrow_error.ion	error		BorrowConflict
+test_unwrap_after_borrow.ion	run	1
+test_closure_copy_after_borrow.ion	run	10
 test_fn_literal_ref_capture_error.ion	error		ClosureCapture
 test_tuple_basic.ion	run	81			
 test_match_expr_rvalue.ion	run	91			
