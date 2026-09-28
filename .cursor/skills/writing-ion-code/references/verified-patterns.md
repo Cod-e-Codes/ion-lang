@@ -124,7 +124,7 @@ See [tests/test_move_basic.ion](../../../../tests/test_move_basic.ion).
 
 ## Index and handle search
 
-When another language would return `&T`, return an index (`int`) or handle and re-index locally. Read-only scans use `Vec::get_ref` (does not hollow the vector). When slots in a growable table can be reused, prefer `import "stdlib/handle.ion" as handle;` (`Handle` is index plus generation) over a raw `int`. Peek stays in the caller: `arena.slots.get_ref(h.index)` then match `Slot::Occupied`. See [tests/test_vec_search_index_ok.ion](../../../../tests/test_vec_search_index_ok.ion), [tests/test_vec_get_ref_scan.ion](../../../../tests/test_vec_get_ref_scan.ion), [tests/test_handle_arena_basic.ion](../../../../tests/test_handle_arena_basic.ion), and [examples/handle_table/](../../../../examples/handle_table/).
+When another language would return `&T`, return an index (`int`) or handle and re-index locally. Read-only scans use `Vec::get_ref` (does not hollow the vector). When slots in a growable table can be reused, prefer `import "stdlib/handle.ion" as handle;` (`Handle` is index plus generation) over a raw `int`. Peek stays in the caller: `arena.get_ref(h)`, or `arena.slots.get_ref(h.index)` then match `Slot::Occupied`. See [tests/test_arena_get_ref.ion](../../../../tests/test_arena_get_ref.ion), [tests/test_arena_get_ref_field.ion](../../../../tests/test_arena_get_ref_field.ion), [tests/test_vec_search_index_ok.ion](../../../../tests/test_vec_search_index_ok.ion), [tests/test_vec_get_ref_scan.ion](../../../../tests/test_vec_get_ref_scan.ion), [tests/test_handle_arena_basic.ion](../../../../tests/test_handle_arena_basic.ion), and [examples/handle_table/](../../../../examples/handle_table/).
 
 ```ion
 enum Option<T> {
@@ -179,7 +179,7 @@ fn main() -> int {
 }
 ```
 
-When the table reuses slots, store a `Handle` and peek locally. Annotate `let mut arena: Arena<int> = handle::new();`. Use `handle::copy(&h)` before a by-value `contains` / `remove` / peek. Prefer `arena.get_ref(h)` ([tests/test_arena_get_ref.ion](../../../../tests/test_arena_get_ref.ion)). Through `&mut World`, `world.entities` is already `&mut Arena`; on an owned `World`, pass `&mut world.entities`. The `slots.get_ref` form remains valid ([tests/test_handle_arena_get_ref.ion](../../../../tests/test_handle_arena_get_ref.ion)).
+When the table reuses slots, store a `Handle` and peek locally. Annotate `let mut arena: Arena<int> = handle::new();`. Use `handle::copy(&h)` before a by-value `contains` / `remove` / peek. Prefer `arena.get_ref(h)` ([tests/test_arena_get_ref.ion](../../../../tests/test_arena_get_ref.ion)). Through `&World` / `&mut World`, `world.entities.get_ref(h)` is the same call ([tests/test_arena_get_ref_field.ion](../../../../tests/test_arena_get_ref_field.ion)). On an owned `World`, pass `&mut world.entities`. The `slots.get_ref` form remains valid ([tests/test_handle_arena_get_ref.ion](../../../../tests/test_handle_arena_get_ref.ion)).
 
 ```ion
 import "stdlib/handle.ion" as handle;

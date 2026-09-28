@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.2 - 2026-09-28
+
+- **Fix**: `Arena::get_ref` on an arena stored in a struct, reached through `&` or `&mut`, takes the address of that field before reading `slots`. `File::read`, `File::write`, and `File::close` do the same for an embedded `File`. This impacts generated C for those calls: recompile those programs. A local arena, an `&Arena` or `&File` parameter, and every other program stay on the same C. The runtime is unchanged, so other programs do not need to be regenerated or relinked.
+
 ## 0.4.1 - 2026-09-23
 
 - **Fix**: A move of a non-`Copy` binding into a closure is `BorrowConflict` while a `&` or `&mut` of that binding is still in scope, including a reference that is never read. This impacts that closure. A use of the owner after the reference's last use, outside a closure, is unchanged. Generated C and the runtime are unchanged, so other programs do not need to be regenerated or relinked.

@@ -203,6 +203,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_handle_arena_stale.ion` - reused slot: stale handle is Miss / `contains` false (exit 42)
 - `test_handle_arena_get_ref.ion` - local peek via `Vec::get_ref` on `arena.slots` through `&World` / `&mut World` (exit 42)
 - `test_arena_get_ref.ion` - compiler builtin `arena.get_ref(handle)` Occupied peek (exit 0)
+- `test_arena_get_ref_field.ion` - `Arena::get_ref` on an arena field through `&Holder`, `&mut Holder`, and a nested field (exit 0)
 - `test_handle_arena_copy_struct.ion` - `Arena<Item>` with `String` field; remove returns owned value (exit 42)
 - `test_handle_arena_escape_error.ion` - returning `&T` from a slot peek (`ReferenceEscape`)
 - `test_box_basic.ion` - Box<T> heap allocation
@@ -464,6 +465,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_nested_tuple_eq.ion` - nested tuples, `==`/`!=`, struct field tuple, generic `(T, int)` param (exit 0)
 - `test_vec_set_result.ion` - `Vec::set` returns `SetResult::Ok` / `OutOfBounds` (exit 0)
 - `test_file_rw.ion` - `File::create` / `write` / `open` / `read` round-trip (exit 0)
+- `test_file_field.ion` - `File::write` / `read` / `close` on a `File` field through `&mut Holder` (exit 0)
 - `test_file_send_error.ion` - `channel<File>()` is not `Send`
 
 - `test_io_print_str.ion` - Safe I/O library: `print_str()` function

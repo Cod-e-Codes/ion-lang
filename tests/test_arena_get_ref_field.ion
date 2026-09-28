@@ -1,0 +1,70 @@
+// Arena::get_ref on an arena embedded in a struct, reached through & / &mut.
+// The C place is the struct value (h->a), so slots is &(h->a)->slots.
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Holder {
+    a: Arena<int>;
+}
+
+struct Inner {
+    a: Arena<int>;
+}
+
+struct Wrap {
+    inner: Inner;
+}
+
+fn get_it(h: &Holder, handle_in: Handle) -> Option<int> {
+    match h.a.get_ref(handle_in) {
+        Option::Some(v) => { return Option::Some(v + 0); }
+        Option::None => { return Option::None; }
+    }
+}
+
+fn get_mut(h: &mut Holder, handle_in: Handle) -> Option<int> {
+    match h.a.get_ref(handle_in) {
+        Option::Some(v) => { return Option::Some(v + 0); }
+        Option::None => { return Option::None; }
+    }
+}
+
+fn get_nested(w: &Wrap, handle_in: Handle) -> Option<int> {
+    match w.inner.a.get_ref(handle_in) {
+        Option::Some(v) => { return Option::Some(v + 0); }
+        Option::None => { return Option::None; }
+    }
+}
+
+fn main() -> int {
+    let mut arena: Arena<int> = handle::new();
+    let hnd: Handle = handle::insert(&mut arena, 7);
+    let mut holder: Holder = Holder { a: arena };
+    match get_it(&holder, handle::copy(&hnd)) {
+        Option::Some(v) => {
+            if v != 7 { return 1; }
+        }
+        Option::None => { return 2; }
+    }
+    match get_mut(&mut holder, handle::copy(&hnd)) {
+        Option::Some(v) => {
+            if v != 7 { return 3; }
+        }
+        Option::None => { return 4; }
+    }
+
+    let mut nested_arena: Arena<int> = handle::new();
+    let nested_hnd: Handle = handle::insert(&mut nested_arena, 9);
+    let wrap: Wrap = Wrap { inner: Inner { a: nested_arena } };
+    match get_nested(&wrap, handle::copy(&nested_hnd)) {
+        Option::Some(v) => {
+            if v != 9 { return 5; }
+        }
+        Option::None => { return 6; }
+    }
+    return 0;
+}

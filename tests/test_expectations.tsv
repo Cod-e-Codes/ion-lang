@@ -442,9 +442,14 @@ test_select_timeout.ion	run	0
 test_select_blocking_send.ion	run	7
 test_join.ion	run	0
 test_arena_get_ref.ion	run	0
+test_arena_get_ref_field.ion	run	0
+test_arena_get_ref_field.ion	cgen			(&(h->a))->slots	(h->a)->slots
+test_arena_get_ref_field.ion	cgen			(&(w->inner.a))->slots	(w->inner.a)->slots
 test_nested_tuple_eq.ion	run	0
 test_vec_set_result.ion	run	0
 test_file_rw.ion	run	0
+test_file_field.ion	run	0
+test_file_field.ion	cgen			= &(h->f)	= h->f
 test_select_timeout_neg_error.ion	error		select timeout must be >= 0
 test_file_send_error.ion	error		Send element type for channel
 test_try_result_ok.ion	run	21

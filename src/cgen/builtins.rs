@@ -1061,6 +1061,7 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, arena_code);
             self.generate_expr(&args[0]);
             arena_code = std::mem::replace(&mut self.output, old_output);
+            let arena_ptr = self.address_of_ref_place(&args[0], &arena_code);
             let mut handle_code = String::new();
             let old_output = std::mem::replace(&mut self.output, handle_code);
             self.generate_expr(&args[1]);
@@ -1070,7 +1071,7 @@ impl Codegen {
             code.push_str(&option_name);
             code.push_str(" _ion_get_ref; ");
             code.push_str(&format!(
-                "Handle _ion_h = {handle_code}; ion_vec_t* _ion_v = (ion_vec_t*)(({arena_code})->slots); "
+                "Handle _ion_h = {handle_code}; ion_vec_t* _ion_v = (ion_vec_t*)(({arena_ptr})->slots); "
             ));
             code.push_str(
                 "if (_ion_v && _ion_h.index >= 0 && (size_t)_ion_h.index < _ion_v->len) { ",
@@ -1103,13 +1104,14 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, file_code);
             self.generate_expr(&args[0]);
             file_code = std::mem::replace(&mut self.output, old_output);
+            let file_ptr = self.address_of_ref_place(&args[0], &file_code);
             let mut buf_code = String::new();
             let old_output = std::mem::replace(&mut self.output, buf_code);
             self.generate_expr(&args[1]);
             buf_code = std::mem::replace(&mut self.output, old_output);
             let buf_ptr = self.vec_ion_ptr_expr(&args[1], &buf_code);
             let code = format!(
-                "({{ ion_file_t* _ion_f = {file_code}; ion_vec_t* _ion_b = (ion_vec_t*)({buf_ptr}); size_t _ion_got = 0; int _ion_n = -1; if (_ion_f && _ion_b) {{ if (ion_file_read(_ion_f, _ion_b->data, _ion_b->capacity, &_ion_got) == 0) {{ _ion_b->len = _ion_got; _ion_n = (int)_ion_got; }} }} _ion_n; }})"
+                "({{ ion_file_t* _ion_f = {file_ptr}; ion_vec_t* _ion_b = (ion_vec_t*)({buf_ptr}); size_t _ion_got = 0; int _ion_n = -1; if (_ion_f && _ion_b) {{ if (ion_file_read(_ion_f, _ion_b->data, _ion_b->capacity, &_ion_got) == 0) {{ _ion_b->len = _ion_got; _ion_n = (int)_ion_got; }} }} _ion_n; }})"
             );
             return Some(code);
         }
@@ -1119,13 +1121,14 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, file_code);
             self.generate_expr(&args[0]);
             file_code = std::mem::replace(&mut self.output, old_output);
+            let file_ptr = self.address_of_ref_place(&args[0], &file_code);
             let mut buf_code = String::new();
             let old_output = std::mem::replace(&mut self.output, buf_code);
             self.generate_expr(&args[1]);
             buf_code = std::mem::replace(&mut self.output, old_output);
             let buf_ptr = self.vec_ion_ptr_expr(&args[1], &buf_code);
             let code = format!(
-                "({{ ion_file_t* _ion_f = {file_code}; ion_vec_t* _ion_b = (ion_vec_t*)({buf_ptr}); size_t _ion_got = 0; int _ion_n = -1; if (_ion_f && _ion_b) {{ if (ion_file_write(_ion_f, _ion_b->data, _ion_b->len, &_ion_got) == 0) {{ _ion_n = (int)_ion_got; }} }} _ion_n; }})"
+                "({{ ion_file_t* _ion_f = {file_ptr}; ion_vec_t* _ion_b = (ion_vec_t*)({buf_ptr}); size_t _ion_got = 0; int _ion_n = -1; if (_ion_f && _ion_b) {{ if (ion_file_write(_ion_f, _ion_b->data, _ion_b->len, &_ion_got) == 0) {{ _ion_n = (int)_ion_got; }} }} _ion_n; }})"
             );
             return Some(code);
         }
@@ -1135,7 +1138,8 @@ impl Codegen {
             let old_output = std::mem::replace(&mut self.output, file_code);
             self.generate_expr(&args[0]);
             file_code = std::mem::replace(&mut self.output, old_output);
-            let code = format!("({{ ion_file_close({file_code}); }})");
+            let file_ptr = self.address_of_ref_place(&args[0], &file_code);
+            let code = format!("({{ ion_file_close({file_ptr}); }})");
             return Some(code);
         }
 

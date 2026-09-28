@@ -1,0 +1,67 @@
+// File methods on a File embedded in a struct, reached through &mut.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Holder {
+    f: File;
+}
+
+fn write_one(h: &mut Holder, byte: u8) -> int {
+    let mut buf: Vec<u8> = Vec::new();
+    Vec::push(&mut buf, byte);
+    return h.f.write(&mut buf);
+}
+
+fn read_one(h: &mut Holder) -> int {
+    let mut buf: Vec<u8> = Vec::with_capacity(8);
+    let n: int = h.f.read(&mut buf);
+    if n != 1 {
+        return -1;
+    }
+    match Vec::get(&buf, 0) {
+        Option::Some(b) => {
+            if b != 65 {
+                return -2;
+            }
+        }
+        Option::None => {
+            return -3;
+        }
+    }
+    return n;
+}
+
+fn close_it(h: &mut Holder) {
+    h.f.close();
+}
+
+fn main() -> int {
+    let path: String = String::from("test_file_field.tmp");
+    match File::create(&path) {
+        Option::Some(owned) => {
+            let mut holder: Holder = Holder { f: owned };
+            if write_one(&mut holder, 65) != 1 {
+                return 1;
+            }
+            close_it(&mut holder);
+        }
+        Option::None => {
+            return 2;
+        }
+    }
+    match File::open(&path) {
+        Option::Some(owned) => {
+            let mut holder: Holder = Holder { f: owned };
+            if read_one(&mut holder) != 1 {
+                return 3;
+            }
+            close_it(&mut holder);
+        }
+        Option::None => {
+            return 4;
+        }
+    }
+    return 0;
+}

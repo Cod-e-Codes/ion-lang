@@ -1273,6 +1273,28 @@ impl Codegen {
         )
     }
 
+    /// A non-copy field reached through `&Struct` / `&mut Struct` is `&Field` in
+    /// Ion (ION_SPEC §5.3). C still loads the embedded place (`h->field`). A
+    /// callee that expects `&T` needs that place's address. A field whose own
+    /// type is a reference is already the pointer.
+    fn field_reborrow_needs_address(&self, expr: &IREexpr) -> bool {
+        matches!(expr, IREexpr::FieldAccess { .. })
+            && matches!(self.stored_expr_type(expr), Some(Type::Ref { .. }))
+            && !self.field_member_is_reference(expr)
+    }
+
+    /// C expression for a `&T` / `&mut T` argument. Field reborrows of an
+    /// embedded value become `&(h->field)`. Pointer-typed fields (`Vec`,
+    /// `String`) become a pointer to that pointer. Locals and reference
+    /// parameters are already the parameter ABI.
+    fn address_of_ref_place(&self, expr: &IREexpr, generated: &str) -> String {
+        if self.field_reborrow_needs_address(expr) {
+            format!("&({generated})")
+        } else {
+            generated.to_string()
+        }
+    }
+
     fn binding_is_ref_param(&self, name: &str, pointee: fn(&Type) -> bool) -> bool {
         self.lookup_var_type(name).as_ref().is_some_and(pointee)
     }
@@ -3808,14 +3830,11 @@ impl Codegen {
                             }
                         }
                         // Non-copy field through &Struct / &mut Struct is already &Field in
-                        // Ion (ION_SPEC §5.3). C still loads the field (c->data as Vec*), so
-                        // take its address when the callee expects &T / &mut T (Vec**).
-                        // A field whose own type is a reference is already that pointer
-                        // (`h.v` is `int*`). Another `&` would be `int**`.
+                        // Ion (ION_SPEC §5.3). C still loads the embedded place, so take
+                        // its address when the callee expects &T / &mut T. A field whose
+                        // own type is a reference is already that pointer.
                         if matches!(param_ty, Some(Type::Ref { .. }))
-                            && matches!(arg, IREexpr::FieldAccess { .. })
-                            && matches!(self.stored_expr_type(arg), Some(Type::Ref { .. }))
-                            && !self.field_member_is_reference(arg)
+                            && self.field_reborrow_needs_address(arg)
                         {
                             self.write("&(");
                             self.generate_expr(arg);
