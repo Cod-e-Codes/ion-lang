@@ -1270,7 +1270,7 @@ pub fn expect<T, E>(value: Result<T, E>, message: String) -> T;
 
 `map` and `and_then` call `f` and move `T` into it. `unwrap_or` returns the success payload or `fallback`. `expect` returns the success payload. On `None` or `Err` it calls `panic::abort`, which calls `ion_abort_bytes` and does not return. `ion_abort_bytes` calls `ion_panic`. `panic.ion` is imported by `option.ion` and `result.ion`.
 
-Call them as `option::map` and `result::map`. There is no prelude.
+Call them as `option::map` and `result::map`. There is no prelude. Import `stdlib/option.ion` for `Option` and `stdlib/result.ion` for `Result`, or declare those enums in the program. `SendResult`, `TrySendResult`, `TryRecvResult`, and `SetResult` are not standard-library exports. Declare them in the program. Section 7.2 shows the channel enums. Section 8.2 shows `SetResult`.
 
 #### 8.2 `Vec<T>`
 
@@ -1416,7 +1416,7 @@ Compiler builtin (not a library function):
 - `Vec::new()` inside `new<T>` must be annotated (`let slots: Vec<Slot<T>> = Vec::new();`).
 - `Handle` is not phantom `Handle<T>`. Mixing two arenas with the same handle is a user error; `contains` still rejects stale generations.
 
-See [verified-patterns.md](.cursor/skills/writing-ion-code/references/verified-patterns.md) (Index and handle search) and [examples/handle_table/](examples/handle_table/).
+See [verified-patterns.md](docs/verified-patterns.md) (Index and handle search) and [examples/handle_table/](examples/handle_table/).
 
 #### 8.7 Standard I/O Modules
 
@@ -1434,7 +1434,7 @@ The stdlib provides safe wrappers in `stdlib/io.ion`, `stdlib/fmt.ion`, and `std
 - `fmt::println_int(n: int)`
 
 **`stdlib/fs.ion`:**
-- `fs::read_to_string_result(path: String) -> ReadResult` – read entire file (POSIX/MinGW; `Err(-1)` on open failure, `Err(-2)` on read failure)
+- `fs::read_to_string_result(path: String) -> ReadResult` – read entire file (POSIX/MinGW; `Err(-1)` on open failure, `Err(-2)` on read failure, `Err(-3)` if the file is not well-formed UTF-8)
 
 Owned streaming I/O uses the compiler builtin `File` (Section 8.5), not this module.
 
@@ -1538,11 +1538,11 @@ pub fn millis() -> int;
 
 ### 9. Examples and Edge Cases
 
-These examples illustrate core semantics (moves, borrows, channels). **Copy-paste idioms** (index/handle search, Vec put-back, concurrency patterns) live in [`.cursor/skills/writing-ion-code/references/verified-patterns.md`](.cursor/skills/writing-ion-code/references/verified-patterns.md), checked against `tests/` and `examples/`.
+These examples illustrate core semantics (moves, borrows, channels). **Copy-paste idioms** (index/handle search, Vec put-back, concurrency patterns) live in [`docs/verified-patterns.md`](docs/verified-patterns.md), checked against `tests/` and `examples/`.
 
 #### 9.1 Basic Ownership
 
-See [verified-patterns.md](.cursor/skills/writing-ion-code/references/verified-patterns.md) (Ownership move) and [tests/test_move_basic.ion](tests/test_move_basic.ion).
+See [verified-patterns.md](docs/verified-patterns.md) (Ownership move) and [tests/test_move_basic.ion](tests/test_move_basic.ion).
 
 #### 9.2 Borrowing Within Functions
 
@@ -1558,13 +1558,13 @@ See [tests/test_field_assign_plus.ion](tests/test_field_assign_plus.ion).
 
 #### 9.3 Concurrency with Channels
 
-See [verified-patterns.md](.cursor/skills/writing-ion-code/references/verified-patterns.md) (Concurrency and ownership transfer), [examples/spawn_channel/spawn_channel.ion](examples/spawn_channel/spawn_channel.ion), and [tests/test_spawn_channel.ion](tests/test_spawn_channel.ion).
+See [verified-patterns.md](docs/verified-patterns.md) (Concurrency and ownership transfer), [examples/spawn_channel/spawn_channel.ion](examples/spawn_channel/spawn_channel.ion), and [tests/test_spawn_channel.ion](tests/test_spawn_channel.ion).
 
 `Sender<T>` and `Receiver<T>` are `Send` values moved between threads; communication is by channel, not shared references.
 
 #### 9.4 Rejected Patterns
 
-See [verified-patterns.md](.cursor/skills/writing-ion-code/references/verified-patterns.md) (Rejected patterns) and negative tests under `tests/`. Summary:
+See [verified-patterns.md](docs/verified-patterns.md) (Rejected patterns) and negative tests under `tests/`. Summary:
 
 - Returning references.
 - Storing references in structs or enums.
@@ -1671,7 +1671,7 @@ Any such addition must:
 
 ### 12. Appendix: Recommended Design Patterns (Non-Normative)
 
-Canonical idioms and copy-paste examples: [`.cursor/skills/writing-ion-code/references/verified-patterns.md`](.cursor/skills/writing-ion-code/references/verified-patterns.md). That file is the single source checked against `tests/` and `examples/`; update it when adding patterns rather than duplicating examples here.
+Canonical idioms and copy-paste examples: [`docs/verified-patterns.md`](docs/verified-patterns.md). That file is the single source checked against `tests/` and `examples/`; update it when adding patterns rather than duplicating examples here.
 
 | Topic | Where |
 |-------|--------|

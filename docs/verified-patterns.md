@@ -1,6 +1,6 @@
 # Verified Ion Patterns
 
-**Canonical idiom reference** for agents and authors. [ION_SPEC.md](../../../../ION_SPEC.md) §12 indexes this file; keep long examples here, not in the spec. Every `ion` block should match a pattern in `tests/` or `examples/` (linked inline). When semantics change, update this file and tests together.
+**Canonical idiom reference.** [ION_SPEC.md](../ION_SPEC.md) §12 indexes this file; keep long examples here, not in the spec. Every `ion` block should match a pattern in `tests/` or `examples/` (linked inline). When semantics change, update this file and tests together.
 
 Copy patterns from here or from linked test files. Do not add constructs not shown in ION_SPEC.md or this repo.
 
@@ -22,7 +22,7 @@ let p: Point = Point { x: 1, y: 2 };
 
 ## Enum variants
 
-Tuple: `Option::Some(42)`, `Option::None`. `take(Option::None)` infers `T` from the parameter type ([tests/test_option_none_call_arg.ion](../../../../tests/test_option_none_call_arg.ion)); `send(&tx, Option::None)` infers from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)); `Box::new(Option::None)` infers from an expected `Box<Option<...>>` ([tests/test_box_new_option_none.ion](../../../../tests/test_box_new_option_none.ion)); `[Option::None]` and `(Option::None, 1)` infer from an adjacent array or tuple type ([tests/test_array_option_none.ion](../../../../tests/test_array_option_none.ion), [tests/test_tuple_option_none.ion](../../../../tests/test_tuple_option_none.ion)); `enum Hold { H(Option<int>) }` with `Hold::H(Option::None)` and `Hold::H(Option::Some(n))` emits `Option_int` ([tests/test_enum_option_payload_none.ion](../../../../tests/test_enum_option_payload_none.ion), [tests/test_enum_option_payload_some.ion](../../../../tests/test_enum_option_payload_some.ion)); unannotated `let empty = Option::None` still needs an annotation.
+Tuple: `Option::Some(42)`, `Option::None`. `take(Option::None)` infers `T` from the parameter type ([tests/test_option_none_call_arg.ion](../tests/test_option_none_call_arg.ion)); `send(&tx, Option::None)` infers from `Sender<T>` ([tests/test_send_option_none.ion](../tests/test_send_option_none.ion)); `Box::new(Option::None)` infers from an expected `Box<Option<...>>` ([tests/test_box_new_option_none.ion](../tests/test_box_new_option_none.ion)); `[Option::None]` and `(Option::None, 1)` infer from an adjacent array or tuple type ([tests/test_array_option_none.ion](../tests/test_array_option_none.ion), [tests/test_tuple_option_none.ion](../tests/test_tuple_option_none.ion)); `enum Hold { H(Option<int>) }` with `Hold::H(Option::None)` and `Hold::H(Option::Some(n))` emits `Option_int` ([tests/test_enum_option_payload_none.ion](../tests/test_enum_option_payload_none.ion), [tests/test_enum_option_payload_some.ion](../tests/test_enum_option_payload_some.ion)); unannotated `let empty = Option::None` still needs an annotation.
 
 Struct: `Status::Ok { value: 10 }`.
 
@@ -41,7 +41,7 @@ Nested constructors: `Outer::Wrap(Inner::A)`, `Outer::Wrap { inner: Inner::A }`.
 
 ## Result with a local error enum
 
-`Result<T, E>` from `stdlib/result.ion` accepts a user-defined enum as `E` ([tests/test_result_custom_enum.ion](../../../../tests/test_result_custom_enum.ion)):
+`Result<T, E>` from `stdlib/result.ion` accepts a user-defined enum as `E` ([tests/test_result_custom_enum.ion](../tests/test_result_custom_enum.ion)):
 
 ```ion
 import "stdlib/result.ion" as result;
@@ -58,7 +58,7 @@ fn f1(x: int) -> Result<int, MyError> {
 }
 ```
 
-Postfix `?` is match-plus-return sugar on owned `Option<T>` / `Result<T, E>` (same `E`; no `From`) and on another owned enum with one success variant when the function returns that same enum. `ReadResult { Ok(String); Err(int); }` qualifies. `SetResult` and a bare error enum do not. Not legal on a reference or inside `spawn` ([tests/test_try_result_ok.ion](../../../../tests/test_try_result_ok.ion), [tests/test_try_readresult.ion](../../../../tests/test_try_readresult.ion)):
+Postfix `?` is match-plus-return sugar on owned `Option<T>` / `Result<T, E>` (same `E`; no `From`) and on another owned enum with one success variant when the function returns that same enum. `ReadResult { Ok(String); Err(int); }` qualifies. `SetResult` and a bare error enum do not. Not legal on a reference or inside `spawn` ([tests/test_try_result_ok.ion](../tests/test_try_result_ok.ion), [tests/test_try_readresult.ion](../tests/test_try_readresult.ion)):
 
 ```ion
 fn wrap(r: Result<int, int>) -> Result<int, int> {
@@ -81,11 +81,11 @@ fn owned(s: String) -> int { return s.len(); }
 // owned("hello") is valid; literals coerce to owned String at call sites too.
 ```
 
-`Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). In `match Option::Some(x)`, `x` is `&T`: copy types bind by value; structs and enums with non-copy fields bind as a pointer. Inner `match x` on `&Enum` dispatches variants without deref. Matching `&UserEnum<Concrete>` substitutes type parameters into arm bindings the same way as an owned match ([tests/test_match_ref_generic_enum_arith.ion](../../../../tests/test_match_ref_generic_enum_arith.ion)). `Vec::set(&mut v, index, value)` returns `int` (0 = ok). Method syntax (`v.push(x)`, `v.get_ref(i)`) desugars to `Vec::` builtins with correct receiver borrows.
+`Vec::get` / `Vec::pop` return `Option<T>` and **move** the element out. For read-only scans use `Vec::get_ref(&v, i)` which returns `Option<&T>` (local temporary only; cannot return or store). In `match Option::Some(x)`, `x` is `&T`: copy types bind by value; structs and enums with non-copy fields bind as a pointer. Inner `match x` on `&Enum` dispatches variants without deref. Matching `&UserEnum<Concrete>` substitutes type parameters into arm bindings the same way as an owned match ([tests/test_match_ref_generic_enum_arith.ion](../tests/test_match_ref_generic_enum_arith.ion)). `Vec::set(&mut v, index, value)` returns `SetResult` (`Ok` / `OutOfBounds`); declare the enum. Method syntax (`v.push(x)`, `v.get_ref(i)`) desugars to `Vec::` builtins with correct receiver borrows.
 
 `String::get(&s, i)` returns `Option<u8>` without panicking (negative/OOB are `None`). Prefer it over `s[i]` when the index may be invalid. There is no `String::get_ref` / escaping `as_str`; byte peeks stay by-value. `String` is well-formed UTF-8; `String::from_utf8(v)` consumes `Vec<u8>` and returns `Option<String>`. `push_byte` accepts ASCII only (`0x00..=0x7F`). Copy a `String` with `push_str`, not a `push_byte` loop over `for` bytes.
 
-`Slice::len(&s)` returns the element count as `int` (`s.len()` desugars; `&[T; N]` coerces). Field access `s.len` is invalid. `Slice::get_ref(&s, i)` mirrors `Vec::get_ref` for `&[]T` (and arrays via coercion): local `Option<&T>`, root-owner shared borrow while live (`arr[i] = ...` and whole-owner assign are rejected), `None` on OOB/negative. See [tests/test_slice_len.ion](../../../../tests/test_slice_len.ion), [tests/test_slice_get_ref_scan.ion](../../../../tests/test_slice_get_ref_scan.ion), [tests/test_slice_get_ref_mut_error.ion](../../../../tests/test_slice_get_ref_mut_error.ion), and [tests/test_string_get.ion](../../../../tests/test_string_get.ion).
+`Slice::len(&s)` returns the element count as `int` (`s.len()` desugars; `&[T; N]` coerces). Field access `s.len` is invalid. `Slice::get_ref(&s, i)` mirrors `Vec::get_ref` for `&[]T` (and arrays via coercion): local `Option<&T>`, root-owner shared borrow while live (`arr[i] = ...` and whole-owner assign are rejected), `None` on OOB/negative. See [tests/test_slice_len.ion](../tests/test_slice_len.ion), [tests/test_slice_get_ref_scan.ion](../tests/test_slice_get_ref_scan.ion), [tests/test_slice_get_ref_mut_error.ion](../tests/test_slice_get_ref_mut_error.ion), and [tests/test_string_get.ion](../tests/test_string_get.ion).
 
 ## Struct field mutation
 
@@ -98,7 +98,7 @@ fn step(vm: &mut VM) {
 }
 ```
 
-Field paths are valid assignment targets on owned structs and `&mut` parameters. There is no unary `*` and no assign-through a bound scalar `&mut int` (or other primitive reference): mutate via a field path on `&mut Struct`, a callee that takes `&mut T`, or a direct write to the owner while no conflicting borrow is live. See [tests/test_field_assign_plus.ion](../../../../tests/test_field_assign_plus.ion) and [tests/test_slice_get_ref_mut_error.ion](../../../../tests/test_slice_get_ref_mut_error.ion).
+Field paths are valid assignment targets on owned structs and `&mut` parameters. There is no unary `*` and no assign-through a bound scalar `&mut int` (or other primitive reference): mutate via a field path on `&mut Struct`, a callee that takes `&mut T`, or a direct write to the owner while no conflicting borrow is live. See [tests/test_field_assign_plus.ion](../tests/test_field_assign_plus.ion) and [tests/test_slice_get_ref_mut_error.ion](../tests/test_slice_get_ref_mut_error.ion).
 
 ## Ownership move
 
@@ -120,11 +120,11 @@ fn main() -> int {
 }
 ```
 
-See [tests/test_move_basic.ion](../../../../tests/test_move_basic.ion).
+See [tests/test_move_basic.ion](../tests/test_move_basic.ion).
 
 ## Index and handle search
 
-When another language would return `&T`, return an index (`int`) or handle and re-index locally. Read-only scans use `Vec::get_ref` (does not hollow the vector). When slots in a growable table can be reused, prefer `import "stdlib/handle.ion" as handle;` (`Handle` is index plus generation) over a raw `int`. Peek stays in the caller: `arena.get_ref(h)`, or `arena.slots.get_ref(h.index)` then match `Slot::Occupied`. See [tests/test_arena_get_ref.ion](../../../../tests/test_arena_get_ref.ion), [tests/test_arena_get_ref_field.ion](../../../../tests/test_arena_get_ref_field.ion), [tests/test_vec_search_index_ok.ion](../../../../tests/test_vec_search_index_ok.ion), [tests/test_vec_get_ref_scan.ion](../../../../tests/test_vec_get_ref_scan.ion), [tests/test_handle_arena_basic.ion](../../../../tests/test_handle_arena_basic.ion), and [examples/handle_table/](../../../../examples/handle_table/).
+When another language would return `&T`, return an index (`int`) or handle and re-index locally. Read-only scans use `Vec::get_ref` (does not hollow the vector). When slots in a growable table can be reused, prefer `import "stdlib/handle.ion" as handle;` (`Handle` is index plus generation) over a raw `int`. Peek stays in the caller: `arena.get_ref(h)`, or `arena.slots.get_ref(h.index)` then match `Slot::Occupied`. See [tests/test_arena_get_ref.ion](../tests/test_arena_get_ref.ion), [tests/test_arena_get_ref_field.ion](../tests/test_arena_get_ref_field.ion), [tests/test_vec_search_index_ok.ion](../tests/test_vec_search_index_ok.ion), [tests/test_vec_get_ref_scan.ion](../tests/test_vec_get_ref_scan.ion), [tests/test_handle_arena_basic.ion](../tests/test_handle_arena_basic.ion), and [examples/handle_table/](../examples/handle_table/).
 
 ```ion
 enum Option<T> {
@@ -179,7 +179,7 @@ fn main() -> int {
 }
 ```
 
-When the table reuses slots, store a `Handle` and peek locally. Annotate `let mut arena: Arena<int> = handle::new();`. Use `handle::copy(&h)` before a by-value `contains` / `remove` / peek. Prefer `arena.get_ref(h)` ([tests/test_arena_get_ref.ion](../../../../tests/test_arena_get_ref.ion)). Through `&World` / `&mut World`, `world.entities.get_ref(h)` is the same call ([tests/test_arena_get_ref_field.ion](../../../../tests/test_arena_get_ref_field.ion)). On an owned `World`, pass `&mut world.entities`. The `slots.get_ref` form remains valid ([tests/test_handle_arena_get_ref.ion](../../../../tests/test_handle_arena_get_ref.ion)).
+When the table reuses slots, store a `Handle` and peek locally. Annotate `let mut arena: Arena<int> = handle::new();`. Use `handle::copy(&h)` before a by-value `contains` / `remove` / peek. Prefer `arena.get_ref(h)` ([tests/test_arena_get_ref.ion](../tests/test_arena_get_ref.ion)). Through `&World` / `&mut World`, `world.entities.get_ref(h)` is the same call ([tests/test_arena_get_ref_field.ion](../tests/test_arena_get_ref_field.ion)). On an owned `World`, pass `&mut world.entities`. The `slots.get_ref` form remains valid ([tests/test_handle_arena_get_ref.ion](../tests/test_handle_arena_get_ref.ion)).
 
 ```ion
 import "stdlib/handle.ion" as handle;
@@ -205,7 +205,7 @@ That peek binds `v` because `int` is Copy. For `T` with owned fields, match `val
 
 ## Mutating Vec elements
 
-`Vec::get` moves the element out. Copy fields, rebuild the struct, and `Vec::set` it back ([tests/test_vec_get_putback.ion](../../../../tests/test_vec_get_putback.ion)). `Vec::set` returns `SetResult` (`Ok` / `OutOfBounds`); declare the enum. A named local (`let row = Todo { ... }; Vec::set(..., row)`) is valid as the last match-arm statement ([tests/test_vec_get_putback_named.ion](../../../../tests/test_vec_get_putback_named.ion)). Helpers can take `&mut T` on an owned local:
+`Vec::get` moves the element out. Copy fields, rebuild the struct, and `Vec::set` it back ([tests/test_vec_get_putback.ion](../tests/test_vec_get_putback.ion)). `Vec::set` returns `SetResult` (`Ok` / `OutOfBounds`); declare the enum. A named local (`let row = Todo { ... }; Vec::set(..., row)`) is valid as the last match-arm statement ([tests/test_vec_get_putback_named.ion](../tests/test_vec_get_putback_named.ion)). Helpers can take `&mut T` on an owned local:
 
 ```ion
 fn mark_active(c: &mut Customer) {
@@ -215,7 +215,7 @@ fn mark_active(c: &mut Customer) {
 
 ## Comparing borrowed structs
 
-Read fields through `&Struct` parameters. Ion does not allow reference fields in structs. Non-copy fields (for example `Vec<T>`) through `&Struct` are already `&T` and pass to `&T` parameters without an extra `&` ([tests/test_ref_struct_field_to_ref_vec_param.ion](../../../../tests/test_ref_struct_field_to_ref_vec_param.ion)).
+Read fields through `&Struct` parameters. Ion does not allow reference fields in structs. Non-copy fields (for example `Vec<T>`) through `&Struct` are already `&T` and pass to `&T` parameters without an extra `&` ([tests/test_ref_struct_field_to_ref_vec_param.ion](../tests/test_ref_struct_field_to_ref_vec_param.ion)).
 
 ```ion
 struct Customer {
@@ -233,7 +233,7 @@ fn compare(a: &Customer, b: &Customer) -> int {
 
 ## Concurrency and ownership transfer
 
-Move owned values into `spawn` and channels; no shared mutable state across threads. See [examples/spawn_channel/spawn_channel.ion](../../../../examples/spawn_channel/spawn_channel.ion) and [examples/channel_worker/channel_worker.ion](../../../../examples/channel_worker/channel_worker.ion).
+Move owned values into `spawn` and channels; no shared mutable state across threads. See [examples/spawn_channel/spawn_channel.ion](../examples/spawn_channel/spawn_channel.ion) and [examples/channel_worker/channel_worker.ion](../examples/channel_worker/channel_worker.ion).
 
 ```ion
 enum Option<T> {
@@ -283,7 +283,7 @@ At module exports and public functions, prefer owned results (`Vec<T>`, `String`
 
 ## VM dispatch loop
 
-See [tests/test_vm_execute.ion](../../../../tests/test_vm_execute.ion): `match vm.code.get_ref(vm.ip)` then inner `match op` on `&Op`, field updates, and `break` inside `match` within `loop`.
+See [tests/test_vm_execute.ion](../tests/test_vm_execute.ion): `match vm.code.get_ref(vm.ip)` then inner `match op` on `&Op`, field updates, and `break` inside `match` within `loop`.
 
 ## Box
 
@@ -292,21 +292,21 @@ let b: Box<int> = Box::new(42);
 let x: int = Box::unwrap(b);
 ```
 
-Boxing a struct literal as a `let` initializer is supported ([tests/test_box_new_struct_let_annotated.ion](../../../../tests/test_box_new_struct_let_annotated.ion), [tests/test_box_new_struct_let.ion](../../../../tests/test_box_new_struct_let.ion)). Unannotated unwrap of `Box<Struct>` is valid ([tests/test_box_unwrap_struct_let.ion](../../../../tests/test_box_unwrap_struct_let.ion)):
+Boxing a struct literal as a `let` initializer is supported ([tests/test_box_new_struct_let_annotated.ion](../tests/test_box_new_struct_let_annotated.ion), [tests/test_box_new_struct_let.ion](../tests/test_box_new_struct_let.ion)). Unannotated unwrap of `Box<Struct>` is valid ([tests/test_box_unwrap_struct_let.ion](../tests/test_box_unwrap_struct_let.ion)):
 
 ```ion
 let boxed = Box::new(Node { a: 1, b: 2, c: 3, d: 4 });
 let n = Box::unwrap(boxed);
 ```
 
-Unannotated enum literals type as the enum, not default `int` ([tests/test_enum_unannotated_let.ion](../../../../tests/test_enum_unannotated_let.ion), [tests/test_enum_generic_unannotated_let.ion](../../../../tests/test_enum_generic_unannotated_let.ion)):
+Unannotated enum literals type as the enum, not default `int` ([tests/test_enum_unannotated_let.ion](../tests/test_enum_unannotated_let.ion), [tests/test_enum_generic_unannotated_let.ion](../tests/test_enum_generic_unannotated_let.ion)):
 
 ```ion
 let flag = Flag::On;
 let x = Option::Some(42);
 ```
 
-Recursive owned types need indirection (`Box`, `Vec`, or a raw pointer). Bare nests (`next: Node`, `next: Option<Node>`) are infinite size. Linked lists use `Option<Box<Node>>` ([tests/test_recursive_struct_box.ion](../../../../tests/test_recursive_struct_box.ion)); declare a local `enum Option<T>` when constructing `Option::None` / `Option::Some` (same pattern as [tests/test_enum_generic.ion](../../../../tests/test_enum_generic.ion)).
+Recursive owned types need indirection (`Box`, `Vec`, or a raw pointer). Bare nests (`next: Node`, `next: Option<Node>`) are infinite size. Linked lists use `Option<Box<Node>>` ([tests/test_recursive_struct_box.ion](../tests/test_recursive_struct_box.ion)); declare a local `enum Option<T>` when constructing `Option::None` / `Option::Some` (same pattern as [tests/test_enum_generic.ion](../tests/test_enum_generic.ion)).
 
 ```ion
 enum Option<T> {
@@ -322,7 +322,7 @@ struct Node {
 
 ## Arrays and slices
 
-Fixed arrays `[T; N]` and slices `[]T` / `&[]T` support bounds-checked indexing (panic on OOB). Query length with `Slice::len` (`s.len()`); field access `s.len` is not valid. For non-panicking element access use `Slice::get_ref` (`Option<&T>`, local only), including after `&[T; N]` -> `&[]T` coercion. Nested arrays, `Box<[T; N]>`, and `Vec<[T; N]>` compile ([tests/test_nested_array.ion](../../../../tests/test_nested_array.ion), [tests/test_box_array.ion](../../../../tests/test_box_array.ion), [tests/test_vec_array.ion](../../../../tests/test_vec_array.ion)). See [tests/test_slice_len.ion](../../../../tests/test_slice_len.ion) and [tests/test_slice_get_ref_from_array.ion](../../../../tests/test_slice_get_ref_from_array.ion).
+Fixed arrays `[T; N]` and slices `[]T` / `&[]T` support bounds-checked indexing (panic on OOB). Query length with `Slice::len` (`s.len()`); field access `s.len` is not valid. For non-panicking element access use `Slice::get_ref` (`Option<&T>`, local only), including after `&[T; N]` -> `&[]T` coercion. Nested arrays, `Box<[T; N]>`, and `Vec<[T; N]>` compile ([tests/test_nested_array.ion](../tests/test_nested_array.ion), [tests/test_box_array.ion](../tests/test_box_array.ion), [tests/test_vec_array.ion](../tests/test_vec_array.ion)). See [tests/test_slice_len.ion](../tests/test_slice_len.ion) and [tests/test_slice_get_ref_from_array.ion](../tests/test_slice_get_ref_from_array.ion).
 
 ```ion
 let arr: [int; 3] = [1, 2, 3];
@@ -354,7 +354,7 @@ fn read_len(v: &Vec<int>) -> int {
 defer expr;  // LIFO; runs before that block's remaining locals
 ```
 
-`break` and `continue` still run those defers and drops, through and including the loop body. See [tests/test_defer_basic.ion](../../../../tests/test_defer_basic.ion) and [tests/test_defer_before_break.ion](../../../../tests/test_defer_before_break.ion).
+`break` and `continue` still run those defers and drops, through and including the loop body. See [tests/test_defer_basic.ion](../tests/test_defer_basic.ion) and [tests/test_defer_before_break.ion](../tests/test_defer_before_break.ion).
 
 ## Compound assignment
 
@@ -403,7 +403,7 @@ Multi-file mode prefixes each module's C symbols (`io_print_int`, `fmt_print_int
 
 ## Channel send expressions
 
-`send(&tx, make())` is valid ([tests/test_channel_send_call_expr.ion](../../../../tests/test_channel_send_call_expr.ion)). `send(&tx, Option::None)` infers `T` from `Sender<T>` ([tests/test_send_option_none.ion](../../../../tests/test_send_option_none.ion)). `send` returns `SendResult<T>`; a statement `send(&tx, v);` still drops `Closed(T)`. `recv(&mut rx)` returns `Option<T>` (see [examples/spawn_channel/spawn_channel.ion](../../../../examples/spawn_channel/spawn_channel.ion)). `clone_sender(&tx)` is MPSC ([tests/test_channel_contention.ion](../../../../tests/test_channel_contention.ion)).
+`send(&tx, make())` is valid ([tests/test_channel_send_call_expr.ion](../tests/test_channel_send_call_expr.ion)). `send(&tx, Option::None)` infers `T` from `Sender<T>` ([tests/test_send_option_none.ion](../tests/test_send_option_none.ion)). `send` returns `SendResult<T>`; a statement `send(&tx, v);` still drops `Closed(T)`. `recv(&mut rx)` returns `Option<T>` (see [examples/spawn_channel/spawn_channel.ion](../examples/spawn_channel/spawn_channel.ion)). `clone_sender(&tx)` is MPSC ([tests/test_channel_contention.ion](../tests/test_channel_contention.ion)).
 
 ## if / ownership merge
 
@@ -454,7 +454,7 @@ let w = v;
 let _ = v.len();
 ```
 
-See [tests/test_ref_return_error2.ion](../../../../tests/test_ref_return_error2.ion), [tests/test_spawn_ref_error.ion](../../../../tests/test_spawn_ref_error.ion), and ION_SPEC.md §9.4.
+See [tests/test_ref_return_error2.ion](../tests/test_ref_return_error2.ion), [tests/test_spawn_ref_error.ion](../tests/test_spawn_ref_error.ion), and ION_SPEC.md §9.4.
 
 ## Design alternatives (no borrowed returns)
 

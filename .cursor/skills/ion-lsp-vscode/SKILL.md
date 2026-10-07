@@ -43,9 +43,10 @@ npx @vscode/vsce package --allow-missing-repository
 
 Install:
 
+The package step writes `ion-language-<version>.vsix`. `<version>` is the `version` field in `ion-vscode/package.json`. Today that file is `ion-language-0.1.4.vsix`.
+
 ```bash
 cursor --install-extension ion-language-0.1.4.vsix
-# Version comes from ion-vscode/package.json - adjust filename after `vsce package`
 # or: code --install-extension ion-language-0.1.4.vsix
 ```
 

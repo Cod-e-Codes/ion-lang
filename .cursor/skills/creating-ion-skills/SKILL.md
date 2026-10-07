@@ -100,6 +100,6 @@ disable-model-invocation: true   # Only for manual /slash-command skills
 | `ion-lang` | Repo orientation, skill index |
 | `ion-lsp-vscode` | `paths` for LSP + extension; rebuild and vsix steps |
 | `researching-pl-literature` | Paper search workflow + `references/paper-seeds.md` |
-| `writing-ion-code` | Verified `.ion` patterns + `references/verified-patterns.md` |
+| `writing-ion-code` | Verified `.ion` patterns; canonical file is `docs/verified-patterns.md` |
 
 For generic Cursor skill mechanics (description examples, script layout), read the user-level `create-skill` skill if available.

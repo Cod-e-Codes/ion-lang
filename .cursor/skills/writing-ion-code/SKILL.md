@@ -32,7 +32,7 @@ Task progress:
 
 For ownership and no-escape rules, see [ion-lang/references/language-constraints.md](../ion-lang/references/language-constraints.md).
 
-For syntax templates and verified idioms, see [references/verified-patterns.md](references/verified-patterns.md) (canonical; ION_SPEC §12 indexes it).
+For syntax templates and verified idioms, see [docs/verified-patterns.md](../../../docs/verified-patterns.md) (canonical; ION_SPEC §12 indexes it).
 
 ## Program workflow
 
@@ -174,13 +174,13 @@ Import with paths like `import "stdlib/io.ion" as io;`:
 |--------|-----------|
 | `io.ion` | `print`, `println`, `print_str`, `print_int` |
 | `fmt.ion` | `int_to_string`, `print_int`, `println_int` |
-| `fs.ion` | `read_to_string_result(path: String) -> ReadResult` (POSIX/MinGW) |
+| `fs.ion` | `read_to_string_result(path: String) -> ReadResult` (POSIX/MinGW; `Err(-1)` open, `Err(-2)` read, `Err(-3)` not UTF-8) |
 | `result.ion` | generic `Result<T, E>` for library authors |
 | `handle.ion` | `Handle`, `Arena<T>`, `copy` / `invalid` / `insert` / `remove` / `contains` / `len`; peek via `Arena::get_ref` or `Vec::get_ref` on `arena.slots` |
 
 No stdlib stdin/line input. For POSIX `read` on fd 0, see [examples/todo_demo/](../../../examples/todo_demo/).
 
-Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (define enums in-file or import). `Vec::get` / `Vec::pop` move elements out; use `Vec::get_ref(&v, i)` for read-only in-function peek (`Option<&T>`, local only). `Vec::set` returns `SetResult` (`Ok` / `OutOfBounds`; declare the enum). `Slice::len(&s)` returns the element count as `int` (`s.len()` desugars; arrays coerce). `Slice::get_ref(&s, i)` is the same peek as `Vec::get_ref` for `&[]T` (and arrays via coercion). `Arena::get_ref(&arena, h)` is the same peek for a generational handle. Owned `File` is `File::open` / `create` / `read` / `write` / `close` (not `Send`; POSIX/MinGW). `String` is well-formed UTF-8; `String::from_utf8(bytes)` returns `Option<String>`; `push_byte` is ASCII only (`0x00..=0x7F`). `String::get(&s, i)` returns `Option<u8>` without panicking. Match on `&Enum` from `get_ref` dispatches variants directly (no `*` deref). Match arms that fall through join ownership like `if`. Struct field paths support `=` and `+=` on owned and `&mut` receivers; there is no assign-through a bound scalar `&mut int`. Nested generics such as `Vec<Vec<int>>` parse as consecutive `>` closings. String literals and `&String` coerce to `&str` at call sites; string literals also coerce to owned `String` in `let` bindings and when passed to `String` parameters.
+Built-ins: `Vec<T>`, `String`, `Box<T>`, `Option<T>`, `Result<T, E>` (import `stdlib/option.ion` and `stdlib/result.ion`, or declare them). There is no prelude. `SendResult`, `TrySendResult`, `TryRecvResult`, and `SetResult` are declared in the program (Sections 7.2 and 8.2). `Vec::get` / `Vec::pop` move elements out; use `Vec::get_ref(&v, i)` for read-only in-function peek (`Option<&T>`, local only). `Vec::set` returns `SetResult` (`Ok` / `OutOfBounds`; declare the enum). `Slice::len(&s)` returns the element count as `int` (`s.len()` desugars; arrays coerce). `Slice::get_ref(&s, i)` is the same peek as `Vec::get_ref` for `&[]T` (and arrays via coercion). `Arena::get_ref(&arena, h)` is the same peek for a generational handle. Owned `File` is `File::open` / `create` / `read` / `write` / `close` (not `Send`; POSIX/MinGW). `String` is well-formed UTF-8; `String::from_utf8(bytes)` returns `Option<String>`; `push_byte` is ASCII only (`0x00..=0x7F`). `String::get(&s, i)` returns `Option<u8>` without panicking. Match on `&Enum` from `get_ref` dispatches variants directly (no `*` deref). Match arms that fall through join ownership like `if`. Struct field paths support `=` and `+=` on owned and `&mut` receivers; there is no assign-through a bound scalar `&mut int`. Nested generics such as `Vec<Vec<int>>` parse as consecutive `>` closings. String literals and `&String` coerce to `&str` at call sites; string literals also coerce to owned `String` in `let` bindings and when passed to `String` parameters.
 
 ## Build and verify
 
@@ -205,7 +205,7 @@ For programs under `tests/`, follow the `ion-integration-tests` skill (`test_exp
 
 These are **not** in Ion today. Check ION_SPEC.md section 10.3 before using anything similar:
 
-- Capturing closures (fn literals that reference outer variables)
+- Reference captures in a fn literal (`&` or `&mut` of an outer binding) are `ClosureCapture` (naming an outer owned binding is allowed: that literal is a move closure, not a function pointer)
 - Trait objects, blanket impls, capability inheritance, or `where` clauses. `capability` / `impl` and bounds other than `Copy`, `Eq`, and `Send` are in Section 4.8. `Copy`, `Eq`, and `Send` cannot be implemented by user code.
 - Returning `&T` / `&mut T` or `Option<&T>` from functions (`Arena::get_ref` / `Vec::get_ref` stay stack-local)
 - References in struct fields, enum payloads, or channels

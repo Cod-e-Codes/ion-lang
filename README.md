@@ -32,6 +32,8 @@ Known limitations: [ION_SPEC.md section 10.3](ION_SPEC.md#103-known-limitations)
 | Resource | Contents |
 |----------|----------|
 | [ION_SPEC.md](ION_SPEC.md) | Language semantics, grammar, stdlib contracts |
+| [docs/TUTORIAL.md](docs/TUTORIAL.md) | A first program: source, `ion.toml`, and `ion-build` |
+| [docs/verified-patterns.md](docs/verified-patterns.md) | Copy-paste idioms checked against tests and examples |
 | [docs/BETA.md](docs/BETA.md) | Beta subset, compatibility policy, and platform support |
 | [docs/ABI.md](docs/ABI.md) | Runtime ABI notes for generated C and stdlib types |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, test, lint, and PR expectations |
@@ -93,7 +95,7 @@ Limitations: built-in methods (`Vec::push`, etc.) and type names in annotations 
    npx @vscode/vsce package --allow-missing-repository
    code --install-extension ion-language-0.1.4.vsix
    ```
-   On Cursor, use `cursor --install-extension ion-language-0.1.4.vsix` instead of `code`.
+   The package step writes `ion-language-<version>.vsix`. `<version>` is the `version` field in [ion-vscode/package.json](ion-vscode/package.json). Today that file is `ion-language-0.1.4.vsix`. On Cursor, use `cursor --install-extension` with that same file instead of `code`.
 
 3. Workspace settings (`.vscode/settings.json`) point `ion.lspPath` at `target/release/ion-lsp.exe`.
 
@@ -107,11 +109,23 @@ npx @vscode/vsce package --allow-missing-repository
 cursor --install-extension ion-language-0.1.4.vsix
 ```
 
+Install the `ion-language-<version>.vsix` the package step just wrote. The version is `ion-vscode/package.json`. Today that file is `ion-language-0.1.4.vsix`. Use `code --install-extension` for VS Code.
+
 ## Usage
 
 ### Quick Start
 
-From the repository root (uses root `ion.toml`):
+From the repository root (uses root `ion.toml`). To write a program from scratch, see [docs/TUTORIAL.md](docs/TUTORIAL.md).
+
+Bash:
+
+```bash
+cargo build --release --bin ion-build
+./target/release/ion-build build
+./target/hello_world
+```
+
+PowerShell:
 
 ```powershell
 cargo build --release --bin ion-build

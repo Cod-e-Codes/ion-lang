@@ -173,7 +173,7 @@ jobs:
           cp -r runtime stdlib examples "$stage/"
           cp README.md LICENSE ION_SPEC.md CHANGELOG.md CONTRIBUTING.md "$stage/"
           mkdir -p "$stage/docs"
-          cp docs/BETA.md docs/ABI.md "$stage/docs/"
+          cp docs/BETA.md docs/ABI.md docs/TUTORIAL.md docs/verified-patterns.md "$stage/docs/"
           mkdir -p "$stage/tests"
           cp tests/README.md "$stage/tests/"
 
@@ -197,6 +197,8 @@ jobs:
           check "CONTRIBUTING.md"
           check "docs/BETA.md"
           check "docs/ABI.md"
+          check "docs/TUTORIAL.md"
+          check "docs/verified-patterns.md"
           check "tests/README.md"
           check "runtime/ion_runtime.h"
           check "runtime/ion_runtime.c"

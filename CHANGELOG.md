@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Docs**: There is no prelude. Import `stdlib/option.ion` and `stdlib/result.ion`, or declare `Option` and `Result` in the program. `SendResult`, `TrySendResult`, `TryRecvResult`, and `SetResult` are declared in the program. Section 8.7 includes `Err(-3)` when `fs::read_to_string_result` reads bytes that are not UTF-8. The idiom guide says `Vec::set` returns `SetResult`. A reference capture stays rejected. An owned capture is a move closure. README Quick Start includes bash. The extension package filename follows `ion-vscode/package.json`. `docs/TUTORIAL.md` is a first program. Copy-paste idioms live in `docs/verified-patterns.md`. This impacts readers of those docs. Ion source, generated C, and the runtime are unchanged.
+
 ## 0.4.3 - 2026-10-07
 
 - **Fix**: Assignment to a reference binding rejects a referent whose owner dies first (`ReferenceEscape`). That includes `r = &inner` from a narrower block when the reference is used again outside that block, a `get_ref` copied out of the vector's block, and a `match` arm that yields a reference to a local declared in the arm. A use that stays inside the owner's block is allowed. Same-scope reassignment, including `&mut`, is allowed and frees the previous owner when no other carrier holds that loan. This rejects programs that previously compiled and then read freed stack or heap memory. A same-scope `&mut` reassignment that previously failed with `BorrowConflict` now type-checks. Generated C for other programs is unchanged, so they do not need to be regenerated.
