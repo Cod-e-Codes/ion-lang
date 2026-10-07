@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.3 - 2026-10-07
+
 - **Fix**: Assignment to a reference binding rejects a referent whose owner dies first (`ReferenceEscape`). That includes `r = &inner` from a narrower block when the reference is used again outside that block, a `get_ref` copied out of the vector's block, and a `match` arm that yields a reference to a local declared in the arm. A use that stays inside the owner's block is allowed. Same-scope reassignment, including `&mut`, is allowed and frees the previous owner when no other carrier holds that loan. This rejects programs that previously compiled and then read freed stack or heap memory. A same-scope `&mut` reassignment that previously failed with `BorrowConflict` now type-checks. Generated C for other programs is unchanged, so they do not need to be regenerated.
 
 ## 0.4.2 - 2026-09-28
