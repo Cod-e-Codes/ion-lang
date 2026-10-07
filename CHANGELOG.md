@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.4.7 - 2026-10-07
+
+- **Fix**: Replacing a local (`x = new`) or an array element (`a[i] = new`) drops the previous owned value, then stores the new one. The right-hand side is evaluated first. A place that was already moved is not dropped again. Assigning a place to itself does not drop. A moved-out array element is cleared so a later store does not free it twice. An expression-position field store drops the previous field the same way a statement already did. This impacts generated C for programs that reassign a `Box`, `String`, `Vec`, struct, enum, `File`, or channel: regenerate that C. The runtime is unchanged, so relink is not required. A copy assignment stays a single store.
+- **Fix**: `Vec::get` and `Vec::get_ref` on a moved vector are `UseAfterMove`, including as a `match` scrutinee and as a `let` initializer. Method `get` and `get_ref` stay `UseAfterMove`. Those calls previously panicked inside the compiler. This is not an ABI change. Relink is not required. Generated C for programs that still compile is unchanged.
+
 ## 0.4.6 - 2026-10-07
 
 - **Fix**: An `if` or `else` that does not name a lasting borrow keeps that loan when the carrier is used later in the same `match` arm, in an outer block, or anywhere in an enclosing loop. `Vec::push` and `handle::insert` in that branch are `BorrowConflict`. A binding used only before the branch, with no later use and not inside a loop, still allows the call. A disjoint field stays legal. This is not an ABI change. Relink is not required. Generated C for programs that still compile is unchanged.
@@ -9,6 +14,7 @@
 ## 0.4.5 - 2026-10-07
 
 - **Fix**: Method `get_ref` (`v.get_ref`, `a.slots.get_ref`) shared-borrows that place while the `Option<&T>` loan is live. `handle::insert` and `handle::remove` on that arena, and `Vec::push` on that vector, are `BorrowConflict` in the `Some` arm or while a `let` of the result is live. A disjoint field, such as `vm.stack` during `vm.code.get_ref`, stays legal. This rejects programs that peeked `slots` and then called `insert` or `remove` in that arm. Other programs are unchanged. Generated C for programs that still compile is unchanged, so they do not need to be regenerated or relinked.
+- **Tooling**: Linux CI is pinned to ubuntu-24.04 so the runner does not follow `ubuntu-latest` onto 26.04.
 
 ## 0.4.4 - 2026-10-07
 
