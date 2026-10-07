@@ -1,0 +1,19 @@
+// Method get_ref on a moved Vec stays UseAfterMove.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    v.push(1);
+    let _w = v;
+    match v.get_ref(0) {
+        Option::Some(_x) => {
+            return 0;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}

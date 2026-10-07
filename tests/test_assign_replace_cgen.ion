@@ -1,0 +1,11 @@
+struct Holder {
+    b: Box<int>;
+}
+
+fn main() -> int {
+    let mut b: Box<int> = Box::new(1);
+    b = Box::new(2);
+    let mut h: Holder = Holder { b: Box::new(3) };
+    h.b = Box::new(4);
+    return 0;
+}

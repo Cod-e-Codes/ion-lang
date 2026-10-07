@@ -622,11 +622,10 @@ impl Codegen {
         // Vec and slice typedefs must precede struct fields that reference them.
         // Tuple typedefs wait until generic enums (e.g. Option_int) are complete types.
         self.emit_vec_slice_typedefs(program);
-        self.emit_ready_array_typedefs(&array_typedefs);
-
-        // Forwards so Option<Box<Node>> / Option<&Op> can mention Node* / Op*
-        // before those bodies exist.
+        // Forwards so `Guard*` in `[Box<Guard>; N]` is a known type before the array typedef.
+        // Option<Box<Node>> / Option<&Op> also mention Node* / Op* before those bodies exist.
         self.emit_non_generic_type_forwards(program);
+        self.emit_ready_array_typedefs(&array_typedefs);
 
         // Ensure Option template is available for monomorphization (builtin or user).
         self.ensure_option_template();
@@ -836,9 +835,9 @@ impl Codegen {
         let array_typedefs = collect_array_typedefs(program);
 
         self.emit_vec_slice_typedefs(program);
-        self.emit_ready_array_typedefs(&array_typedefs);
-
+        // Forwards so `Guard*` in `[Box<Guard>; N]` is a known type before the array typedef.
         self.emit_non_generic_type_forwards(program);
+        self.emit_ready_array_typedefs(&array_typedefs);
         self.ensure_option_template();
         self.emit_monomorphized_enum_forwards();
 
@@ -1182,6 +1181,27 @@ impl Codegen {
         }
     }
 
+    /// The local still holds the bits of a value that was moved out. Those bits
+    /// must not be dropped again.
+    fn binding_is_dropped(&self, name: &str) -> bool {
+        for frame in self.scope_stack.iter().rev() {
+            if let Some(binding) = frame.bindings.iter().rev().find(|b| b.name == name) {
+                return binding.dropped;
+            }
+        }
+        false
+    }
+
+    /// Assignment stored a new owned value. Scope exit drops that value.
+    fn scope_mark_live(&mut self, name: &str) {
+        for frame in self.scope_stack.iter_mut().rev() {
+            if let Some(binding) = frame.bindings.iter_mut().rev().find(|b| b.name == name) {
+                binding.dropped = false;
+                return;
+            }
+        }
+    }
+
     fn lookup_binding_type(&self, name: &str) -> Option<Type> {
         for frame in self.scope_stack.iter().rev() {
             if let Some(binding) = frame.bindings.iter().rev().find(|b| b.name == name) {
@@ -1511,6 +1531,59 @@ impl Codegen {
             self.write_indent();
             self.writeln(&line);
         }
+    }
+
+    fn cancel_pending_null(&mut self, path: &str) {
+        let prefix = format!("{path} =");
+        self.pending_field_nulls
+            .retain(|line| !line.starts_with(&prefix));
+        self.pending_field_null_set.remove(path);
+    }
+
+    /// C lvalue of an index element, without the bounds-check wrapper.
+    fn index_element_lvalue(
+        &mut self,
+        target: &IREexpr,
+        index: &IREexpr,
+        target_type: &Type,
+    ) -> String {
+        let bounds = self.bounds_check_for_target_type(Some(target_type));
+        let target_c = self.capture_expr_code(target);
+        let index_c = self.capture_expr_code(index);
+        match bounds {
+            Some(BoundsCheck::SliceLen { by_ref: true }) => {
+                format!("({target_c})->data[{index_c}]")
+            }
+            Some(BoundsCheck::SliceLen { by_ref: false }) => {
+                format!("({target_c}).data[{index_c}]")
+            }
+            Some(BoundsCheck::StringLen) => format!("({target_c})->data[{index_c}]"),
+            _ => format!("({target_c})[{index_c}]"),
+        }
+    }
+
+    fn queue_index_element_null(
+        &mut self,
+        target: &IREexpr,
+        index: &IREexpr,
+        target_type: Option<&Type>,
+    ) {
+        let Some(target_type) = target_type else {
+            return;
+        };
+        let resolved = resolve_type_alias(target_type, &self.type_aliases);
+        let Some(elem) = Self::index_element_type(&resolved) else {
+            return;
+        };
+        if !self.needs_drop(&elem) {
+            return;
+        }
+        let path = self.index_element_lvalue(target, index, &resolved);
+        if !self.pending_field_null_set.insert(path.clone()) {
+            return;
+        }
+        let zero = self.zero_value_for_scrutinee_payload(&elem);
+        self.pending_field_nulls.push(format!("{path} = {zero};"));
     }
 
     fn is_string_compare_operand(&self, expr: &IREexpr) -> bool {
@@ -2074,9 +2147,46 @@ impl Codegen {
                 }
             }
             IREexpr::Cast { expr, .. } => self.mark_moves_in_expr(expr),
-            IREexpr::Assign { value, .. } => self.mark_moves_in_expr(value),
-            IREexpr::AssignIndex { value, .. } => self.mark_moves_in_expr(value),
-            IREexpr::AssignField { value, .. } => self.mark_moves_in_expr(value),
+            IREexpr::Assign { target, value } => {
+                self.mark_moves_in_expr(value);
+                if let Some(ty) = self.lookup_var_type(target)
+                    && self.needs_drop(&ty)
+                {
+                    // `b = b` marks `b` moved while evaluating the right-hand side.
+                    // The store puts that value back, so scope exit still drops it.
+                    self.scope_mark_live(target);
+                }
+            }
+            IREexpr::AssignIndex {
+                target,
+                index,
+                value,
+                target_type,
+            } => {
+                let restore = Self::same_index_slot(target, index, value);
+                self.mark_moves_in_expr(value);
+                if restore && let Some(target_type) = target_type.as_ref() {
+                    let resolved = resolve_type_alias(target_type, &self.type_aliases);
+                    let path = self.index_element_lvalue(target, index, &resolved);
+                    self.cancel_pending_null(&path);
+                }
+            }
+            IREexpr::AssignField { target, value, .. } => {
+                let restore = Self::same_field_place(target, value);
+                self.mark_moves_in_expr(value);
+                if restore && let Some(path) = self.field_access_c_path(target) {
+                    self.cancel_pending_null(&path);
+                }
+            }
+            IREexpr::Index {
+                target,
+                index,
+                target_type,
+            } => {
+                self.mark_place_operand(target);
+                self.mark_place_operand(index);
+                self.queue_index_element_null(target, index, target_type.as_ref());
+            }
             IREexpr::Match { expr, .. } => self.mark_moves_in_expr(expr),
             IREexpr::Recv { channel, .. } => {
                 if matches!(self.stored_expr_type(channel), Some(Type::Endpoint { .. })) {
@@ -2085,6 +2195,192 @@ impl Codegen {
             }
             _ => {}
         }
+    }
+
+    /// A place read is not a move. A call nested in that place still moves its arguments.
+    fn mark_place_operand(&mut self, expr: &IREexpr) {
+        match expr {
+            IREexpr::Var(_)
+            | IREexpr::Lit(_)
+            | IREexpr::BoolLiteral(_)
+            | IREexpr::FloatLiteral(_)
+            | IREexpr::StringLit(_)
+            | IREexpr::IntLimit { .. } => {}
+            IREexpr::FieldAccess { base, .. } => self.mark_place_operand(base),
+            IREexpr::Index { target, index, .. } => {
+                self.mark_place_operand(target);
+                self.mark_place_operand(index);
+            }
+            IREexpr::BinOp { left, right, .. } => {
+                self.mark_place_operand(left);
+                self.mark_place_operand(right);
+            }
+            IREexpr::UnOp { operand, .. } | IREexpr::AddressOf { inner: operand, .. } => {
+                self.mark_place_operand(operand);
+            }
+            IREexpr::Cast { expr, .. } => self.mark_place_operand(expr),
+            other => self.mark_moves_in_expr(other),
+        }
+    }
+
+    fn place_key(expr: &IREexpr) -> Option<String> {
+        match expr {
+            IREexpr::Var(name) => Some(format!("v:{name}")),
+            IREexpr::Lit(n) => Some(format!("l:{n}")),
+            IREexpr::FieldAccess { base, field, .. } => {
+                Some(format!("f:{}:{field}", Self::place_key(base)?))
+            }
+            _ => None,
+        }
+    }
+
+    fn same_field_place(target: &IREexpr, value: &IREexpr) -> bool {
+        match (Self::place_key(target), Self::place_key(value)) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
+    }
+
+    fn same_index_slot(target: &IREexpr, index: &IREexpr, value: &IREexpr) -> bool {
+        let IREexpr::Index {
+            target: value_target,
+            index: value_index,
+            ..
+        } = value
+        else {
+            return false;
+        };
+        Self::place_key(target).is_some()
+            && Self::place_key(target) == Self::place_key(value_target)
+            && Self::place_key(index).is_some()
+            && Self::place_key(index) == Self::place_key(value_index)
+    }
+
+    fn rhs_is_same_local(target: &str, value: &IREexpr) -> bool {
+        matches!(value, IREexpr::Var(name) if name == target)
+    }
+
+    /// `place = value`. When `drop_old`, evaluate the right-hand side first, drop
+    /// the previous value, then store.
+    fn emit_replacing_store_stmt(
+        &mut self,
+        place: &str,
+        value: &IREexpr,
+        ty: &Type,
+        drop_old: bool,
+    ) {
+        if drop_old && self.type_needs_drop(ty) {
+            let tmp = format!("_ion_set_{}", self.temp_var_counter);
+            self.temp_var_counter += 1;
+            let c_ty = self.type_to_c(ty);
+            self.write_indent();
+            self.write(&format!("{c_ty} {tmp} = "));
+            self.generate_expr_with_type(value, Some(ty));
+            self.writeln(";");
+            self.emit_drop_at_path(place, ty);
+            self.write_indent();
+            self.writeln(&format!("{place} = {tmp};"));
+        } else {
+            self.write_indent();
+            self.write(place);
+            self.write(" = ");
+            self.generate_expr_with_type(value, Some(ty));
+            self.writeln(";");
+        }
+    }
+
+    /// Expression form of [`Self::emit_replacing_store_stmt`]. The statement
+    /// expression yields the stored value.
+    fn emit_replacing_store_expr(
+        &mut self,
+        place: &str,
+        value: &IREexpr,
+        ty: &Type,
+        drop_old: bool,
+    ) {
+        if drop_old && self.type_needs_drop(ty) {
+            let tmp = format!("_ion_set_{}", self.temp_var_counter);
+            self.temp_var_counter += 1;
+            let c_ty = self.type_to_c(ty);
+            self.write("({ ");
+            self.write(&c_ty);
+            self.write(" ");
+            self.write(&tmp);
+            self.write(" = ");
+            self.generate_expr_with_type(value, Some(ty));
+            self.write("; ");
+            self.emit_drop_at_path(place, ty);
+            self.write_indent();
+            self.write(&format!("{place} = {tmp}; {tmp}; }})"));
+        } else {
+            self.write(place);
+            self.write(" = ");
+            self.generate_expr_with_type(value, Some(ty));
+        }
+    }
+
+    /// Bounds-checked index store that drops the previous element.
+    /// Emits a GNU statement expression.
+    fn emit_dropping_index_assign(
+        &mut self,
+        target: &IREexpr,
+        index: &IREexpr,
+        value: &IREexpr,
+        elem_ty: &Type,
+        target_type: &Type,
+    ) {
+        let bounds = self.bounds_check_for_target_type(Some(target_type));
+        let idx = format!("__ion_idx_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let target_c = self.capture_expr_code(target);
+        let place = match &bounds {
+            Some(BoundsCheck::SliceLen { by_ref: true }) => format!("({target_c})->data[{idx}]"),
+            Some(BoundsCheck::SliceLen { by_ref: false }) => format!("({target_c}).data[{idx}]"),
+            Some(BoundsCheck::StringLen) => format!("({target_c})->data[{idx}]"),
+            _ => format!("({target_c})[{idx}]"),
+        };
+        self.write("({ int ");
+        self.write(&idx);
+        self.write(" = ");
+        self.generate_expr(index);
+        self.write("; ");
+        if !self.in_unsafe_block {
+            match &bounds {
+                Some(BoundsCheck::Fixed(len)) => {
+                    self.write(&format!(
+                        "if (!({idx} >= 0 && {idx} < {len})) ion_panic(\"Array index out of bounds\"); "
+                    ));
+                }
+                Some(BoundsCheck::StringLen) => {
+                    self.write(&format!(
+                        "if (!({idx} >= 0 && {idx} < (int)(({target_c})->len))) ion_panic(\"String index out of bounds\"); "
+                    ));
+                }
+                Some(BoundsCheck::SliceLen { by_ref }) => {
+                    let len = if *by_ref {
+                        format!("({target_c})->len")
+                    } else {
+                        format!("({target_c}).len")
+                    };
+                    self.write(&format!(
+                        "if (!({idx} >= 0 && {idx} < {len})) ion_panic(\"Slice index out of bounds\"); "
+                    ));
+                }
+                None => {}
+            }
+        }
+        let tmp = format!("_ion_set_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let c_ty = self.type_to_c(elem_ty);
+        self.write(&c_ty);
+        self.write(" ");
+        self.write(&tmp);
+        self.write(" = ");
+        self.generate_expr_with_type(value, Some(elem_ty));
+        self.write("; ");
+        self.emit_drop_at_path(&place, elem_ty);
+        self.write_indent();
+        self.write(&format!("{place} = {tmp}; }})"));
     }
 
     fn scope_emit_exit(&mut self) {
@@ -3211,23 +3507,64 @@ impl Codegen {
                         self.mark_moves_in_expr(expr);
                         self.flush_pending_field_nulls();
                     }
+                    IREexpr::Assign { target, value } => {
+                        let ty = self.lookup_var_type(target);
+                        let drop_old = ty.as_ref().is_some_and(|ty| {
+                            self.type_needs_drop(ty)
+                                && !self.binding_is_dropped(target)
+                                && !Self::rhs_is_same_local(target, value)
+                        });
+                        if let Some(ty) = ty.as_ref().filter(|ty| self.type_needs_drop(ty)) {
+                            self.emit_replacing_store_stmt(target, value, ty, drop_old);
+                        } else {
+                            self.write_indent();
+                            self.write(target);
+                            self.write(" = ");
+                            self.generate_expr_with_type(value, ty.as_ref());
+                            self.writeln(";");
+                        }
+                        self.mark_moves_in_expr(expr);
+                        self.flush_pending_field_nulls();
+                    }
+                    IREexpr::AssignIndex {
+                        target,
+                        index,
+                        value,
+                        target_type,
+                    } => {
+                        let resolved = target_type.clone().unwrap_or_else(|| {
+                            panic!("compiler bug: index assignment missing checked target type")
+                        });
+                        let elem_ty = Self::index_element_type(&resolve_type_alias(
+                            &resolved,
+                            &self.type_aliases,
+                        ));
+                        let drop_old = elem_ty.as_ref().is_some_and(|ty| {
+                            self.type_needs_drop(ty) && !Self::same_index_slot(target, index, value)
+                        });
+                        if drop_old {
+                            let elem = elem_ty.clone().unwrap();
+                            self.write_indent();
+                            self.emit_dropping_index_assign(target, index, value, &elem, &resolved);
+                            self.writeln(";");
+                        } else {
+                            self.write_indent();
+                            self.generate_expr(expr);
+                            self.writeln(";");
+                        }
+                        self.mark_moves_in_expr(expr);
+                        self.flush_pending_field_nulls();
+                    }
                     IREexpr::AssignField {
                         target,
                         value,
                         field_ty,
                     } => {
-                        if self.type_needs_drop(field_ty) {
+                        let drop_old = self.type_needs_drop(field_ty)
+                            && !Self::same_field_place(target, value);
+                        if drop_old {
                             let path = self.capture_expr_code(target);
-                            let tmp = format!("_ion_set_{}", self.temp_var_counter);
-                            self.temp_var_counter += 1;
-                            let c_ty = self.type_to_c(field_ty);
-                            self.write_indent();
-                            self.write(&format!("{c_ty} {tmp} = "));
-                            self.generate_expr_with_type(value, Some(field_ty));
-                            self.writeln(";");
-                            self.emit_drop_at_path(&path, field_ty);
-                            self.write_indent();
-                            self.writeln(&format!("{path} = {tmp};"));
+                            self.emit_replacing_store_stmt(&path, value, field_ty, true);
                         } else {
                             self.write_indent();
                             self.generate_expr(target);
@@ -4025,10 +4362,19 @@ impl Codegen {
                 self.generate_expr(expr);
             }
             IREexpr::Assign { target, value } => {
-                self.write(target);
-                self.write(" = ");
                 let ty = self.lookup_var_type(target);
-                self.generate_expr_with_type(value, ty.as_ref());
+                let drop_old = ty.as_ref().is_some_and(|ty| {
+                    self.type_needs_drop(ty)
+                        && !self.binding_is_dropped(target)
+                        && !Self::rhs_is_same_local(target, value)
+                });
+                if let Some(ty) = ty.as_ref().filter(|ty| self.type_needs_drop(ty)) {
+                    self.emit_replacing_store_expr(target, value, ty, drop_old);
+                } else {
+                    self.write(target);
+                    self.write(" = ");
+                    self.generate_expr_with_type(value, ty.as_ref());
+                }
             }
             IREexpr::AssignIndex {
                 target,
@@ -4043,73 +4389,83 @@ impl Codegen {
                     &resolved_target,
                     &self.type_aliases,
                 ));
-                let bounds_check = self.bounds_check_for_target_type(Some(&resolved_target));
-                let mut value_code = String::new();
-                let old = std::mem::replace(&mut self.output, value_code);
-                self.generate_expr_with_type(value, elem_ty.as_ref());
-                value_code = std::mem::replace(&mut self.output, old);
-                if self.in_unsafe_block {
-                    self.emit_index_access(target, index, bounds_check.as_ref());
-                    self.write(" = ");
-                    self.write(&value_code);
+                let drop_old = elem_ty.as_ref().is_some_and(|ty| {
+                    self.type_needs_drop(ty) && !Self::same_index_slot(target, index, value)
+                });
+                if drop_old {
+                    let elem = elem_ty.clone().unwrap();
+                    self.emit_dropping_index_assign(target, index, value, &elem, &resolved_target);
                 } else {
-                    match bounds_check {
-                        None => {
-                            self.emit_index_access(target, index, None);
-                            self.write(" = ");
-                            self.write(&value_code);
-                        }
-                        Some(BoundsCheck::Fixed(len)) => {
-                            let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
-                            self.temp_var_counter += 1;
-                            self.write("({ int ");
-                            self.write(&temp_var);
-                            self.write(" = ");
-                            self.generate_expr(index);
-                            self.write("; ");
-                            self.write(&format!(
+                    let bounds_check = self.bounds_check_for_target_type(Some(&resolved_target));
+                    let mut value_code = String::new();
+                    let old = std::mem::replace(&mut self.output, value_code);
+                    self.generate_expr_with_type(value, elem_ty.as_ref());
+                    value_code = std::mem::replace(&mut self.output, old);
+                    if self.in_unsafe_block {
+                        self.emit_index_access(target, index, bounds_check.as_ref());
+                        self.write(" = ");
+                        self.write(&value_code);
+                    } else {
+                        match bounds_check {
+                            None => {
+                                self.emit_index_access(target, index, None);
+                                self.write(" = ");
+                                self.write(&value_code);
+                            }
+                            Some(BoundsCheck::Fixed(len)) => {
+                                let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
+                                self.temp_var_counter += 1;
+                                self.write("({ int ");
+                                self.write(&temp_var);
+                                self.write(" = ");
+                                self.generate_expr(index);
+                                self.write("; ");
+                                self.write(&format!(
                                 "if (!({temp_var} >= 0 && {temp_var} < {len})) ion_panic(\"Array index out of bounds\"); "
                             ));
-                            self.generate_expr(target);
-                            self.write("[");
-                            self.write(&temp_var);
-                            self.write("] = ");
-                            self.write(&value_code);
-                            self.write("; })");
-                        }
-                        Some(BoundsCheck::StringLen) => {
-                            let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
-                            self.temp_var_counter += 1;
-                            self.write("({ int ");
-                            self.write(&temp_var);
-                            self.write(" = ");
-                            self.generate_expr(index);
-                            self.write("; ");
-                            self.write(&format!("if (!({temp_var} >= 0 && {temp_var} < (int)("));
-                            self.generate_expr(target);
-                            self.write("->len))) ion_panic(\"String index out of bounds\"); ");
-                            self.generate_expr(target);
-                            self.write("->data[");
-                            self.write(&temp_var);
-                            self.write("] = ");
-                            self.write(&value_code);
-                            self.write("; })");
-                        }
-                        Some(BoundsCheck::SliceLen { by_ref }) => {
-                            let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
-                            self.temp_var_counter += 1;
-                            self.write("({ int ");
-                            self.write(&temp_var);
-                            self.write(" = ");
-                            self.generate_expr(index);
-                            self.write("; ");
-                            self.write(&format!("if (!({temp_var} >= 0 && {temp_var} < "));
-                            self.emit_slice_len(target, by_ref);
-                            self.write(")) ion_panic(\"Slice index out of bounds\"); ");
-                            self.emit_slice_data_index(target, &temp_var, by_ref);
-                            self.write(" = ");
-                            self.write(&value_code);
-                            self.write("; })");
+                                self.generate_expr(target);
+                                self.write("[");
+                                self.write(&temp_var);
+                                self.write("] = ");
+                                self.write(&value_code);
+                                self.write("; })");
+                            }
+                            Some(BoundsCheck::StringLen) => {
+                                let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
+                                self.temp_var_counter += 1;
+                                self.write("({ int ");
+                                self.write(&temp_var);
+                                self.write(" = ");
+                                self.generate_expr(index);
+                                self.write("; ");
+                                self.write(&format!(
+                                    "if (!({temp_var} >= 0 && {temp_var} < (int)("
+                                ));
+                                self.generate_expr(target);
+                                self.write("->len))) ion_panic(\"String index out of bounds\"); ");
+                                self.generate_expr(target);
+                                self.write("->data[");
+                                self.write(&temp_var);
+                                self.write("] = ");
+                                self.write(&value_code);
+                                self.write("; })");
+                            }
+                            Some(BoundsCheck::SliceLen { by_ref }) => {
+                                let temp_var = format!("__ion_idx_{}", self.temp_var_counter);
+                                self.temp_var_counter += 1;
+                                self.write("({ int ");
+                                self.write(&temp_var);
+                                self.write(" = ");
+                                self.generate_expr(index);
+                                self.write("; ");
+                                self.write(&format!("if (!({temp_var} >= 0 && {temp_var} < "));
+                                self.emit_slice_len(target, by_ref);
+                                self.write(")) ion_panic(\"Slice index out of bounds\"); ");
+                                self.emit_slice_data_index(target, &temp_var, by_ref);
+                                self.write(" = ");
+                                self.write(&value_code);
+                                self.write("; })");
+                            }
                         }
                     }
                 }
@@ -4119,9 +4475,16 @@ impl Codegen {
                 value,
                 field_ty,
             } => {
-                self.generate_expr(target);
-                self.write(" = ");
-                self.generate_expr_with_type(value, Some(field_ty));
+                let drop_old =
+                    self.type_needs_drop(field_ty) && !Self::same_field_place(target, value);
+                if drop_old {
+                    let path = self.capture_expr_code(target);
+                    self.emit_replacing_store_expr(&path, value, field_ty, true);
+                } else {
+                    self.generate_expr(target);
+                    self.write(" = ");
+                    self.generate_expr_with_type(value, Some(field_ty));
+                }
             }
             IREexpr::FnLiteral(lit) => {
                 self.generate_fn_literal(lit);

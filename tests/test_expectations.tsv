@@ -570,3 +570,18 @@ test_protocol_move_error.ion	error		UseAfterMove
 test_protocol_direction_error.ion	error		expected recv, got send
 test_protocol_copy_error.ion	error		must be Copy and Send
 test_protocol_ended_error.ion	error		has ended
+test_vec_get_ref_moved_error.ion	error		UseAfterMove
+test_vec_get_ref_moved_let_error.ion	error		UseAfterMove
+test_vec_get_moved_error.ion	error		UseAfterMove
+test_vec_method_get_ref_moved_error.ion	error		UseAfterMove
+test_vec_method_get_moved_error.ion	error		UseAfterMove
+test_local_box_replace_drop.ion	run	42
+test_local_struct_replace_drop.ion	run	42
+test_array_elem_replace_drop.ion	run	42
+test_assign_self_drop.ion	run	42
+test_move_then_assign_drop.ion	run	42
+test_array_move_then_assign_drop.ion	run	42
+test_assign_int_cgen.ion	cgen			x = 2;	_ion_set_
+test_assign_self_cgen.ion	cgen			b = b;	_ion_set_
+test_assign_replace_cgen.ion	cgen			ion_box_free(b);
+test_assign_replace_cgen.ion	cgen			ion_box_free(h.b);

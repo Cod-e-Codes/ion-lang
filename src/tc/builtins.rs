@@ -261,7 +261,7 @@ impl TypeChecker {
         if callee == "Vec::get" {
             self.check_integer_operand(&call_expr.args[1])?;
 
-            let elem_type = self.vec_elem_type_from_vec_arg(&call_expr.args[0]);
+            let elem_type = self.vec_elem_type_from_vec_arg(&call_expr.args[0])?;
 
             if let Some(elem_type) = elem_type {
                 let resolved_elem = self.resolve_type_name(&elem_type)?;
@@ -282,7 +282,7 @@ impl TypeChecker {
         if callee == "Vec::get_ref" {
             self.check_integer_operand(&call_expr.args[1])?;
 
-            let elem_type = self.vec_elem_type_from_vec_arg(&call_expr.args[0]);
+            let elem_type = self.vec_elem_type_from_vec_arg(&call_expr.args[0])?;
 
             if let Some(elem_type) = elem_type {
                 let resolved_elem = self.resolve_type_name(&elem_type)?;
@@ -975,17 +975,17 @@ impl TypeChecker {
         None
     }
 
-    fn vec_elem_type_from_vec_arg(&mut self, arg: &Expr) -> Option<Type> {
-        let checked = self.check_expr(arg).ok();
+    fn vec_elem_type_from_vec_arg(&mut self, arg: &Expr) -> Result<Option<Type>, TypeCheckError> {
+        let checked = self.check_expr(arg)?;
         if let Some(elem) = self.vec_elem_type_from_receiver(arg) {
-            return Some(elem);
+            return Ok(Some(elem));
         }
-        if let Some(Type::Ref { inner, .. }) = checked
+        if let Type::Ref { inner, .. } = checked
             && let Type::Vec { elem_type } = *inner
         {
-            return Some(*elem_type);
+            return Ok(Some(*elem_type));
         }
-        None
+        Ok(None)
     }
 
     fn slice_elem_type_from_slice_arg(&mut self, arg: &Expr) -> Option<Type> {

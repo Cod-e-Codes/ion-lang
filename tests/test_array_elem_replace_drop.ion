@@ -1,0 +1,36 @@
+// Reassigning an array element drops the previous Box. Self-assignment does not.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+struct Guard {
+    tx: Sender<int>;
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+        send(self.tx, 42);
+    }
+}
+
+fn main() -> int {
+    let (tx1, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let (tx2, _rx2): (Sender<int>, Receiver<int>) = channel<int>();
+    let mut arr: [Box<Guard>; 1] = [Box::new(Guard { tx: tx1 })];
+    arr[0] = arr[0];
+    arr[0] = Box::new(Guard { tx: tx2 });
+    match recv(&mut rx) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}

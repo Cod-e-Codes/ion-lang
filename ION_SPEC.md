@@ -192,7 +192,7 @@ Ion uses the following operators:
 - Bitwise: `&` (AND), `|` (OR), `^` (XOR), `<<` (left shift), `>>` (right shift)
 
 Integer `+`, `-`, and `*` wrap in two's complement on every integer type. Generated C uses a same-width unsigned operation, then casts back for signed types (the meaning does not depend on `-fwrapv`). `/` and `%` panic if the divisor is `0`, and panic on signed `MIN / -1` and `MIN % -1`. Shifts panic if the right operand is greater than or equal to the bit width of the left operand. The right operand stays unsigned. An in-range shift result wraps modulo `2^width` of the left operand (`4660u16 << 4` is `9024`). `<<` and unsigned `>>` use that same unsigned operation. Signed `>>` is arithmetic (sign-extending), implemented explicitly in generated C.
-- Assignment: `=`, `+=` (compound assignment desugars to `x = x + e` for supported `+` types). Assignment targets may be locals, index expressions, or field paths on owned structs or `&mut Struct` receivers (for example `vm.ip += 1`). Replacing a field stores the owned field type. Reading a non-Copy field through `&` or `&mut` is still a borrow of that field.
+- Assignment: `=`, `+=` (compound assignment desugars to `x = x + e` for supported `+` types). Assignment targets may be locals, index expressions, or field paths on owned structs or `&mut Struct` receivers (for example `vm.ip += 1`). Replacing a field stores the owned field type. Replacing a local or an array element drops the previous owned value the same way (Section 6.2). Reading a non-Copy field through `&` or `&mut` is still a borrow of that field.
 - Type casting: `as` keyword for explicit type conversions
 - Field access: `.`
 - Postfix try: `?` on owned `Option<T>` and `Result<T, E>` (see Section 8.1)
@@ -728,7 +728,7 @@ The inference engine is intentionally limited:
 #### 4.5 Type Casting and Array Assignment
 
 - **Type casting**: `expr as Type` performs explicit numeric conversions (e.g., `f64 as int`). Integer `as` keeps the low bits of the destination width (`0x12ff as u8` is `0xff`).
-- **Array element assignment**: `arr[i] = value` mutates a mutable array element. Subject to bounds checking unless inside `unsafe`.
+- **Array element assignment**: `arr[i] = value` mutates a mutable array element. Subject to bounds checking unless inside `unsafe`. When the element type needs destruction, the previous element is dropped after the right-hand side is evaluated and before the store. An element that was already moved out is not dropped again.
 - **Array initialization**: `[value; count]` fills an array with `count` copies of `value`, where `count` is a compile-time constant.
 
 #### 4.6 Method Call Syntax
@@ -968,6 +968,8 @@ fn main() -> int {
 
 When a binding goes out of scope, its remaining owned value is dropped exactly once. Scope exit includes block fall-through, `return`, `break`, and `continue`. `ion_panic` prints to stderr and `abort()`s; drops do not run.
 
+Replacing a local (`x = new`) or an array element (`a[i] = new`) drops the previous owned value when that place still owns it, then stores `new`. The right-hand side is evaluated first. A place that was already moved is not dropped again. Assigning a place to itself (`x = x`, `a[i] = a[i]`) does not drop. Field replacement follows the same rule (Section 6.2).
+
 Drop order:
 
 - A user `impl Drop` runs once, then fields, payloads, and elements drop in the order below. The `drop` body may read and mutate `self` through `&mut`. It must not move fields out. Builtin `File`, `Vec`, `String`, `Box`, and channel drops stay in the compiler and run as part of that later field drop. `ion_panic` still aborts with no drops.
@@ -1025,9 +1027,11 @@ Any heap allocation must be visible in the code via `Box`, `Vec`, `String`, or o
 
 #### 6.2 Deterministic Destruction
 
-Ion guarantees that every owned value is dropped exactly once when its owner’s scope ends, except when:
+Ion guarantees that every owned value is dropped exactly once, except when:
 
 - The program terminates abnormally (e.g., process abort).
+
+Scope exit drops the value a binding still owns. Replacing a value drops it at the assignment instead.
 
 In particular:
 
@@ -1036,7 +1040,7 @@ In particular:
 - `spawn` thread entry functions use the same scope-exit machinery; captures are dropped when the thread body finishes.
 - `spawn`ed threads manage their own stacks independently.
 - `ion_panic` prints a message and `abort()`s. Drops do not run. Allocation failure, `Vec`/`String` grow failure, `spawn` failure, and channel create failure panic this way instead of returning NULL or ignoring a status code. `panic::abort` passes `String` data through `ion_abort_bytes`, which calls `ion_panic`.
-- Replacing a field (`s.f = new`) drops the previous field value, then stores `new`. The right-hand side is evaluated first.
+- Replacing a field (`s.f = new`), a local (`x = new`), or an array element (`a[i] = new`) drops the previous owned value, then stores `new`. The right-hand side is evaluated first. A place that was already moved is not dropped again. Assigning a place to itself does not drop.
 
 #### 6.3 Aliasing and Safety
 

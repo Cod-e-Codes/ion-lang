@@ -1,0 +1,54 @@
+// Moving an array element out nulls that slot. A later store does not drop it again.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+struct Guard {
+    tx: Sender<int>;
+    n: int;
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+        send(self.tx, self.n);
+    }
+}
+
+fn scoped(tx1: Sender<int>, tx2: Sender<int>) {
+    let mut arr: [Box<Guard>; 1] = [Box::new(Guard { tx: tx1, n: 1 })];
+    let _c: Box<Guard> = arr[0];
+    arr[0] = Box::new(Guard { tx: tx2, n: 2 });
+}
+
+fn main() -> int {
+    let (tx1, rx1): (Sender<int>, Receiver<int>) = channel<int>();
+    let (tx2, rx2): (Sender<int>, Receiver<int>) = channel<int>();
+    scoped(tx1, tx2);
+    match recv(&mut rx1) {
+        Option::Some(v) => {
+            if v != 1 {
+                return 4;
+            }
+        }
+        Option::None => {
+            return 5;
+        }
+    }
+    match recv(&mut rx2) {
+        Option::Some(v) => {
+            if v == 2 {
+                return 42;
+            }
+            return 6;
+        }
+        Option::None => {
+            return 7;
+        }
+    }
+}

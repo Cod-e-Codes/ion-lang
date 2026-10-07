@@ -1,0 +1,50 @@
+// Reassigning a struct local drops the previous String, Vec, and Guard.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+struct Guard {
+    tx: Sender<int>;
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+        send(self.tx, 42);
+    }
+}
+
+struct Bag {
+    label: String;
+    items: Vec<String>;
+    g: Guard;
+}
+
+fn main() -> int {
+    let (tx1, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let (tx2, _rx2): (Sender<int>, Receiver<int>) = channel<int>();
+    let mut bag: Bag = Bag {
+        label: String::from("old"),
+        items: Vec::new(),
+        g: Guard { tx: tx1 },
+    };
+    Vec::push(&mut bag.items, String::from("slot"));
+    bag = Bag {
+        label: String::from("new"),
+        items: Vec::new(),
+        g: Guard { tx: tx2 },
+    };
+    match recv(&mut rx) {
+        Option::Some(v) => {
+            return v;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}

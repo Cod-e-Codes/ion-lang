@@ -1,0 +1,13 @@
+// Vec::get_ref on a moved Vec is UseAfterMove as a let initializer.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let _w = v;
+    let _x = Vec::get_ref(&v, 0);
+    return 0;
+}

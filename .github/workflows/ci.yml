@@ -113,6 +113,12 @@ jobs:
           test_array_string_scope_drop 0
           test_drop_order_locals_struct_defer 0
           test_vec_set_string 0
+          test_local_box_replace_drop 42
+          test_local_struct_replace_drop 42
+          test_array_elem_replace_drop 42
+          test_assign_self_drop 42
+          test_move_then_assign_drop 42
+          test_array_move_then_assign_drop 42
           test_tuple_vec_int 42
           test_channel_queued_string_drop 0
           test_channel_string 3

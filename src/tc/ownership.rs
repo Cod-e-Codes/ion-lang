@@ -1788,9 +1788,21 @@ impl TypeChecker {
                 Ok(())
             }
             Expr::Assign(assign_expr) => {
-                // Assignment moves the value, but not the target
-                self.check_expr(&assign_expr.target)?; // Check target is valid
-                self.check_expr_for_moves(&assign_expr.value)?; // Move the value
+                // A store is not a use. A moved local can receive a new value.
+                match assign_expr.target.as_ref() {
+                    Expr::Var(var_expr) if self.variables.contains_key(&var_expr.name) => {
+                        self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
+                    }
+                    _ => {
+                        self.check_expr(&assign_expr.target)?;
+                    }
+                }
+                self.check_expr_for_moves(&assign_expr.value)?;
+                if let Expr::Var(var_expr) = assign_expr.target.as_ref()
+                    && let Some(info) = self.variables.get_mut(&var_expr.name)
+                {
+                    info.state = OwnershipState::Valid;
+                }
                 Ok(())
             }
         }

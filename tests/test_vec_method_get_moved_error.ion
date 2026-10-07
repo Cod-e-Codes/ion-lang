@@ -1,0 +1,13 @@
+// Method get on a moved Vec stays UseAfterMove.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    v.push(1);
+    let _w = v;
+    let _x = v.get(0);
+    return 0;
+}

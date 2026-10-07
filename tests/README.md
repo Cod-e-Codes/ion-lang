@@ -290,6 +290,8 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_array_to_slice_let.ion` - `&[T; N]` to `&[]T` in let bindings (exit 11)
 - `test_array_bounds_panic.ion` - Array out-of-bounds panic (harness: codegen grep only; manual run below)
 - `test_assign_index_oob.ion` - `arr[i] =` bounds-check panic (codegen grep)
+- `test_assign_int_cgen.ion` - plain `int` assignment stays a single store (codegen grep)
+- `test_assign_replace_cgen.ion` - `Box` local and field replacement call `ion_box_free` before the store (codegen grep)
 - `test_int_wrap.ion` - `int::MAX + 1` and `int::MIN - 1` wrap
 - `test_div_zero_panic.ion` / `test_signed_div_overflow_panic.ion` / `test_shift_width_panic.ion` - codegen grep for panic strings
 - `test_string_from_utf8.ion` - ill-formed `Vec<u8>` is `None`; ASCII bytes become `String`
@@ -305,6 +307,13 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_capability_foreign_impl_error.ion` - Impl must sit in the type's module
 - `test_drop_sends.ion` - `impl Drop` runs before the sender field is dropped
 - `test_field_replace_drop.ion` - replacing a field drops the previous value (exit 42)
+- `test_local_box_replace_drop.ion` - replacing a local `Box` drops the previous value (exit 42)
+- `test_local_struct_replace_drop.ion` - replacing a struct local drops its `String`, `Vec`, and `Guard` (exit 42)
+- `test_array_elem_replace_drop.ion` - replacing an array element drops the previous `Box`; self-assignment does not (exit 42)
+- `test_assign_self_drop.ion` - `b = b` does not drop; scope exit drops once (exit 42)
+- `test_assign_self_cgen.ion` - `b = b` stays a plain store (codegen grep)
+- `test_move_then_assign_drop.ion` - reassignment after a move does not drop the moved value (exit 42)
+- `test_array_move_then_assign_drop.ion` - a moved-out array element is not dropped again on the next store (exit 42)
 - `test_aggregate_eq.ion` - struct, enum, and array `==` compare fields, the active variant, and elements (exit 0)
 - `test_drop_partial_move_error.ion` - `Drop` types cannot be partially moved
 - `test_drop_match_partial_move_error.ion` - `match` cannot move a non-Copy field out of a `Drop` value
@@ -527,6 +536,11 @@ Set `ION_BUILD` to override the `ion-build` binary path (default `../target/rele
 
 ### Negative Tests (Error Cases)
 - `test_move_error.ion` - Use-after-move errors
+- `test_vec_get_ref_moved_error.ion` - `Vec::get_ref` on a moved `Vec` as a `match` scrutinee (`UseAfterMove`)
+- `test_vec_get_ref_moved_let_error.ion` - `Vec::get_ref` on a moved `Vec` as a `let` initializer (`UseAfterMove`)
+- `test_vec_get_moved_error.ion` - `Vec::get` on a moved `Vec` (`UseAfterMove`)
+- `test_vec_method_get_ref_moved_error.ion` - method `get_ref` on a moved `Vec` (`UseAfterMove`)
+- `test_vec_method_get_moved_error.ion` - method `get` on a moved `Vec` (`UseAfterMove`)
 - `test_move_in_loop.ion` - Use-after-move when a non-copy value is moved on a reentering loop path
 - `test_move_in_loop_for.ion` - Same reentry rule for `for` loops (outer binding moved in body)
 - `test_move_in_loop_break_use_error.ion` - Move then break, then use after the loop
