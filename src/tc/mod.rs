@@ -25,6 +25,9 @@ pub(crate) struct VariableInfo {
     definition_span: Span,
     shared_borrow_count: u32,
     mut_borrow_count: u32,
+    /// `borrow_scopes.len()` when this binding was declared.
+    /// A reference may carry a loan only when the owner's depth is at most this.
+    decl_depth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +40,8 @@ pub(crate) struct LiveBorrow {
     /// `borrow_scopes.len()` when this loan was registered. An inner statement
     /// sequence must not end a loan from an outer scope.
     depth: usize,
+    /// `decl_depth` of `owner` when the loan was registered.
+    owner_depth: usize,
     /// Bindings that carry this loan, with the span of the `let` that took it.
     /// A later binding of the same name is a different carrier.
     carriers: Vec<(String, Span)>,
@@ -409,6 +414,13 @@ pub struct TypeChecker {
     /// Loans unused in the `if` arm currently being checked. The other arm's
     /// carriers are not live here.
     branch_ignored_loans: Vec<Vec<usize>>,
+    /// Loans held only by the destination of the reference assignment being
+    /// checked. The assignment replaces that hold, so the RHS may borrow the
+    /// same place.
+    rebind_ignored_loans: Vec<usize>,
+    /// Enclosing statement sequences, outermost first. Used to see whether a
+    /// reference binding is used again after a narrower owner's block.
+    use_frames: Vec<ownership::UseFrame>,
     /// Last statement index of each carrier in the statement sequence being checked.
     borrow_last_use: HashMap<String, usize>,
     current_stmt_index: Option<usize>,
@@ -626,20 +638,29 @@ impl TypeChecker {
             stored_ref_loans: HashMap::new(),
             match_sibling_loans: Vec::new(),
             branch_ignored_loans: Vec::new(),
+            rebind_ignored_loans: Vec::new(),
+            use_frames: Vec::new(),
             borrow_last_use: HashMap::new(),
             current_stmt_index: None,
             lsp_recording: true,
         }
     }
 
-    fn new_variable_info(ty: Type, definition_span: Span) -> VariableInfo {
+    fn new_variable_info(ty: Type, definition_span: Span, decl_depth: usize) -> VariableInfo {
         VariableInfo {
             ty,
             state: OwnershipState::Valid,
             definition_span,
             shared_borrow_count: 0,
             mut_borrow_count: 0,
+            decl_depth,
         }
+    }
+
+    fn insert_variable(&mut self, name: String, ty: Type, span: Span) {
+        let decl_depth = self.borrow_scopes.len();
+        self.variables
+            .insert(name, Self::new_variable_info(ty, span, decl_depth));
     }
 
     fn push_type_params(&mut self, params: &[TypeParam]) {
@@ -2243,17 +2264,27 @@ impl TypeChecker {
 
     fn check_stmt_seq(&mut self, stmts: &[Stmt]) -> Result<(), TypeCheckError> {
         let last = ownership::lasting_borrow_uses(stmts);
-        let saved_last = std::mem::replace(&mut self.borrow_last_use, last);
+        let saved_last = std::mem::replace(&mut self.borrow_last_use, last.clone());
         let saved_index = self.current_stmt_index;
         let depth = self.borrow_scopes.len();
+        self.use_frames.push(ownership::UseFrame {
+            parent_index: saved_index,
+            uses: last,
+            depth,
+        });
+        let mut result = Ok(());
         for (index, stmt) in stmts.iter().enumerate() {
             self.current_stmt_index = Some(index);
-            self.check_stmt(stmt)?;
+            if let Err(err) = self.check_stmt(stmt) {
+                result = Err(err);
+                break;
+            }
             self.release_borrows_ending_at(index, &self.borrow_last_use.clone(), depth);
         }
+        self.use_frames.pop();
         self.borrow_last_use = saved_last;
         self.current_stmt_index = saved_index;
-        Ok(())
+        result
     }
 
     fn check_function(&mut self, function: &FnDecl) -> Result<(), TypeCheckError> {
@@ -2294,17 +2325,11 @@ impl TypeChecker {
         for param in &function.params {
             let resolved_param_ty = self.resolve_type_name(&param.ty)?;
             self.check_no_off_stack_reference(&resolved_param_ty, function.span)?;
-            self.variables.insert(
-                param.name.clone(),
-                Self::new_variable_info(resolved_param_ty, function.span),
-            );
+            self.insert_variable(param.name.clone(), resolved_param_ty, function.span);
         }
         for generic in &function.generics {
             if generic.const_ty.is_some() {
-                self.variables.insert(
-                    generic.name.clone(),
-                    Self::new_variable_info(Type::Int, function.span),
-                );
+                self.insert_variable(generic.name.clone(), Type::Int, function.span);
             }
         }
 
@@ -2394,9 +2419,10 @@ impl TypeChecker {
                                 // First pattern gets Sender<T>
                                 match &patterns[0] {
                                     Pattern::Binding { name, .. } => {
-                                        self.variables.insert(
+                                        self.insert_variable(
                                             name.clone(),
-                                            Self::new_variable_info(sender_ty, let_stmt.span),
+                                            sender_ty,
+                                            let_stmt.span,
                                         );
                                     }
                                     _ => {
@@ -2410,9 +2436,10 @@ impl TypeChecker {
                                 // Second pattern gets Receiver<T>
                                 match &patterns[1] {
                                     Pattern::Binding { name, .. } => {
-                                        self.variables.insert(
+                                        self.insert_variable(
                                             name.clone(),
-                                            Self::new_variable_info(receiver_ty, let_stmt.span),
+                                            receiver_ty,
+                                            let_stmt.span,
                                         );
                                     }
                                     _ => {
@@ -2515,10 +2542,7 @@ impl TypeChecker {
                         match pattern {
                             Pattern::Binding { name, .. } => {
                                 self.check_no_off_stack_reference(elem_ty, let_stmt.span)?;
-                                self.variables.insert(
-                                    name.clone(),
-                                    Self::new_variable_info(elem_ty.clone(), let_stmt.span),
-                                );
+                                self.insert_variable(name.clone(), elem_ty.clone(), let_stmt.span);
                             }
                             Pattern::Wildcard { .. } | Pattern::Rest { .. } => {}
                             _ => {
@@ -2669,10 +2693,7 @@ impl TypeChecker {
                     }
 
                     // New variable starts as Valid (it owns the value from init)
-                    self.variables.insert(
-                        let_stmt.name.clone(),
-                        Self::new_variable_info(var_type.clone(), let_stmt.span),
-                    );
+                    self.insert_variable(let_stmt.name.clone(), var_type.clone(), let_stmt.span);
                     self.stamp_carrier_span(&let_stmt.name);
                     if !let_stmt.name.is_empty() {
                         self.record_expr_type(let_stmt.name_span, &var_type);
@@ -2693,9 +2714,10 @@ impl TypeChecker {
                     }
                     self.check_no_off_stack_reference(&resolved_type, let_stmt.span)?;
                     // Variable declared without init - store the type, state is Valid but uninitialized
-                    self.variables.insert(
+                    self.insert_variable(
                         let_stmt.name.clone(),
-                        Self::new_variable_info(resolved_type.clone(), let_stmt.span),
+                        resolved_type.clone(),
+                        let_stmt.span,
                     );
                     if !let_stmt.name.is_empty() {
                         self.record_expr_type(let_stmt.name_span, &resolved_type);
@@ -3643,8 +3665,7 @@ impl TypeChecker {
         let parent_vars = self.variables.clone();
         self.variables.clear();
         for (name, ty) in captured_infos {
-            self.variables
-                .insert(name, Self::new_variable_info(ty, span));
+            self.insert_variable(name, ty, span);
         }
         let prev_spawn = self.in_spawn;
         self.in_spawn = true;
@@ -3682,8 +3703,7 @@ impl TypeChecker {
             self.variables = before.clone();
             let recv_ty = self.check_expr(&Expr::Recv(arm.recv.clone()))?;
             if let Some(name) = &arm.binding {
-                self.variables
-                    .insert(name.clone(), Self::new_variable_info(recv_ty, arm.span));
+                self.insert_variable(name.clone(), recv_ty, arm.span);
             }
             self.push_borrow_scope();
             for inner in &arm.body.statements {
@@ -4919,7 +4939,9 @@ impl TypeChecker {
                         self.check_stmt(stmt)?;
                     }
                     let escaping = self.loans_in_block(&arm.body);
-                    self.keep_arm_result_loans(match_expr.id, &escaping);
+                    let parent_depth = self.borrow_scopes.len().saturating_sub(1);
+                    self.ensure_block_owners_enclose(&arm.body, parent_depth, arm.span)?;
+                    self.keep_arm_result_loans(match_expr.id, &escaping, arm.span)?;
                     self.pop_borrow_scope();
                     match self.infer_block_result_type(&arm.body, arm.span)? {
                         MatchArmValue::Diverges => {}
@@ -4939,7 +4961,7 @@ impl TypeChecker {
                             .get(&match_expr.id)
                             .cloned()
                             .unwrap_or_default();
-                        self.promote_current_scope_loans(&escaping);
+                        self.promote_current_scope_loans(&escaping, match_expr.span)?;
                         self.pop_borrow_scope();
                     }
                     if block_falls_through(&arm.body) {
@@ -5696,8 +5718,17 @@ impl TypeChecker {
                     self.check_owner_not_borrowed(&var_expr.name, var_expr.span)?;
 
                     let resolved_var_ty = self.resolve_type_name(&var_ty)?;
-                    let value_ty =
-                        self.check_expr_with_expected(&assign_expr.value, &resolved_var_ty)?;
+                    // Ignore loans held only by the destination while checking the
+                    // right-hand side, so `r = &mut a` is not a conflict with the
+                    // loan `r` already holds. The loan helpers then reject a
+                    // referent that would outlive this binding and drop the
+                    // destination's previous loans.
+                    let saved_ignore = std::mem::take(&mut self.rebind_ignored_loans);
+                    self.rebind_ignored_loans = self.loans_only_carried_by(&var_expr.name);
+                    let value_result =
+                        self.check_expr_with_expected(&assign_expr.value, &resolved_var_ty);
+                    self.rebind_ignored_loans = saved_ignore;
+                    let value_ty = value_result?;
                     let resolved_value_ty = self.resolve_type_name(&value_ty)?;
                     let numeric_coerced =
                         Self::can_coerce_numeric(&resolved_value_ty, &resolved_var_ty);
@@ -5710,15 +5741,25 @@ impl TypeChecker {
                         });
                     }
 
-                    if let Expr::Ref(ref_expr) = assign_expr.value.as_ref() {
-                        self.finish_ref_loan(
-                            &var_expr.name,
-                            ref_expr.mutable,
-                            &ref_expr.inner,
-                            false,
-                        )?;
+                    let ref_loan = if let Expr::Ref(ref_expr) = assign_expr.value.as_ref() {
+                        Some((
+                            ref_expr.id,
+                            self.finish_ref_loan(
+                                &var_expr.name,
+                                ref_expr.mutable,
+                                &ref_expr.inner,
+                                false,
+                            )?,
+                        ))
                     } else {
                         self.carry_expr_loans(&var_expr.name, &assign_expr.value, false)?;
+                        None
+                    };
+                    if let Some((ref_id, Some(idx))) = ref_loan {
+                        let entry = self.stored_ref_loans.entry(ref_id).or_default();
+                        if !entry.contains(&idx) {
+                            entry.push(idx);
+                        }
                     }
 
                     Ok(Type::Void)
@@ -5878,16 +5919,10 @@ impl TypeChecker {
 
                 for (param, param_ty) in lit.params.iter().zip(resolved_params.iter()) {
                     self.check_no_off_stack_reference(param_ty, lit.span)?;
-                    self.variables.insert(
-                        param.name.clone(),
-                        Self::new_variable_info(param_ty.clone(), lit.span),
-                    );
+                    self.insert_variable(param.name.clone(), param_ty.clone(), lit.span);
                 }
                 for (name, cap_ty) in &owned_captures {
-                    self.variables.insert(
-                        name.clone(),
-                        Self::new_variable_info(cap_ty.clone(), lit.span),
-                    );
+                    self.insert_variable(name.clone(), cap_ty.clone(), lit.span);
                 }
 
                 self.push_borrow_scope();
@@ -6011,7 +6046,9 @@ impl TypeChecker {
                 self.check_stmt(stmt)?;
             }
             let escaping = self.loans_in_block(&arm.body);
-            self.keep_arm_result_loans(match_expr.id, &escaping);
+            let parent_depth = self.borrow_scopes.len().saturating_sub(1);
+            self.ensure_block_owners_enclose(&arm.body, parent_depth, arm.span)?;
+            self.keep_arm_result_loans(match_expr.id, &escaping, arm.span)?;
             self.pop_borrow_scope();
             match self.infer_block_result_type(&arm.body, arm.span)? {
                 MatchArmValue::Diverges => {}
@@ -6083,15 +6120,13 @@ impl TypeChecker {
             Pattern::Binding { name, .. } => {
                 let bound = self.ref_pattern_ty(ty, through_ref, ref_mutability);
                 self.check_no_off_stack_reference(&bound, span)?;
-                self.variables
-                    .insert(name.clone(), Self::new_variable_info(bound, span));
+                self.insert_variable(name.clone(), bound, span);
                 Ok(())
             }
             Pattern::At { name, pattern, .. } => {
                 let bound = self.ref_pattern_ty(ty, through_ref, ref_mutability);
                 self.check_no_off_stack_reference(&bound, span)?;
-                self.variables
-                    .insert(name.clone(), Self::new_variable_info(bound, span));
+                self.insert_variable(name.clone(), bound, span);
                 self.check_and_bind_value_pattern(pattern, ty, span, through_ref, ref_mutability)
             }
             Pattern::Lit { lit, .. } => match (lit, ty) {
@@ -7756,10 +7791,7 @@ impl TypeChecker {
 
                                     match field_pattern {
                                         Pattern::Binding { name, .. } => {
-                                            self.variables.insert(
-                                                name.clone(),
-                                                Self::new_variable_info(binding_ty, *span),
-                                            );
+                                            self.insert_variable(name.clone(), binding_ty, *span);
                                         }
                                         Pattern::Variant { .. } => {
                                             self.bind_nested_variant_pattern(
@@ -7774,10 +7806,7 @@ impl TypeChecker {
                                             // Wildcard - no binding to add
                                         }
                                         Pattern::At { name, .. } => {
-                                            self.variables.insert(
-                                                name.clone(),
-                                                Self::new_variable_info(binding_ty, *span),
-                                            );
+                                            self.insert_variable(name.clone(), binding_ty, *span);
                                         }
                                         Pattern::Lit { .. }
                                         | Pattern::Range { .. }
@@ -7821,10 +7850,7 @@ impl TypeChecker {
 
                                 match sub_pattern {
                                     Pattern::Binding { name, .. } => {
-                                        self.variables.insert(
-                                            name.clone(),
-                                            Self::new_variable_info(binding_ty, *span),
-                                        );
+                                        self.insert_variable(name.clone(), binding_ty, *span);
                                     }
                                     Pattern::Variant { .. } => {
                                         self.bind_nested_variant_pattern(
@@ -7839,10 +7865,7 @@ impl TypeChecker {
                                         // Wildcard - no binding to add
                                     }
                                     Pattern::At { name, .. } => {
-                                        self.variables.insert(
-                                            name.clone(),
-                                            Self::new_variable_info(binding_ty, *span),
-                                        );
+                                        self.insert_variable(name.clone(), binding_ty, *span);
                                     }
                                     Pattern::Lit { .. }
                                     | Pattern::Range { .. }
@@ -7858,10 +7881,7 @@ impl TypeChecker {
             }
             Pattern::Binding { name, span } => {
                 // Binding pattern binds the entire matched value
-                self.variables.insert(
-                    name.clone(),
-                    Self::new_variable_info(expr_ty.clone(), *span),
-                );
+                self.insert_variable(name.clone(), expr_ty.clone(), *span);
                 Ok(())
             }
             Pattern::Wildcard { .. } => {
@@ -7873,10 +7893,7 @@ impl TypeChecker {
                 pattern,
                 span,
             } => {
-                self.variables.insert(
-                    name.clone(),
-                    Self::new_variable_info(expr_ty.clone(), *span),
-                );
+                self.insert_variable(name.clone(), expr_ty.clone(), *span);
                 self.add_pattern_bindings(
                     pattern,
                     enum_decl,

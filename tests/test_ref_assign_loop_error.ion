@@ -1,0 +1,20 @@
+// A loop reenters, so a local from the body cannot be stored in an outer reference.
+struct S {
+    v: int;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let keep: S = S { v: 1 };
+    let mut r: &S = &keep;
+    let mut i: int = 0;
+    while i < 1 {
+        let inner: S = S { v: 5 };
+        r = &inner;
+        i = i + 1;
+    }
+    return read(r);
+}

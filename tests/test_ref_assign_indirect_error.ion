@@ -1,0 +1,19 @@
+// Copying r2 does not extend inner's scope.
+struct S {
+    v: int;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let keep: S = S { v: 1 };
+    let mut r: &S = &keep;
+    if 1 == 1 {
+        let inner: S = S { v: 5 };
+        let r2: &S = &inner;
+        r = r2;
+    }
+    return read(r);
+}

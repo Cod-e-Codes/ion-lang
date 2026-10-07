@@ -1,0 +1,12 @@
+struct S {
+    v: int;
+}
+
+fn main() -> int {
+    let mut keep: S = S { v: 1 };
+    let other: S = S { v: 3 };
+    let mut r: &S = &keep;
+    r = &other;
+    keep.v = 9;
+    return keep.v + r.v;
+}

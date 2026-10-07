@@ -1,0 +1,21 @@
+// The read is in the outer block. inner is declared two blocks deeper.
+struct S {
+    v: int;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let keep: S = S { v: 1 };
+    let mut r: &S = &keep;
+    if 1 == 1 {
+        if 1 == 1 {
+            let inner: S = S { v: 5 };
+            r = &inner;
+        }
+        return read(r);
+    }
+    return 0;
+}

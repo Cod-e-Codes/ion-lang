@@ -1,0 +1,28 @@
+// Copying the get_ref binding out of the match keeps the loan, so push conflicts.
+struct S {
+    v: int;
+}
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let keep: S = S { v: 1 };
+    let mut v: Vec<S> = Vec::new();
+    Vec::push(&mut v, S { v: 7 });
+    let mut r: &S = &keep;
+    match Vec::get_ref(&v, 0) {
+        Option::Some(x) => {
+            r = x;
+        }
+        Option::None => {}
+    };
+    Vec::push(&mut v, S { v: 8 });
+    return read(r);
+}

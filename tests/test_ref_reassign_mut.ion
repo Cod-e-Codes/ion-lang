@@ -1,0 +1,12 @@
+struct S {
+    v: int;
+}
+
+fn main() -> int {
+    let mut a: S = S { v: 1 };
+    let mut b: S = S { v: 2 };
+    let mut r: &mut S = &mut a;
+    r = &mut b;
+    a.v = 10;
+    return a.v + r.v;
+}

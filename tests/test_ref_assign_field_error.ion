@@ -1,0 +1,22 @@
+// A field path still borrows the root owner.
+struct S {
+    v: int;
+}
+
+struct T {
+    s: S;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let keep: S = S { v: 1 };
+    let mut r: &S = &keep;
+    if 1 == 1 {
+        let inner: T = T { s: S { v: 5 } };
+        r = &inner.s;
+    }
+    return read(r);
+}

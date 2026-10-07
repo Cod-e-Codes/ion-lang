@@ -1,0 +1,22 @@
+// The match result outlives the arm, so it cannot borrow a local declared there.
+struct S {
+    v: int;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let r: &S = match true {
+        true => {
+            let inner: S = S { v: 5 };
+            &inner;
+        }
+        _ => {
+            let inner: S = S { v: 6 };
+            &inner;
+        }
+    };
+    return read(r);
+}

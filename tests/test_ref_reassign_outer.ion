@@ -1,0 +1,18 @@
+struct S {
+    v: int;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let mut keep: S = S { v: 1 };
+    let other: S = S { v: 4 };
+    let mut r: &S = &keep;
+    if 1 == 1 {
+        r = &other;
+    }
+    keep.v = 9;
+    return keep.v + read(r);
+}

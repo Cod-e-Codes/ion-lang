@@ -24,6 +24,15 @@ pub(crate) fn join_ownership_states(
     }
 }
 
+/// One statement sequence. `parent_index` is that sequence's statement in the
+/// enclosing sequence. `uses` is the last use of each name inside this sequence.
+#[derive(Debug, Clone)]
+pub(crate) struct UseFrame {
+    pub(crate) parent_index: Option<usize>,
+    pub(crate) uses: HashMap<String, usize>,
+    pub(crate) depth: usize,
+}
+
 /// Pops one match-sibling frame when the match check ends, including on error.
 pub(crate) struct MatchSiblingGuard {
     loans: *mut Vec<Vec<usize>>,
@@ -243,6 +252,7 @@ impl TypeChecker {
         }
         for (idx, borrow) in self.live_borrows.iter().enumerate() {
             if ignore.contains(&idx)
+                || self.rebind_ignored_loans.contains(&idx)
                 || self.loan_ignored_as_match_sibling(idx)
                 || borrow.released
                 || borrow.owner != owner
@@ -284,6 +294,11 @@ impl TypeChecker {
         ignore: &[usize],
     ) -> Result<(), TypeCheckError> {
         self.check_borrow_allowed_except(owner, fields.as_deref(), mutable, span, ignore)?;
+        let owner_depth = self
+            .variables
+            .get(owner)
+            .map(|info| info.decl_depth)
+            .expect("owner exists after check");
         if fields.is_none() {
             let info = self
                 .variables
@@ -302,6 +317,7 @@ impl TypeChecker {
             mutable,
             released: false,
             depth: self.borrow_scopes.len(),
+            owner_depth,
             carriers: Vec::new(),
         });
         if let Some(scope) = self.borrow_scopes.last_mut() {
@@ -658,6 +674,9 @@ impl TypeChecker {
             return Ok(Vec::new());
         }
         let Some((owner, fields, span)) = self.place_from_expr(&ref_expr.inner) else {
+            if let Some((name, ended_span)) = self.ended_binding(&ref_expr.inner) {
+                return Err(Self::ref_outlived(&name, ended_span));
+            }
             self.stored_ref_loans.insert(ref_expr.id, Vec::new());
             return Ok(Vec::new());
         };
@@ -695,6 +714,12 @@ impl TypeChecker {
         Ok(created)
     }
 
+    /// Copy loans from `expr` onto `dest`. The owner's declaration must enclose
+    /// `dest`, unless this is an assignment, `dest` is not used again outside
+    /// the owner's block, and the assignment is not inside a loop. Assignment
+    /// (`in_scope` false) drops loans `dest` no longer carries when no other
+    /// binding still holds them. A loan whose owner encloses `dest` stays live
+    /// for as long as `dest` does. A narrower loan ends with the owner's block.
     pub(crate) fn carry_expr_loans(
         &mut self,
         dest: &str,
@@ -702,12 +727,39 @@ impl TypeChecker {
         in_scope: bool,
     ) -> Result<(), TypeCheckError> {
         self.ensure_stored_ref_loans(expr, &[])?;
-        for idx in self.loans_in_expr(expr) {
-            if in_scope {
-                self.add_loan_in_scope(dest, idx);
-            } else {
-                self.add_loan(dest, idx);
+        let loans = self.loans_in_expr(expr);
+        let carrier_depth = self.carrier_depth(dest, in_scope);
+        let span = expr.span();
+        let mut promote = Vec::with_capacity(loans.len());
+        for idx in &loans {
+            let Some((released, owner, owner_depth)) = self
+                .live_borrows
+                .get(*idx)
+                .map(|borrow| (borrow.released, borrow.owner.clone(), borrow.owner_depth))
+            else {
+                promote.push(false);
+                continue;
+            };
+            if released {
+                promote.push(false);
+                continue;
             }
+            promote.push(self.referent_promotes_depth(
+                &owner,
+                owner_depth,
+                dest,
+                carrier_depth,
+                span,
+            )?);
+        }
+        if !in_scope {
+            self.detach_carrier(dest, &loans);
+        }
+        for (idx, do_promote) in loans.into_iter().zip(promote) {
+            if do_promote {
+                self.promote_loan_to_depth(idx, carrier_depth, span)?;
+            }
+            self.attach_loan(dest, idx, in_scope);
         }
         Ok(())
     }
@@ -790,14 +842,19 @@ impl TypeChecker {
     /// otherwise end with that local, while the match result still holds the
     /// pointer. Loans that already belonged to an outer binding stay put.
     /// Loans this arm created are ignored by later arms, because only one arm runs.
-    pub(crate) fn keep_arm_result_loans(&mut self, match_id: ExprId, escaping: &[usize]) {
+    pub(crate) fn keep_arm_result_loans(
+        &mut self,
+        match_id: ExprId,
+        escaping: &[usize],
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
         let current = self.borrow_scopes.last().cloned().unwrap_or_default();
         let created: Vec<usize> = escaping
             .iter()
             .copied()
             .filter(|idx| current.contains(idx))
             .collect();
-        self.promote_current_scope_loans(&created);
+        self.promote_current_scope_loans(&created, span)?;
         self.record_match_loans(match_id, escaping);
         if let Some(frame) = self.match_sibling_loans.last_mut() {
             for idx in created {
@@ -806,22 +863,29 @@ impl TypeChecker {
                 }
             }
         }
+        Ok(())
     }
 
     /// Move loans this scope registered onto the parent scope so a `match`
-    /// result can keep them after the arm ends.
-    pub(crate) fn promote_current_scope_loans(&mut self, loans: &[usize]) {
+    /// result can keep them after the arm ends. The owner must enclose that
+    /// parent scope.
+    pub(crate) fn promote_current_scope_loans(
+        &mut self,
+        loans: &[usize],
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
         let Some(current) = self.borrow_scopes.last().cloned() else {
-            return;
+            return Ok(());
         };
         if self.borrow_scopes.len() < 2 {
-            return;
+            return Ok(());
         }
         let parent_depth = self.borrow_scopes.len() - 1;
         for idx in loans {
             if !current.contains(idx) {
                 continue;
             }
+            self.ensure_loan_encloses(*idx, parent_depth, span)?;
             if let Some(scope) = self.borrow_scopes.last_mut() {
                 scope.retain(|id| id != idx);
             }
@@ -835,39 +899,68 @@ impl TypeChecker {
                 scope.push(*idx);
             }
         }
+        Ok(())
     }
 
     /// Register the loan for `&` / `&mut`, including a field reborrow of an
     /// existing reference. The new binding carries that same loan.
+    /// The owner's declaration must enclose `dest`, unless this is an assignment,
+    /// `dest` is not used again outside the owner's block, and the assignment is
+    /// not inside a loop. Assignment (`in_scope` false) drops `dest`'s previous
+    /// loans when no other carrier still holds them. Returns the loan this
+    /// `&` / `&mut` registered, when it did.
     pub(crate) fn finish_ref_loan(
         &mut self,
         dest: &str,
         mutable: bool,
         inner: &Expr,
         in_scope: bool,
-    ) -> Result<(), TypeCheckError> {
+    ) -> Result<Option<usize>, TypeCheckError> {
         let Some((owner, fields, span)) = self.place_from_expr(inner) else {
-            return Ok(());
+            return Ok(None);
         };
+        let carrier_depth = self.carrier_depth(dest, in_scope);
         if self.is_projected_reborrow(&owner, fields.as_deref(), inner) {
             let parents = self.loans_of(&owner);
-            let parent = &self.live_borrows[parents[0]];
-            let under_owner = parent.owner.clone();
-            let under_fields = Self::combine_loan_fields(&parent.fields, fields.as_deref());
+            if parents.is_empty() {
+                return Ok(None);
+            }
+            let (under_owner, parent_fields) = {
+                let parent = &self.live_borrows[parents[0]];
+                (parent.owner.clone(), parent.fields.clone())
+            };
+            let under_fields = Self::combine_loan_fields(&parent_fields, fields.as_deref());
+            let promote = self.referent_promotes(&under_owner, dest, carrier_depth, span)?;
+            if !in_scope {
+                self.detach_carrier(dest, &[]);
+            }
+            let before = self.live_borrows.len();
             self.register_borrow_except(&under_owner, under_fields, mutable, span, &parents)?;
+            let created = (self.live_borrows.len() > before).then_some(self.live_borrows.len() - 1);
             for idx in parents {
-                if in_scope {
-                    self.add_loan_in_scope(dest, idx);
-                } else {
-                    self.add_loan(dest, idx);
+                if promote {
+                    self.promote_loan_to_depth(idx, carrier_depth, span)?;
                 }
+                self.attach_loan(dest, idx, in_scope);
+            }
+            if promote && let Some(idx) = created {
+                self.promote_loan_to_depth(idx, carrier_depth, span)?;
             }
             self.note_borrow_binding_scoped(dest, in_scope);
-            return Ok(());
+            return Ok(created);
         }
+        let promote = self.referent_promotes(&owner, dest, carrier_depth, span)?;
+        if !in_scope {
+            self.detach_carrier(dest, &[]);
+        }
+        let before = self.live_borrows.len();
         self.register_borrow(&owner, fields, mutable, span)?;
+        let created = (self.live_borrows.len() > before).then_some(self.live_borrows.len() - 1);
+        if promote && let Some(idx) = created {
+            self.promote_loan_to_depth(idx, carrier_depth, span)?;
+        }
         self.note_borrow_binding_scoped(dest, in_scope);
-        Ok(())
+        Ok(created)
     }
 
     pub(crate) fn note_borrow_binding(&mut self, name: &str) {
@@ -876,11 +969,330 @@ impl TypeChecker {
 
     fn note_borrow_binding_scoped(&mut self, name: &str, in_scope: bool) {
         if let Some(idx) = self.live_borrows.len().checked_sub(1) {
-            if in_scope {
-                self.add_loan_in_scope(name, idx);
-            } else {
-                self.add_loan(name, idx);
+            self.attach_loan(name, idx, in_scope);
+        }
+    }
+
+    fn attach_loan(&mut self, dest: &str, idx: usize, in_scope: bool) {
+        if in_scope {
+            self.add_loan_in_scope(dest, idx);
+        } else {
+            self.add_loan(dest, idx);
+        }
+    }
+
+    /// Depth of the binding that will carry the loan. A new `let` is declared
+    /// in the current borrow scope. An existing binding keeps the depth from
+    /// its declaration, which may be an outer block.
+    fn carrier_depth(&self, dest: &str, in_scope: bool) -> usize {
+        if in_scope {
+            self.borrow_scopes.len()
+        } else {
+            self.variables
+                .get(dest)
+                .map(|info| info.decl_depth)
+                .unwrap_or(self.borrow_scopes.len())
+        }
+    }
+
+    fn ref_outlived(owner: &str, span: Span) -> TypeCheckError {
+        TypeCheckError::ReferenceEscape {
+            description: format!("'{owner}' does not live long enough for this reference"),
+            span,
+        }
+    }
+
+    fn ensure_owner_encloses(
+        &self,
+        owner: &str,
+        carrier_depth: usize,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        match self.variables.get(owner).map(|info| info.decl_depth) {
+            Some(depth) if depth <= carrier_depth => Ok(()),
+            _ => Err(Self::ref_outlived(owner, span)),
+        }
+    }
+
+    /// `Ok(true)` when the loan should move up to `carrier`. `Ok(false)` when
+    /// the owner is narrower, but `carrier` is not used again outside that
+    /// owner's block and the assignment is not inside a loop. The loan then
+    /// stays in the owner's block and ends with it.
+    fn referent_promotes(
+        &self,
+        owner: &str,
+        carrier: &str,
+        carrier_depth: usize,
+        span: Span,
+    ) -> Result<bool, TypeCheckError> {
+        let Some(owner_depth) = self.variables.get(owner).map(|info| info.decl_depth) else {
+            return Err(Self::ref_outlived(owner, span));
+        };
+        self.referent_promotes_depth(owner, owner_depth, carrier, carrier_depth, span)
+    }
+
+    fn referent_promotes_depth(
+        &self,
+        owner: &str,
+        owner_depth: usize,
+        carrier: &str,
+        carrier_depth: usize,
+        span: Span,
+    ) -> Result<bool, TypeCheckError> {
+        if owner_depth <= carrier_depth {
+            return Ok(true);
+        }
+        if self.loop_depth > 0 || self.carrier_used_after(carrier, owner_depth) {
+            return Err(Self::ref_outlived(owner, span));
+        }
+        Ok(false)
+    }
+
+    /// True when `carrier` is read or written in a block that outlives the
+    /// owner. A use inside the owner's own statement does not count.
+    fn carrier_used_after(&self, carrier: &str, owner_depth: usize) -> bool {
+        let Some(pos) = self
+            .use_frames
+            .iter()
+            .rposition(|frame| frame.depth == owner_depth)
+        else {
+            return true;
+        };
+        let mut container = self.use_frames[pos].parent_index;
+        let mut index = pos;
+        while index > 0 {
+            index -= 1;
+            let frame = &self.use_frames[index];
+            if let Some(use_at) = frame.uses.get(carrier) {
+                match container {
+                    Some(at) if *use_at > at => return true,
+                    None => return true,
+                    _ => {}
+                }
             }
+            container = frame.parent_index;
+        }
+        false
+    }
+
+    fn ensure_loan_encloses(
+        &self,
+        idx: usize,
+        carrier_depth: usize,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        let Some(borrow) = self.live_borrows.get(idx) else {
+            return Ok(());
+        };
+        if borrow.released || borrow.owner_depth <= carrier_depth {
+            return Ok(());
+        }
+        Err(Self::ref_outlived(&borrow.owner, span))
+    }
+
+    /// Move `idx` into the borrow frame that lives as long as a binding declared
+    /// at `carrier_depth`. A loan already in that frame, or an outer one, stays.
+    fn promote_loan_to_depth(
+        &mut self,
+        idx: usize,
+        carrier_depth: usize,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        self.ensure_loan_encloses(idx, carrier_depth, span)?;
+        let Some(loan_depth) = self.live_borrows.get(idx).map(|borrow| borrow.depth) else {
+            return Ok(());
+        };
+        // Depth 0 is a parameter, declared before the function borrow frame.
+        // The function frame is depth 1. Nothing is assigned to a parameter.
+        let target_depth = if carrier_depth == 0 { 1 } else { carrier_depth };
+        if loan_depth <= target_depth || self.borrow_scopes.is_empty() {
+            return Ok(());
+        }
+        let target_frame = target_depth - 1;
+        if target_frame >= self.borrow_scopes.len() {
+            return Ok(());
+        }
+        for frame in &mut self.borrow_scopes {
+            frame.retain(|id| *id != idx);
+        }
+        self.borrow_scopes[target_frame].push(idx);
+        if let Some(borrow) = self.live_borrows.get_mut(idx) {
+            borrow.depth = target_depth;
+        }
+        Ok(())
+    }
+
+    /// Drop `name` from loans it no longer carries. Release a loan only when
+    /// no carrier remains, so another binding can keep the same loan.
+    fn detach_carrier(&mut self, name: &str, keep: &[usize]) {
+        let Some(idxs) = self.borrow_names.get(name).cloned() else {
+            return;
+        };
+        for idx in idxs {
+            if keep.contains(&idx) {
+                continue;
+            }
+            if let Some(borrow) = self.live_borrows.get_mut(idx) {
+                borrow.carriers.retain(|(carrier, _)| carrier != name);
+            }
+            if let Some(list) = self.borrow_names.get_mut(name) {
+                list.retain(|loan| *loan != idx);
+            }
+            if self
+                .borrow_names
+                .get(name)
+                .is_some_and(|list| list.is_empty())
+            {
+                self.borrow_names.remove(name);
+            }
+            let still_held = self.borrow_names.values().any(|loans| loans.contains(&idx));
+            if !still_held {
+                self.release_live(idx);
+            }
+        }
+    }
+
+    /// Loans whose only live carrier is `name`. Reassigning that binding ends
+    /// the hold, so the new referent may be the same place.
+    pub(crate) fn loans_only_carried_by(&self, name: &str) -> Vec<usize> {
+        let Some(idxs) = self.borrow_names.get(name) else {
+            return Vec::new();
+        };
+        idxs.iter()
+            .copied()
+            .filter(|idx| {
+                self.live_borrows
+                    .get(*idx)
+                    .is_some_and(|borrow| !borrow.released)
+                    && self
+                        .borrow_names
+                        .iter()
+                        .all(|(other, loans)| other == name || !loans.contains(idx))
+            })
+            .collect()
+    }
+
+    /// A place whose root variable is no longer in scope. The borrow outlived
+    /// that binding. A function name is not a local owner.
+    fn ended_binding(&self, expr: &Expr) -> Option<(String, Span)> {
+        let mut current = expr;
+        loop {
+            match current {
+                Expr::FieldAccess(acc) => current = &acc.base,
+                Expr::Index(index) => current = &index.target,
+                Expr::Var(var) => {
+                    if self.variables.contains_key(&var.name)
+                        || self.functions.contains_key(&var.name)
+                        || self.extern_functions.contains_key(&var.name)
+                    {
+                        return None;
+                    }
+                    return Some((var.name.clone(), var.span));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// A `match` arm result must not borrow an owner declared in that arm.
+    pub(crate) fn ensure_block_owners_enclose(
+        &self,
+        block: &crate::ast::Block,
+        carrier_depth: usize,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        self.ensure_stmts_owners_enclose(&block.statements, carrier_depth, span)
+    }
+
+    fn ensure_stmts_owners_enclose(
+        &self,
+        stmts: &[crate::ast::Stmt],
+        carrier_depth: usize,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        let Some(last) = stmts.last() else {
+            return Ok(());
+        };
+        match last {
+            crate::ast::Stmt::Expr(expr) => {
+                self.ensure_expr_owners_enclose(&expr.expr, carrier_depth, span)
+            }
+            crate::ast::Stmt::If(if_stmt) => {
+                self.ensure_block_owners_enclose(&if_stmt.then_block, carrier_depth, span)?;
+                if let Some(else_block) = &if_stmt.else_block {
+                    self.ensure_block_owners_enclose(else_block, carrier_depth, span)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn ensure_expr_owners_enclose(
+        &self,
+        expr: &Expr,
+        carrier_depth: usize,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        match expr {
+            Expr::Ref(ref_expr) => {
+                if let Some((owner, fields, place_span)) = self.place_from_expr(&ref_expr.inner) {
+                    if self.is_projected_reborrow(&owner, fields.as_deref(), &ref_expr.inner) {
+                        for idx in self.loans_of(&owner) {
+                            self.ensure_loan_encloses(idx, carrier_depth, place_span)?;
+                        }
+                    } else {
+                        self.ensure_owner_encloses(&owner, carrier_depth, place_span)?;
+                    }
+                } else if let Some((name, ended_span)) = self.ended_binding(&ref_expr.inner) {
+                    return Err(Self::ref_outlived(&name, ended_span));
+                }
+                Ok(())
+            }
+            Expr::Var(var) => {
+                for idx in self.loans_of(&var.name) {
+                    self.ensure_loan_encloses(idx, carrier_depth, var.span)?;
+                }
+                Ok(())
+            }
+            Expr::FieldAccess(acc) => {
+                self.ensure_expr_owners_enclose(&acc.base, carrier_depth, span)
+            }
+            Expr::TupleLit(tuple) => {
+                for element in &tuple.elements {
+                    self.ensure_expr_owners_enclose(element, carrier_depth, span)?;
+                }
+                Ok(())
+            }
+            Expr::StructLit(lit) => {
+                for field in &lit.fields {
+                    self.ensure_expr_owners_enclose(&field.value, carrier_depth, span)?;
+                }
+                Ok(())
+            }
+            Expr::EnumLit(lit) => {
+                for arg in &lit.args {
+                    self.ensure_expr_owners_enclose(arg, carrier_depth, span)?;
+                }
+                if let Some(fields) = &lit.named_fields {
+                    for (_, value) in fields {
+                        self.ensure_expr_owners_enclose(value, carrier_depth, span)?;
+                    }
+                }
+                Ok(())
+            }
+            Expr::Match(match_expr) => {
+                if let Some(recorded) = self.match_result_loans.get(&match_expr.id) {
+                    for idx in recorded {
+                        self.ensure_loan_encloses(*idx, carrier_depth, span)?;
+                    }
+                }
+                for arm in &match_expr.arms {
+                    self.ensure_block_owners_enclose(&arm.body, carrier_depth, span)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -890,6 +1302,17 @@ impl TypeChecker {
         mutable: bool,
         inner: &Expr,
     ) -> Result<(), TypeCheckError> {
+        self.check_ref_place_except(mutable, inner, &[])
+    }
+
+    /// `extra_ignore` skips loans this same `&` / `&mut` already registered.
+    /// The move walk runs after assignment records that loan.
+    pub(crate) fn check_ref_place_except(
+        &self,
+        mutable: bool,
+        inner: &Expr,
+        extra_ignore: &[usize],
+    ) -> Result<(), TypeCheckError> {
         let Some((owner, fields, span)) = self.place_from_expr(inner) else {
             return Ok(());
         };
@@ -898,15 +1321,21 @@ impl TypeChecker {
             let parent = &self.live_borrows[parents[0]];
             let under_owner = parent.owner.clone();
             let under_fields = Self::combine_loan_fields(&parent.fields, fields.as_deref());
+            let mut ignore = parents;
+            for idx in extra_ignore {
+                if !ignore.contains(idx) {
+                    ignore.push(*idx);
+                }
+            }
             return self.check_borrow_allowed_except(
                 &under_owner,
                 under_fields.as_deref(),
                 mutable,
                 span,
-                &parents,
+                &ignore,
             );
         }
-        self.check_borrow_allowed(&owner, fields.as_deref(), mutable, span)
+        self.check_borrow_allowed_except(&owner, fields.as_deref(), mutable, span, extra_ignore)
     }
 
     pub(crate) fn release_borrows_ending_at(
@@ -1146,7 +1575,12 @@ impl TypeChecker {
                 Ok(())
             }
             Expr::Ref(ref_expr) => {
-                self.check_ref_place(ref_expr.mutable, &ref_expr.inner)?;
+                let ignore = self
+                    .stored_ref_loans
+                    .get(&ref_expr.id)
+                    .cloned()
+                    .unwrap_or_default();
+                self.check_ref_place_except(ref_expr.mutable, &ref_expr.inner, &ignore)?;
                 if !matches!(ref_expr.inner.as_ref(), Expr::Var(_)) {
                     self.check_expr_borrow_operand(&ref_expr.inner)?;
                 }

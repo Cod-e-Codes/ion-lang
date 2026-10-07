@@ -333,6 +333,20 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_borrow_tuple_error.ion` - A tuple element keeps the loan
 - `test_borrow_match_alias_error.ion` - A `match` result keeps the loan
 - `test_borrow_assign_error.ion` - Assigning a reference keeps the loan
+- `test_ref_reassign.ion` - Same-scope reference reassignment ends the previous loan (exit 12)
+- `test_ref_reassign_mut.ion` - Same-scope `&mut` reassignment frees the previous owner (exit 12)
+- `test_ref_reassign_outer.ion` - Reassigning from an inner block to an outer owner (exit 13)
+- `test_ref_reassign_inside.ion` - A shorter referent used only inside its block (exit 5)
+- `test_ref_assign_shorter_error.ion` - Assigning `&inner` to an outer reference that is used later (`ReferenceEscape`)
+- `test_ref_assign_nested_error.ion` - The use is in the enclosing block (`ReferenceEscape`)
+- `test_ref_assign_branch_error.ion` - Both `if` branches assign locals that die with the `if` (`ReferenceEscape`)
+- `test_ref_assign_loop_error.ion` - A loop body local cannot be stored in an outer reference (`ReferenceEscape`)
+- `test_ref_assign_indirect_error.ion` - `r = r2` does not extend the referent (`ReferenceEscape`)
+- `test_ref_assign_field_error.ion` - `r = &inner.s` still borrows `inner` (`ReferenceEscape`)
+- `test_ref_assign_mut_shorter_error.ion` - `&mut` to a narrower local is `ReferenceEscape`
+- `test_ref_assign_get_ref_drop_error.ion` - `get_ref` copied out of the vector's block (`ReferenceEscape`)
+- `test_ref_assign_get_ref_push_error.ion` - `get_ref` copied into another binding still blocks `Vec::push` (`BorrowConflict`)
+- `test_match_yield_local_ref_error.ion` - A `match` arm cannot yield `&` of a local declared in the arm (`ReferenceEscape`)
 - `test_borrow_index_reborrow_error.ion` - `&mut a[i]` keeps the loan of `a`
 - `test_borrow_enum_ref_error.ion` - `Option::Some` keeps the loan of the reference
 - `test_borrow_struct_ref_error.ion` - `Hold { v: a }` keeps the loan of the reference

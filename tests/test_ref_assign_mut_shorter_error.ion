@@ -1,0 +1,18 @@
+// &mut to a narrower local is the same escape, not a borrow conflict.
+struct S {
+    v: int;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let mut keep: S = S { v: 1 };
+    let mut r: &mut S = &mut keep;
+    if 1 == 1 {
+        let mut inner: S = S { v: 5 };
+        r = &mut inner;
+    }
+    return read(r);
+}

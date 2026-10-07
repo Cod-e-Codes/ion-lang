@@ -1,0 +1,21 @@
+// Each branch's local dies at the end of the if.
+struct S {
+    v: int;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let keep: S = S { v: 1 };
+    let mut r: &S = &keep;
+    if 1 == 1 {
+        let a: S = S { v: 5 };
+        r = &a;
+    } else {
+        let b: S = S { v: 6 };
+        r = &b;
+    }
+    return read(r);
+}

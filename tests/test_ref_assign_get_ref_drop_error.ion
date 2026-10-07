@@ -1,0 +1,29 @@
+// The vector is dropped at the end of the if. r must not keep an element pointer.
+struct S {
+    v: int;
+}
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let keep: S = S { v: 1 };
+    let mut r: &S = &keep;
+    if 1 == 1 {
+        let mut v: Vec<S> = Vec::new();
+        Vec::push(&mut v, S { v: 7 });
+        match Vec::get_ref(&v, 0) {
+            Option::Some(x) => {
+                r = x;
+            }
+            Option::None => {}
+        };
+    }
+    return read(r);
+}
