@@ -979,7 +979,7 @@ Drop order:
 - Array and `Vec<T>` elements at whole-value destruction: increasing index `0 .. len` (then `ion_vec_free` for `Vec`).
 - `Box<T>`: drop `T` (when it needs destruction), then `ion_box_free`.
 - `String`: `ion_string_free`.
-- `Sender<T>` / `Receiver<T>`: `ion_channel_sender_drop` / `ion_channel_receiver_drop` (separate sender and receiver counts; the backing channel is freed when both counts reach 0). Remaining buffered elements of `T` are dropped before the buffer is freed.
+- `Sender<T>` / `Receiver<T>`: `ion_channel_sender_drop` / `ion_channel_receiver_drop`. Each live handle keeps the channel allocated. The last sender disconnects receive and wakes receivers before releasing its handle. The last receiver disconnects send and wakes waiters before releasing its handle. The release that drops the last handle frees the channel. Remaining buffered elements of `T` are dropped once before the buffer is freed.
 - `SendResult<T>`: drop `Closed(T)` payload when that variant is destroyed; `Sent` has no payload.
 
 `Box::unwrap` moves `T` out first, then frees the allocation; it does not drop `T`.
@@ -1142,7 +1142,7 @@ Semantics:
 - `select { ... }` waits on a set of `recv` arms. The chosen arm copies the message in the same `try_recv` (no peek-then-recv). Waiters are registered before the empty recheck so a concurrent `send` cannot park forever on a message already in the buffer. A bound `let v = recv(&mut rx)` has type `Option<T>`. An unbound `recv(&mut ry) =>` still takes the message and drops the unused `Option<T>`. `default =>` polls (`timeout_ms = 0`). `timeout(ms) =>` waits up to `ms` milliseconds (`ms` is `int`; a literal `ms < 0` is a compile error; a runtime `ms < 0` panics). Without `default` or `timeout`, the runtime waits forever (`timeout_ms = -1`). At most one of `default` or `timeout`.
 - Tuple destructuring: `let (tx, rx): (Sender<T>, Receiver<T>) = channel<T>();` (annotation required).
 - `Sender<T>` and `Receiver<T>` are `Send` when `T: Send`, so either end may be moved between threads.
-- Disconnect: the runtime tracks `sender_count` and `receiver_count` separately. Last `Sender` drop (including clones) disconnects receive, wakes waiters, and does not destroy the channel while a `Receiver` lives. Last `Receiver` drop disconnects send and wakes waiters. The backing channel is freed when both counts reach 0. Remaining buffered elements of `T` are dropped first.
+- Disconnect: the runtime tracks `sender_count` and `receiver_count` separately. Last `Sender` drop (including clones) disconnects receive, wakes waiters, and does not free the channel while any handle is still dropping or still alive. Last `Receiver` drop disconnects send and wakes waiters. Each live handle holds the allocation until that drop finishes. The last handle release frees the channel. Remaining buffered elements of `T` are dropped first.
 
 #### 7.3 `Send` Property
 

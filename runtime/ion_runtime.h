@@ -199,7 +199,8 @@ int ion_channel_select(ion_select_arm_t *arms, int n, int timeout_ms,
                        int *status_out);
 
 /**
- * Copies a sender handle and increments the sender count.
+ * Copies a sender handle. Increments the sender count and the handle count
+ * that keeps the channel allocated.
  *
  * @param src Existing sender
  * @param dst Output handle
@@ -208,12 +209,16 @@ int ion_channel_select(ion_select_arm_t *arms, int n, int timeout_ms,
 int ion_channel_clone_sender(const ion_sender_t *src, ion_sender_t *dst);
 
 /**
- * Drops a sender handle. Last sender disconnects receive.
+ * Drops a sender handle. The last sender disconnects receive and wakes
+ * receivers, then releases the handle. The channel is freed only when the
+ * last handle release reaches zero.
  */
 void ion_channel_sender_drop(ion_sender_t *sender);
 
 /**
- * Drops a receiver handle. Last receiver disconnects send.
+ * Drops a receiver handle. The last receiver disconnects send and wakes
+ * waiters, then releases the handle. The channel is freed only when the
+ * last handle release reaches zero.
  */
 void ion_channel_receiver_drop(ion_receiver_t *receiver);
 

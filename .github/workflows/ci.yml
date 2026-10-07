@@ -146,6 +146,9 @@ jobs:
             fi
             rm -f "${test}.c" "$test"
           done < <(awk -F '\t' 'NR > 1 && $2 == "run" && ($1 ~ /^test_channel_/ || $1 ~ /^test_spawn_/ || $1 == "test_join" || $1 ~ /^test_select/ || $1 == "test_try_recv") { print $1, $2, $3 }' test_expectations.tsv)
+          "$CC" $CFLAGS channel_drop_race.c .ion_test_runtime_tsan.o -I. -I.. -I../runtime -lpthread $LDFLAGS -o channel_drop_race
+          ./channel_drop_race
+          rm -f channel_drop_race
 
       - name: Large codegen smoke (Linux)
         shell: bash

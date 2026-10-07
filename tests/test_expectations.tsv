@@ -288,6 +288,7 @@ test_channel_send_call_expr.ion	run	7
 test_channel_send_field_call_expr.ion	run	11			
 test_channel_contention.ion	run	73			
 test_channel_shutdown.ion	run	91			
+test_channel_drop_race.ion	run	47			
 test_channel_send_closed.ion	run	9			
 test_channel_queued_string_drop.ion	run	0			
 test_send_result_send_ok.ion	run	7			

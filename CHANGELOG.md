@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Runtime**: Each live `Sender` and `Receiver` holds the channel allocation. The last sender disconnects receive and wakes receivers before releasing that hold. The last receiver disconnects send and wakes waiters before releasing that hold. The channel is freed only when the last hold reaches zero, after that drop's wake returns. This impacts every program that links the runtime: relink with this `ion_runtime.c`. Ion source is unchanged. Disconnect, blocking, `SendResult`, and `Option` are unchanged.
 - **Docs**: There is no prelude. Import `stdlib/option.ion` and `stdlib/result.ion`, or declare `Option` and `Result` in the program. `SendResult`, `TrySendResult`, `TryRecvResult`, and `SetResult` are declared in the program. Section 8.7 includes `Err(-3)` when `fs::read_to_string_result` reads bytes that are not UTF-8. The idiom guide says `Vec::set` returns `SetResult`. A reference capture stays rejected. An owned capture is a move closure. README Quick Start includes bash. The extension package filename follows `ion-vscode/package.json`. `docs/TUTORIAL.md` is a first program. Copy-paste idioms live in `docs/verified-patterns.md`. This impacts readers of those docs. Ion source, generated C, and the runtime are unchanged.
 
 ## 0.4.3 - 2026-10-07

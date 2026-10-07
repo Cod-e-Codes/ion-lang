@@ -431,9 +431,13 @@ struct ion_select_waiter {
  * disconnected, and only after its waiter count is published and the claim
  * is retried. A successful operation locks and signals only when that count
  * is non-zero. Last sender drop disconnects receive and wakes receivers.
- * Last receiver drop disconnects send and wakes senders. Counts are separate.
- * Destroy runs only when both are 0, after copies have finished, and drops
- * each buffered element once. Capacity 1 uses the same rules. */
+ * Last receiver drop disconnects send and wakes senders. sender_count and
+ * receiver_count are separate and hit zero before that drop's wake returns,
+ * so they are not the free signal. Each live handle holds handle_count.
+ * That count is released only after disconnect and wake. The release that
+ * takes handle_count from 1 to 0 destroys the channel, after in-progress
+ * copies have finished, and drops each buffered element once. Capacity 1
+ * uses the same rules. */
 struct ion_channel_t {
   atomic_size_t head;
   char pad_head[64];
@@ -447,7 +451,7 @@ struct ion_channel_t {
   size_t one_lap;
   atomic_int sender_count;
   atomic_int receiver_count;
-  atomic_int destroy_once;
+  atomic_int handle_count;
   atomic_int senders_waiting;
   atomic_int receivers_waiting;
   atomic_int select_waiting;
@@ -544,8 +548,8 @@ static void ion_channel_notify_senders(struct ion_channel_t *ch) {
   pthread_mutex_unlock(&ch->wait_mu);
 }
 
-/* Walk published slots once. Called only when both handle counts are 0, so no
- * send or recv is still copying. */
+/* Walk published slots once. Called only from the last handle release, so no
+ * send, recv, or other drop is still using the channel. */
 static void ion_channel_discard_buffered(struct ion_channel_t *ch) {
   size_t head;
   size_t tail;
@@ -729,7 +733,7 @@ int ion_channel_new(size_t elem_size, int capacity, void (*drop_fn)(void *),
   atomic_init(&ch->tail, 0);
   atomic_init(&ch->sender_count, 1);
   atomic_init(&ch->receiver_count, 1);
-  atomic_init(&ch->destroy_once, 0);
+  atomic_init(&ch->handle_count, 2);
   atomic_init(&ch->senders_waiting, 0);
   atomic_init(&ch->receivers_waiting, 0);
   atomic_init(&ch->select_waiting, 0);
@@ -786,11 +790,9 @@ static void ion_channel_close_tail(struct ion_channel_t *ch) {
   atomic_fetch_or_explicit(&ch->tail, ch->mark_bit, memory_order_seq_cst);
 }
 
-static void ion_channel_maybe_destroy(struct ion_channel_t *ch) {
-  int senders = atomic_load_explicit(&ch->sender_count, memory_order_acquire);
-  int receivers = atomic_load_explicit(&ch->receiver_count, memory_order_acquire);
-  if (senders <= 0 && receivers <= 0 &&
-      atomic_exchange_explicit(&ch->destroy_once, 1, memory_order_acq_rel) == 0)
+/* Last use of ch on this thread. The caller that observes 1 frees it. */
+static void ion_channel_release(struct ion_channel_t *ch) {
+  if (atomic_fetch_sub_explicit(&ch->handle_count, 1, memory_order_acq_rel) == 1)
     ion_channel_destroy(ch);
 }
 
@@ -857,6 +859,7 @@ int ion_channel_clone_sender(const ion_sender_t *src, ion_sender_t *dst) {
   if (!src || !src->channel || !dst)
     return -1;
   ch = (struct ion_channel_t *)src->channel;
+  atomic_fetch_add_explicit(&ch->handle_count, 1, memory_order_acq_rel);
   atomic_fetch_add_explicit(&ch->sender_count, 1, memory_order_acq_rel);
   dst->channel = src->channel;
   dst->elem_size = src->elem_size;
@@ -875,7 +878,7 @@ void ion_channel_sender_drop(ion_sender_t *sender) {
     ion_channel_close_tail(ch);
     ion_channel_notify_receivers(ch);
   }
-  ion_channel_maybe_destroy(ch);
+  ion_channel_release(ch);
 }
 
 void ion_channel_receiver_drop(ion_receiver_t *receiver) {
@@ -891,7 +894,7 @@ void ion_channel_receiver_drop(ion_receiver_t *receiver) {
     ion_channel_notify_senders(ch);
     ion_channel_notify_receivers(ch);
   }
-  ion_channel_maybe_destroy(ch);
+  ion_channel_release(ch);
 }
 
 int ion_channel_try_send(const ion_sender_t *sender, const void *value) {

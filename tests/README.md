@@ -109,6 +109,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_channel_basic.ion` - Channel operations
 - `test_channel_contention.ion` - Four `clone_sender` producers, one receiver until `None`; sum exit 73
 - `test_channel_shutdown.ion` - Worker `recv` until `None` after `send_jobs` drops the sender (exit 91)
+- `test_channel_drop_race.ion` - 64 rounds of send, spawn recv-until-`None`, drop the sender on main (exit 47)
 - `test_channel_send_closed.ion` - Send after last receiver drop returns `Closed(T)` (exit 9)
 - `test_channel_queued_string_drop.ion` - Queued `String` values dropped on channel destroy (exit 0)
 - `test_channel_capacity.ion` - `channel<int>(4)` same-thread send/recv (exit 10)
@@ -625,6 +626,7 @@ test_myfeature.ion	run	42
 Special cases (not in the manifest):
 
 - `test_multifile.ion`: multi-file mode harness in `test_runner.sh`
+- `channel_drop_race.c`: concurrent sender and receiver drop, including a cloned sender. Linux TSan CI compiles and runs it. Not a manifest row.
 - `test_array_bounds_panic.ion` / `test_slice_bounds_panic.ion` / `test_assign_index_oob.ion` / `test_div_zero_panic.ion` / `test_signed_div_overflow_panic.ion` / `test_shift_width_panic.ion`: codegen-only in manifest; runtime panic is manual (see below)
 
 ## Environment Variables
@@ -632,7 +634,7 @@ Special cases (not in the manifest):
 - `COMPILER`: Path to the ion-compiler binary (default: `../target/release/ion-compiler`)
 - `ION_BUILD`: Path to the ion-build binary (default: `../target/release/ion-build`)
 - `CC`: C compiler to use (default: `gcc`)
-- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`), a leak-sanitizer (LSan) step (`detect_leaks=1`) on `Box::unwrap` tests plus named heap-drop `run` tests (Vec/Box/tuple/array/`break`/`continue`/`Vec::set` of `String`), thread sanitizer (TSan) on `test_channel_*` / `test_spawn_*` / `test_join` / `test_select*` / `test_try_recv` run tests, and runs the full harness with `-Wall -Wextra -Werror` on Linux. macOS CI runs the harness with Clang.
+- `CFLAGS`: Extra C compiler flags for generated C and the precompiled runtime (default: empty). CI uses `-fsanitize=address,undefined` for sanitizer smoke (`detect_leaks=0`), a leak-sanitizer (LSan) step (`detect_leaks=1`) on `Box::unwrap` tests plus named heap-drop `run` tests (Vec/Box/tuple/array/`break`/`continue`/`Vec::set` of `String`), thread sanitizer (TSan) on `test_channel_*` / `test_spawn_*` / `test_join` / `test_select*` / `test_try_recv` run tests and on `channel_drop_race.c`, and runs the full harness with `-Wall -Wextra -Werror` on Linux. macOS CI runs the harness with Clang.
 - `LDFLAGS`: Extra C linker flags for generated test executables (default: empty). Pair with `CFLAGS` for sanitizer runtime flags when needed.
 - `RUNTIME_OBJ`: Path to the precompiled runtime object file (default: `.ion_test_runtime.o` in `tests/`). Rebuilt when `runtime/ion_runtime.c` is newer than the object.
 

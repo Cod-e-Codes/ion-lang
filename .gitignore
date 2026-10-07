@@ -32,6 +32,7 @@ examples/**/*.o
 # ------------------------------------
 tests/*.tmp
 tests/*.c
+!tests/channel_drop_race.c
 
 # ------------------------------------
 # 6. Editor / OS Files
