@@ -1,0 +1,28 @@
+// A use of the get_ref binding at the start of a while covers a later push in that loop (BorrowConflict).
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 2);
+    match Vec::get_ref(&v, 0) {
+        Option::Some(x) => {
+            let mut i: int = 0;
+            while i < 2 {
+                if x != 2 {
+                    return 1;
+                }
+                if true {
+                    Vec::push(&mut v, 1);
+                }
+                i = i + 1;
+            }
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+    return 0;
+}

@@ -1,0 +1,18 @@
+// push in an if nested in else, then a use of the loan after the outer if (BorrowConflict).
+fn len_of(v: &Vec<int>) -> int {
+    return Vec::len(v);
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let r: &Vec<int> = &v;
+    if false {
+        return 0;
+    } else {
+        if true {
+            Vec::push(&mut v, 2);
+        }
+    }
+    return len_of(r);
+}

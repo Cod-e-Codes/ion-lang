@@ -1,0 +1,26 @@
+// Vec::push in the else of an if inside the get_ref arm (BorrowConflict).
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 2);
+    match Vec::get_ref(&v, 0) {
+        Option::Some(x) => {
+            if false {
+                return 0;
+            } else {
+                Vec::push(&mut v, 1);
+            }
+            if x != 2 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+    return 0;
+}

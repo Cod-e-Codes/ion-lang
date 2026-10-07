@@ -26,11 +26,16 @@ pub(crate) fn join_ownership_states(
 
 /// One statement sequence. `parent_index` is that sequence's statement in the
 /// enclosing sequence. `uses` is the last use of each name inside this sequence.
+/// `loop_depth` is the loop nest when the sequence was entered. `boundary` is a
+/// function, fn literal, or `spawn` body: a later use in the caller is not a
+/// use inside that region.
 #[derive(Debug, Clone)]
 pub(crate) struct UseFrame {
     pub(crate) parent_index: Option<usize>,
     pub(crate) uses: HashMap<String, usize>,
     pub(crate) depth: usize,
+    pub(crate) loop_depth: usize,
+    pub(crate) boundary: bool,
 }
 
 /// Pops one match-sibling frame when the match check ends, including on error.
@@ -805,7 +810,8 @@ impl TypeChecker {
 
     /// Loans whose carriers are not used in `branch` and are not used again
     /// after the current statement. The other arm of an `if` may borrow the
-    /// same place.
+    /// same place. A later use in an outer sequence, or any use in an
+    /// enclosing loop, keeps the loan.
     pub(crate) fn loans_unused_in_branch(&self, branch: &Block) -> Vec<usize> {
         let mut names = Vec::new();
         for stmt in &branch.statements {
@@ -826,16 +832,54 @@ impl TypeChecker {
             if carriers.is_empty() || carriers.iter().any(|name| used.contains(*name)) {
                 continue;
             }
-            let used_later = carriers.iter().any(|name| {
-                self.borrow_last_use
-                    .get(*name)
-                    .is_some_and(|at| self.current_stmt_index.is_some_and(|current| *at > current))
-            });
+            let used_later = carriers.iter().any(|name| self.carrier_used_later(name));
             if !used_later {
                 ignore.push(idx);
             }
         }
         ignore
+    }
+
+    /// True when `name` is read or written after the statement now being
+    /// checked, or anywhere in a loop that encloses that statement. The walk
+    /// stops at a function, fn literal, or `spawn` boundary.
+    fn carrier_used_later(&self, name: &str) -> bool {
+        if self
+            .borrow_last_use
+            .get(name)
+            .is_some_and(|at| self.current_stmt_index.is_some_and(|current| *at > current))
+        {
+            return true;
+        }
+        if self.loop_depth > 0 && self.borrow_last_use.contains_key(name) {
+            return true;
+        }
+        let Some(current) = self.use_frames.last() else {
+            return false;
+        };
+        if current.boundary || self.use_frames.len() < 2 {
+            return false;
+        }
+        let mut container = current.parent_index;
+        let mut index = self.use_frames.len() - 1;
+        while index > 0 {
+            index -= 1;
+            let frame = &self.use_frames[index];
+            if let Some(&use_at) = frame.uses.get(name) {
+                let after = match container {
+                    Some(at) => use_at > at,
+                    None => true,
+                };
+                if after || frame.loop_depth > 0 {
+                    return true;
+                }
+            }
+            if frame.boundary {
+                break;
+            }
+            container = frame.parent_index;
+        }
+        false
     }
 
     /// Keep loans the arm yields. A loan created on a local in the arm would

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fix**: An `if` or `else` that does not name a lasting borrow keeps that loan when the carrier is used later in the same `match` arm, in an outer block, or anywhere in an enclosing loop. `Vec::push` and `handle::insert` in that branch are `BorrowConflict`. A binding used only before the branch, with no later use and not inside a loop, still allows the call. A disjoint field stays legal. This is not an ABI change. Relink is not required. Generated C for programs that still compile is unchanged.
+
 ## 0.4.5 - 2026-10-07
 
 - **Fix**: Method `get_ref` (`v.get_ref`, `a.slots.get_ref`) shared-borrows that place while the `Option<&T>` loan is live. `handle::insert` and `handle::remove` on that arena, and `Vec::push` on that vector, are `BorrowConflict` in the `Some` arm or while a `let` of the result is live. A disjoint field, such as `vm.stack` during `vm.code.get_ref`, stays legal. This rejects programs that peeked `slots` and then called `insert` or `remove` in that arm. Other programs are unchanged. Generated C for programs that still compile is unchanged, so they do not need to be regenerated or relinked.

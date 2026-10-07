@@ -1,0 +1,24 @@
+// v.push in an if inside a v.get_ref arm, then a use of the binding (BorrowConflict).
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    v.push(2);
+    match v.get_ref(0) {
+        Option::Some(x) => {
+            if true {
+                v.push(1);
+            }
+            if x != 2 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+    return 0;
+}

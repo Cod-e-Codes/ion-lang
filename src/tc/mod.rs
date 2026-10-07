@@ -2263,6 +2263,21 @@ impl TypeChecker {
     }
 
     fn check_stmt_seq(&mut self, stmts: &[Stmt]) -> Result<(), TypeCheckError> {
+        self.track_stmt_uses(stmts, false, true)
+    }
+
+    /// Record last-use indexes for `stmts`, then check each statement.
+    /// `boundary` is a function, fn literal, or `spawn` body. `release` drops
+    /// loans registered at this sequence's depth after each statement. Match
+    /// arms and the other blocks that previously walked statements directly
+    /// pass `release: false`, so a loan the arm yields is still live for
+    /// `keep_arm_result_loans`.
+    fn track_stmt_uses(
+        &mut self,
+        stmts: &[Stmt],
+        boundary: bool,
+        release: bool,
+    ) -> Result<(), TypeCheckError> {
         let last = ownership::lasting_borrow_uses(stmts);
         let saved_last = std::mem::replace(&mut self.borrow_last_use, last.clone());
         let saved_index = self.current_stmt_index;
@@ -2271,6 +2286,8 @@ impl TypeChecker {
             parent_index: saved_index,
             uses: last,
             depth,
+            loop_depth: self.loop_depth,
+            boundary,
         });
         let mut result = Ok(());
         for (index, stmt) in stmts.iter().enumerate() {
@@ -2279,7 +2296,9 @@ impl TypeChecker {
                 result = Err(err);
                 break;
             }
-            self.release_borrows_ending_at(index, &self.borrow_last_use.clone(), depth);
+            if release {
+                self.release_borrows_ending_at(index, &self.borrow_last_use.clone(), depth);
+            }
         }
         self.use_frames.pop();
         self.borrow_last_use = saved_last;
@@ -2333,9 +2352,10 @@ impl TypeChecker {
             }
         }
 
-        // Check function body
+        // Check function body. The frame is a boundary so a use in a caller
+        // is not a use inside this function.
         self.push_borrow_scope();
-        self.check_stmt_seq(&function.body.statements)?;
+        self.track_stmt_uses(&function.body.statements, true, true)?;
         self.pop_borrow_scope();
 
         // Restore previous scope and return type
@@ -3253,9 +3273,7 @@ impl TypeChecker {
 
                 // Check body
                 self.push_borrow_scope();
-                for inner in &unsafe_stmt.body.statements {
-                    self.check_stmt(inner)?;
-                }
+                self.track_stmt_uses(&unsafe_stmt.body.statements, false, false)?;
                 self.pop_borrow_scope();
 
                 // Exit unsafe context
@@ -3263,9 +3281,7 @@ impl TypeChecker {
             }
             Stmt::Scope(scope_stmt) => {
                 self.push_borrow_scope();
-                for inner in &scope_stmt.body.statements {
-                    self.check_stmt(inner)?;
-                }
+                self.track_stmt_uses(&scope_stmt.body.statements, false, false)?;
                 self.pop_borrow_scope();
             }
         }
@@ -3679,12 +3695,7 @@ impl TypeChecker {
         let prev_spawn = self.in_spawn;
         self.in_spawn = true;
         self.push_borrow_scope();
-        let body_result = (|| {
-            for inner in &body.statements {
-                self.check_stmt(inner)?;
-            }
-            Ok(())
-        })();
+        let body_result = self.track_stmt_uses(&body.statements, true, false);
         self.pop_borrow_scope();
         self.variables = parent_vars;
         self.in_spawn = prev_spawn;
@@ -3715,9 +3726,7 @@ impl TypeChecker {
                 self.insert_variable(name.clone(), recv_ty, arm.span);
             }
             self.push_borrow_scope();
-            for inner in &arm.body.statements {
-                self.check_stmt(inner)?;
-            }
+            self.track_stmt_uses(&arm.body.statements, false, false)?;
             self.pop_borrow_scope();
             if block_falls_through(&arm.body) {
                 fallthrough.push(self.variables.clone());
@@ -3726,9 +3735,7 @@ impl TypeChecker {
         if let Some(body) = &select_stmt.default_body {
             self.variables = before.clone();
             self.push_borrow_scope();
-            for inner in &body.statements {
-                self.check_stmt(inner)?;
-            }
+            self.track_stmt_uses(&body.statements, false, false)?;
             self.pop_borrow_scope();
             if block_falls_through(body) {
                 fallthrough.push(self.variables.clone());
@@ -3753,9 +3760,7 @@ impl TypeChecker {
             }
             if let Some(body) = &select_stmt.timeout_body {
                 self.push_borrow_scope();
-                for inner in &body.statements {
-                    self.check_stmt(inner)?;
-                }
+                self.track_stmt_uses(&body.statements, false, false)?;
                 self.pop_borrow_scope();
                 if block_falls_through(body) {
                     fallthrough.push(self.variables.clone());
@@ -4941,9 +4946,7 @@ impl TypeChecker {
                     if borrows_vec_for_arm {
                         self.attach_latest_loan_to_ref_patterns(&arm.pattern);
                     }
-                    for stmt in &arm.body.statements {
-                        self.check_stmt(stmt)?;
-                    }
+                    self.track_stmt_uses(&arm.body.statements, false, false)?;
                     let escaping = self.loans_in_block(&arm.body);
                     let parent_depth = self.borrow_scopes.len().saturating_sub(1);
                     self.ensure_block_owners_enclose(&arm.body, parent_depth, arm.span)?;
@@ -5935,9 +5938,7 @@ impl TypeChecker {
                 }
 
                 self.push_borrow_scope();
-                for stmt in &lit.body.statements {
-                    self.check_stmt(stmt)?;
-                }
+                self.track_stmt_uses(&lit.body.statements, true, false)?;
                 self.pop_borrow_scope();
 
                 self.variables = prev_vars;
@@ -6051,9 +6052,7 @@ impl TypeChecker {
                 }
             }
             self.push_borrow_scope();
-            for stmt in &arm.body.statements {
-                self.check_stmt(stmt)?;
-            }
+            self.track_stmt_uses(&arm.body.statements, false, false)?;
             let escaping = self.loans_in_block(&arm.body);
             let parent_depth = self.borrow_scopes.len().saturating_sub(1);
             self.ensure_block_owners_enclose(&arm.body, parent_depth, arm.span)?;

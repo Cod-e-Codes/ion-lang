@@ -210,6 +210,13 @@ test_vec_get_ref_scan_nested_vec.ion	run	0
 test_vec_get_ref_return_error.ion	error		ReferenceEscape		
 test_vec_get_ref_mut_error.ion	error		BorrowConflict		
 test_vec_method_get_ref_push_error.ion	error		BorrowConflict		
+test_get_ref_if_push_error.ion	error		BorrowConflict		
+test_get_ref_else_push_error.ion	error		BorrowConflict		
+test_get_ref_method_if_push_error.ion	error		BorrowConflict		
+test_get_ref_while_if_push_error.ion	error		BorrowConflict		
+test_get_ref_loop_if_push_error.ion	error		BorrowConflict		
+test_get_ref_if_after_use.ion	run	0			
+test_borrow_if_nested_else_error.ion	error		BorrowConflict		
 test_string_get.ion	run	0			
 test_string_get_method.ion	run	0			
 test_slice_get_ref_scan.ion	run	0			
@@ -424,6 +431,7 @@ test_handle_arena_escape_error.ion	error		ReferenceEscape
 test_arena_slots_get_ref_insert_error.ion	error		BorrowConflict		
 test_arena_slots_get_ref_remove_error.ion	error		BorrowConflict		
 test_arena_slots_get_ref_let_error.ion	error		BorrowConflict		
+test_arena_slots_get_ref_if_insert_error.ion	error		BorrowConflict		
 test_loop_continue_nested_if_drop.ion	run	4
 test_loop_continue_nested_if_drop.ion	cgen			ion_string_free(b)
 test_loop_continue_nested_if_drop.ion	cgen			ion_string_free(a)

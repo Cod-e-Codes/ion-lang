@@ -44,6 +44,8 @@ library may rely on without an unstable marker:
 
 0.3.4 claims a channel slot with atomics on the success path and waits with pthread only when the buffer is full, empty, or disconnected. `HashMap` probes and `for_each` borrow slots with `Vec::get_ref`. `ion_box_alloc` and `ion_box_free` are inline `malloc` and `free`. Ion source for channels and `Box` is unchanged. Programs that link the runtime must relink. Programs that import `stdlib/map.ion` must be recompiled. C that called `ion_box_alloc` or `ion_box_free` from `ion_runtime.o` must be recompiled against this header. See CHANGELOG 0.3.4.
 
+0.4.6 rejects `Vec::push` and `handle::insert` inside an `if` or `else` while a `get_ref` loan is still used later in that arm, in an outer block, or anywhere in an enclosing loop. The same rule applies to any lasting borrow, not only `get_ref`. A binding used only before the branch, with no later use and not inside a loop, stays legal. A disjoint field stays legal. This is not an ABI change. Relink is not required. See CHANGELOG 0.4.6.
+
 0.4.5 rejects a method `get_ref` while that `Option<&T>` loan is live and a later `&mut` covers the same place. `handle::insert` and `handle::remove` after `arena.slots.get_ref`, and `Vec::push` after `v.get_ref`, are `BorrowConflict`. A disjoint field, such as `vm.stack` during `vm.code.get_ref`, stays legal. This is not an ABI change. Relink is not required. See CHANGELOG 0.4.5.
 
 0.4.4 keeps each live Sender and Receiver holding the channel until that drop finishes waking waiters. The channel is freed only when the last hold reaches zero. Programs that link the runtime must relink. Ion source is unchanged. Disconnect, blocking, `SendResult`, and `Option` are unchanged. See CHANGELOG 0.4.4.
