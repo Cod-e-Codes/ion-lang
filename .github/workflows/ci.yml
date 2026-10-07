@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moves from 24.04 to 26.04 between 2026-10-19 and 2026-11-19.
+    # Pin 24.04, the image release.yml already uses, until 26.04 is tested here.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
