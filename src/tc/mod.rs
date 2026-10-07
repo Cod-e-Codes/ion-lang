@@ -2677,15 +2677,24 @@ impl TypeChecker {
                         )?;
                     }
 
-                    // Shared borrow on root owner while `Option<&T>` from get_ref is live.
-                    if let Expr::Call(call) = init
-                        && (call.callee == "Vec::get_ref"
-                            || call.callee == "Slice::get_ref"
-                            || call.callee == "Arena::get_ref")
-                        && call.args.len() == 2
+                    // Shared borrow of the get_ref place while `Option<&T>` is live.
+                    // Qualified calls loan the root owner. Method calls loan the
+                    // receiver place (binding or field path).
+                    if let Some(place) = self.get_ref_place(init) {
+                        self.register_borrow(
+                            &place.owner,
+                            place.fields.clone(),
+                            false,
+                            place.span,
+                        )?;
+                        self.note_borrow_binding(&let_stmt.name);
+                    } else if let Expr::Call(call) = init
+                        && Self::is_get_ref_call(init)
                     {
                         self.register_get_ref_borrow_from_receiver(&call.args[0], let_stmt.span)?;
                         self.note_borrow_binding(&let_stmt.name);
+                    } else if self.is_container_method_get_ref(init) {
+                        return Err(Self::missing_get_ref_owner(let_stmt.span));
                     }
 
                     if !matches!(init, Expr::Ref(_)) {
@@ -4819,15 +4828,7 @@ impl TypeChecker {
                 } else {
                     expr_ty.clone()
                 };
-                let get_ref_owner = if Self::is_get_ref_call(&match_expr.expr) {
-                    if let Expr::Call(call) = match_expr.expr.as_ref() {
-                        self.vec_owner_from_get_ref_receiver(&call.args[0])
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                let get_ref_place = self.get_ref_place(match_expr.expr.as_ref());
 
                 let before_match = self.variables.clone();
                 let mut fallthrough_envs: Vec<HashMap<String, VariableInfo>> = Vec::new();
@@ -4836,15 +4837,20 @@ impl TypeChecker {
                 for arm in &match_expr.arms {
                     self.variables = before_match.clone();
 
-                    let borrows_vec_for_arm = get_ref_owner.is_some()
+                    let borrows_vec_for_arm = get_ref_place.is_some()
                         && matches!(
                             &arm.pattern,
                             Pattern::Variant { variant, .. } if variant == "Some"
                         );
                     if borrows_vec_for_arm {
                         self.push_borrow_scope();
-                        if let Some((ref owner, owner_span)) = get_ref_owner {
-                            self.register_borrow(owner, None, false, owner_span)?;
+                        if let Some(place) = &get_ref_place {
+                            self.register_borrow(
+                                &place.owner,
+                                place.fields.clone(),
+                                false,
+                                place.span,
+                            )?;
                         }
                     }
 
@@ -5810,7 +5816,10 @@ impl TypeChecker {
                     Ok(Type::Void)
                 }
                 Expr::FieldAccess(acc) => {
-                    let base_ty = self.check_expr(&acc.base)?;
+                    // Borrow operand: the root binding is not a separate whole-owner
+                    // loan. The field-path check below rejects an overlapping field
+                    // and a parent `&mut`, and allows a disjoint field.
+                    let base_ty = self.check_expr_with_context(&acc.base, true)?;
                     let assignable = matches!(
                         &base_ty,
                         Type::Ref { mutable: true, .. } | Type::Struct(_) | Type::Generic { .. }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fix**: Method `get_ref` (`v.get_ref`, `a.slots.get_ref`) shared-borrows that place while the `Option<&T>` loan is live. `handle::insert` and `handle::remove` on that arena, and `Vec::push` on that vector, are `BorrowConflict` in the `Some` arm or while a `let` of the result is live. A disjoint field, such as `vm.stack` during `vm.code.get_ref`, stays legal. This rejects programs that peeked `slots` and then called `insert` or `remove` in that arm. Other programs are unchanged. Generated C for programs that still compile is unchanged, so they do not need to be regenerated or relinked.
+
 ## 0.4.4 - 2026-10-07
 
 - **Runtime**: Each live `Sender` and `Receiver` holds the channel allocation. The last sender disconnects receive and wakes receivers before releasing that hold. The last receiver disconnects send and wakes waiters before releasing that hold. The channel is freed only when the last hold reaches zero, after that drop's wake returns. This impacts every program that links the runtime: relink with this `ion_runtime.c`. Ion source is unchanged. Disconnect, blocking, `SendResult`, and `Option` are unchanged.

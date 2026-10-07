@@ -1,0 +1,28 @@
+// handle::insert takes &mut Arena while a.slots.get_ref is live (BorrowConflict).
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut a: Arena<int> = handle::new();
+    let h: Handle = handle::insert(&mut a, 1);
+    match a.slots.get_ref(h.index) {
+        Option::Some(slot) => {
+            handle::insert(&mut a, 2);
+            match slot {
+                Slot::Occupied { generation: _g, value: v } => {
+                    return v;
+                }
+                Slot::Free { generation: _g2, next: _n } => {
+                    return 1;
+                }
+            }
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

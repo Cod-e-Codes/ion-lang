@@ -1,0 +1,22 @@
+// let of a.slots.get_ref keeps the slot-vector loan across insert (BorrowConflict).
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut a: Arena<int> = handle::new();
+    let _h: Handle = handle::insert(&mut a, 1);
+    let r = a.slots.get_ref(0);
+    handle::insert(&mut a, 2);
+    match r {
+        Option::Some(_) => {
+            return 0;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}

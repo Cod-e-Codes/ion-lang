@@ -1,5 +1,12 @@
 use super::*;
 
+/// Owner and optional field path shared-borrowed by a live `get_ref` result.
+pub(crate) struct GetRefPlace {
+    pub owner: String,
+    pub fields: Option<Vec<String>>,
+    pub span: Span,
+}
+
 impl TypeChecker {
     /// Check if a call expression is to a built-in function and type-check it.
     /// Returns Some(return_type) if it's a built-in, None otherwise.
@@ -867,7 +874,81 @@ impl TypeChecker {
         )
     }
 
-    /// Register a shared borrow on the root owner while `Option<&T>` from get_ref is live.
+    /// Place shared-borrowed while `Option<&T>` from `get_ref` is live.
+    ///
+    /// Qualified `Vec::get_ref` / `Slice::get_ref` / `Arena::get_ref` keep the
+    /// root binding (`fields: None`), including `&order.lines`. Method
+    /// `place.get_ref` on `Vec`, `Slice`, an array, or `Arena` uses the
+    /// receiver place, so `a.slots.get_ref` loans `slots` and `v.get_ref`
+    /// loans `v`. A user method named `get_ref` is not a loan.
+    pub(crate) fn get_ref_place(&self, expr: &Expr) -> Option<GetRefPlace> {
+        match expr {
+            Expr::Call(call)
+                if (call.callee == "Vec::get_ref"
+                    || call.callee == "Slice::get_ref"
+                    || call.callee == "Arena::get_ref")
+                    && call.args.len() == 2 =>
+            {
+                let (owner, span) = self.vec_owner_from_get_ref_receiver(&call.args[0])?;
+                Some(GetRefPlace {
+                    owner,
+                    fields: None,
+                    span,
+                })
+            }
+            Expr::MethodCall(method_call) if method_call.method == "get_ref" => {
+                if !self.receiver_is_get_ref_container(&method_call.receiver) {
+                    return None;
+                }
+                let place_expr = match method_call.receiver.as_ref() {
+                    Expr::Ref(r) => r.inner.as_ref(),
+                    other => other,
+                };
+                let (owner, fields, span) = self.place_from_expr(place_expr)?;
+                Some(GetRefPlace {
+                    owner,
+                    fields,
+                    span,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Method `get_ref` on `Vec`, `Slice`, an array, or `Arena`, whether or not
+    /// the receiver has a local place.
+    pub(crate) fn is_container_method_get_ref(&self, expr: &Expr) -> bool {
+        let Expr::MethodCall(method_call) = expr else {
+            return false;
+        };
+        method_call.method == "get_ref" && self.receiver_is_get_ref_container(&method_call.receiver)
+    }
+
+    fn receiver_is_get_ref_container(&self, receiver: &Expr) -> bool {
+        let Some(raw) = self.type_info.expr_types.get(&receiver.id()) else {
+            return false;
+        };
+        let ty = self.resolve_type_name(raw).unwrap_or_else(|_| raw.clone());
+        Self::is_get_ref_container(&ty)
+    }
+
+    fn is_get_ref_container(ty: &Type) -> bool {
+        match Self::extract_type_name_for_method(ty) {
+            Ok((name, _, _)) => name == "Vec" || name == "Slice" || name == "Arena",
+            Err(_) => false,
+        }
+    }
+
+    pub(crate) fn missing_get_ref_owner(span: Span) -> TypeCheckError {
+        TypeCheckError::TypeMismatch {
+            expected: "&Vec<T> or &[]T with a local owner".to_string(),
+            got: "expression with a local owner".to_string(),
+            span,
+        }
+    }
+
+    /// Register a shared borrow on the root owner while `Option<&T>` from a
+    /// qualified `get_ref` call is live. Errors when that call has no local owner.
     pub(crate) fn register_get_ref_borrow_from_receiver(
         &mut self,
         receiver: &Expr,
@@ -877,11 +958,7 @@ impl TypeChecker {
             self.register_borrow(&owner, None, false, owner_span)?;
         } else {
             let _ = self.check_expr(receiver)?;
-            return Err(TypeCheckError::TypeMismatch {
-                expected: "&Vec<T> or &[]T with a local owner".to_string(),
-                got: "expression with a local owner".to_string(),
-                span,
-            });
+            return Err(Self::missing_get_ref_owner(span));
         }
         Ok(())
     }
