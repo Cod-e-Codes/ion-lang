@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.6 - 2026-10-07
+
 - **Fix**: An `if` or `else` that does not name a lasting borrow keeps that loan when the carrier is used later in the same `match` arm, in an outer block, or anywhere in an enclosing loop. `Vec::push` and `handle::insert` in that branch are `BorrowConflict`. A binding used only before the branch, with no later use and not inside a loop, still allows the call. A disjoint field stays legal. This is not an ABI change. Relink is not required. Generated C for programs that still compile is unchanged.
 
 ## 0.4.5 - 2026-10-07
