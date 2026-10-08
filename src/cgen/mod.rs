@@ -7173,16 +7173,20 @@ impl Codegen {
                 {
                     continue;
                 }
+                let wrapper = format!("ion_ret_{name}");
+                let guard = format!("ION_TYPEDEF_{name}");
+                self.writeln(&format!("#ifndef {guard}"));
+                self.writeln(&format!("#define {guard}"));
                 self.writeln(&format!(
                     "typedef {} {}[{}];",
                     self.type_to_c(inner),
                     name,
                     size
                 ));
-                let wrapper = format!("ion_ret_{name}");
                 self.writeln(&format!(
                     "typedef struct {wrapper} {{ {name} _data; }} {wrapper};"
                 ));
+                self.writeln("#endif");
                 self.generated_types.insert(name.clone(), true);
                 self.generated_types.insert(wrapper, true);
                 progressed = true;
