@@ -3182,6 +3182,8 @@ impl Codegen {
         let tmp = format!("_ion_cl_{}", self.temp_var_counter);
         self.temp_var_counter += 1;
         self.write("({ ");
+        // The call may be absent. Naming the function here keeps -Wunused-function quiet.
+        self.write(&format!("(void){}; ", lit.symbol));
         self.write(&format!("{struct_name} {tmp}; "));
         for (name, ty) in &lit.captures {
             let src = self.closure_capture_source(name);

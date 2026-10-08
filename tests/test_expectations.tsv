@@ -331,6 +331,7 @@ test_closure_assign.ion	cgen			env->x
 test_closure_assign_agg.ion	run	0
 test_closure_assign_drop.ion	run	1
 test_closure_drop_box.ion	run	0
+test_closure_drop_box.ion	cgen			(void)ion_closure_fn
 test_closure_drop_sender.ion	run	0
 test_closure_drop_sender.ion	cgen			ion_channel_sender_drop(&(f.tx))
 test_channel_discard_receiver.ion	run	0
