@@ -41,6 +41,7 @@ APIs that would return `&T` in Rust must use owned values, indices, or the patte
 - Stack by default; `Box<T>` for explicit heap
 - `defer` for deterministic cleanup at scope exit (`break` / `continue` included)
 - `Vec<T>`, `String`, tuples, and arrays drop at scope end (elements of a dropping `T`, then the backing array for `Vec`)
+- An owned operand that is not moved into a binding, return, store, or owning parameter is an expression temporary. It is evaluated once and dropped at the end of that full expression, after the result is produced. A place is not a temporary.
 
 ## Unsafe boundaries
 

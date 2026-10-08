@@ -1,5 +1,6 @@
 mod builtins;
 mod drop;
+mod temps;
 mod types;
 
 use self::types::{
@@ -129,6 +130,12 @@ pub struct Codegen {
     /// The rest are flushed after the statement, and never after that store.
     pending_field_nulls: Vec<PendingNull>,
     pending_field_null_set: std::collections::HashSet<String>,
+    /// IR node address to the C temporary that evaluated it once.
+    bound_operands: Vec<(usize, String)>,
+    /// While capturing a temporary's initializer, that node must not read as its own name.
+    temp_init_root: Option<usize>,
+    /// Temps declared before an array initializer, dropped after it is stored.
+    temp_hoist: Vec<temps::TempPlan>,
 }
 
 impl Default for Codegen {
@@ -183,6 +190,9 @@ impl Codegen {
             multi_file_module: None,
             pending_field_nulls: Vec::new(),
             pending_field_null_set: std::collections::HashSet::new(),
+            bound_operands: Vec::new(),
+            temp_init_root: None,
+            temp_hoist: Vec::new(),
         }
     }
 
@@ -425,7 +435,7 @@ impl Codegen {
         self.write(&format!(
             "; {msg} _msg = {{0}}; _msg.tag = {step}; _msg.payload.p{step} = "
         ));
-        self.generate_expr_with_type(value, Some(value_type));
+        self.write_temp_expr_typed(value, true, value_type);
         self.write(
             "; if (ion_channel_send(&_ep.tx, &_msg) != 0) ion_panic(\"session send failed\"); _ep; })",
         );
@@ -1803,6 +1813,10 @@ impl Codegen {
     }
 
     fn emit_string_compare_operand(&mut self, expr: &IREexpr) {
+        if self.bound_operand_name(expr).is_some() {
+            self.generate_expr(expr);
+            return;
+        }
         if let IREexpr::StringLit(value) = expr {
             self.write_ion_string_from_literal(value);
             return;
@@ -1878,6 +1892,18 @@ impl Codegen {
         result_type: &Type,
         extra_parens: bool,
     ) {
+        if matches!(op, BinOp::And | BinOp::Or) {
+            if extra_parens {
+                self.write("(");
+            }
+            self.write_temp_expr(left, false);
+            self.write(&format!(" {} ", self.op_to_c(op)));
+            self.write_temp_expr(right, false);
+            if extra_parens {
+                self.write(")");
+            }
+            return;
+        }
         if matches!(op, BinOp::Eq | BinOp::Ne)
             && self.is_string_compare_operand(left)
             && self.is_string_compare_operand(right)
@@ -2057,11 +2083,14 @@ impl Codegen {
             "{c_ty} {lt} = {left_code}; {c_ty} {rt} = {right_code}; "
         ));
         let eq_expr = self.tuple_eq_c_expr(&lt, &rt, elements);
-        if matches!(op, BinOp::Ne) {
-            self.write(&format!("!({eq_expr}); }})"));
-        } else {
-            self.write(&format!("{eq_expr}; }})"));
-        }
+        let tuple_ty = Type::Tuple {
+            elements: elements.to_vec(),
+        };
+        self.emit_eq_result(
+            op,
+            &eq_expr,
+            &[(&lt, left, &tuple_ty), (&rt, right, &tuple_ty)],
+        );
     }
 
     fn tuple_eq_c_expr(&self, left: &str, right: &str, elements: &[Type]) -> String {
@@ -2111,13 +2140,51 @@ impl Codegen {
             self.write(&format!(
                 "{c_ty} {lt} = {left_code}; {c_ty} {rt} = {right_code}; "
             ));
-            self.value_eq_c_expr(&lt, &rt, ty)
+            let cmp = self.value_eq_c_expr(&lt, &rt, ty);
+            self.emit_eq_result(op, &cmp, &[(&lt, left, ty), (&rt, right, ty)]);
+            return;
         };
         if matches!(op, BinOp::Ne) {
             self.write(&format!("!({cmp}); }})"));
         } else {
             self.write(&format!("{cmp}; }})"));
         }
+    }
+
+    /// Yield a comparison. A temporary aggregate copied into `lt`/`rt` is the
+    /// only owner of that value, so drop it after the comparison reads it.
+    fn emit_eq_result(&mut self, op: BinOp, cmp: &str, temps: &[(&str, &IREexpr, &Type)]) {
+        let drop_any = temps.iter().any(|(name, expr, ty)| {
+            let _ = name;
+            self.type_needs_drop(ty) && self.eq_temp_is_sole_owner(expr)
+        });
+        let yielded = if matches!(op, BinOp::Ne) {
+            format!("!({cmp})")
+        } else {
+            cmp.to_string()
+        };
+        if !drop_any {
+            self.write(&format!("{yielded}; }})"));
+            return;
+        }
+        let n = self.temp_var_counter;
+        self.temp_var_counter += 1;
+        let flag = format!("_ion_eq{n}");
+        self.write(&format!("int {flag} = {yielded}; "));
+        for (name, expr, ty) in temps {
+            if self.type_needs_drop(ty) && self.eq_temp_is_sole_owner(expr) {
+                let drop_stmt = self.capture_drop_at_path(name, ty);
+                let text = drop_stmt.trim();
+                if !text.is_empty() {
+                    self.write(text);
+                    if !text.ends_with(';') && !text.ends_with('}') {
+                        self.write(";");
+                    }
+                    self.write(" ");
+                }
+            }
+        }
+        self.write(&format!("{flag}; }})"));
     }
 
     fn value_eq_c_expr(&self, left: &str, right: &str, ty: &Type) -> String {
@@ -2496,7 +2563,7 @@ impl Codegen {
             let c_ty = self.type_to_c(ty);
             self.write_indent();
             self.write(&format!("{c_ty} {tmp} = "));
-            self.generate_expr_with_type(value, Some(ty));
+            self.write_temp_expr_typed(value, true, ty);
             self.writeln(";");
             let consumed = self.consume_dest_before_drop(dest_key, local_ion);
             if !consumed {
@@ -2511,7 +2578,7 @@ impl Codegen {
             self.write_indent();
             self.write(place);
             self.write(" = ");
-            self.generate_expr_with_type(value, Some(ty));
+            self.write_temp_expr_typed(value, true, ty);
             self.writeln(";");
         }
     }
@@ -2536,7 +2603,7 @@ impl Codegen {
             self.write(" ");
             self.write(&tmp);
             self.write(" = ");
-            self.generate_expr_with_type(value, Some(ty));
+            self.write_temp_expr_typed(value, true, ty);
             self.write("; ");
             let consumed = self.consume_dest_before_drop(dest_key, local_ion);
             if !consumed {
@@ -2550,7 +2617,7 @@ impl Codegen {
         } else {
             self.write(place);
             self.write(" = ");
-            self.generate_expr_with_type(value, Some(ty));
+            self.write_temp_expr_typed(value, true, ty);
         }
     }
 
@@ -2568,6 +2635,7 @@ impl Codegen {
         let tmp = format!("_ion_arr_{}", self.temp_var_counter);
         self.temp_var_counter += 1;
         let c_ty = self.type_to_c(ty);
+        self.begin_temp_hoist(value, true);
         self.write_indent();
         if let Some(src) = self.field_access_c_path(value) {
             self.writeln(&format!("{c_ty} {tmp};"));
@@ -2578,6 +2646,7 @@ impl Codegen {
             self.generate_expr_with_type(value, Some(ty));
             self.writeln(";");
         }
+        self.end_temp_hoist();
         if drop_old && self.type_needs_drop(ty) {
             let consumed = self.consume_dest_before_drop(dest_key, local_ion);
             if !consumed {
@@ -2606,6 +2675,7 @@ impl Codegen {
         self.temp_var_counter += 1;
         let c_ty = self.type_to_c(ty);
         self.write("({ ");
+        self.begin_temp_hoist_inline(value, true);
         if let Some(src) = self.field_access_c_path(value) {
             self.write(&format!(
                 "{c_ty} {tmp}; memcpy({tmp}, {src}, sizeof({tmp})); "
@@ -2615,6 +2685,7 @@ impl Codegen {
             self.generate_expr_with_type(value, Some(ty));
             self.write("; ");
         }
+        self.end_temp_hoist_inline();
         if drop_old && self.type_needs_drop(ty) {
             let consumed = self.consume_dest_before_drop(dest_key, local_ion);
             if !consumed {
@@ -2686,7 +2757,7 @@ impl Codegen {
         self.write(" ");
         self.write(&tmp);
         self.write(" = ");
-        self.generate_expr_with_type(value, Some(elem_ty));
+        self.write_temp_expr_typed(value, true, elem_ty);
         self.write("; ");
         let consumed =
             self.consume_dest_before_drop(Self::index_place_key(target, index).as_deref(), None);
@@ -2824,11 +2895,13 @@ impl Codegen {
                     && let Type::Array { inner, size, .. } = &ret_ty
                 {
                     let base_type = self.type_to_c(inner);
+                    self.begin_temp_hoist(value, true);
                     self.writeln(&format!("static {} _ret_array[{}] = ", base_type, size));
                     self.write_indent();
                     self.write("    ");
                     self.generate_expr_with_type(value, Some(&ret_ty));
                     self.writeln(";");
+                    self.end_temp_hoist();
                     self.write_indent();
                     self.writeln("ret_val = _ret_array;");
                 }
@@ -2883,7 +2956,11 @@ impl Codegen {
                         }
                     }
 
-                    self.generate_expr_with_type(value, return_ty.as_ref());
+                    if let Some(ref ty) = return_ty {
+                        self.write_temp_expr_typed(value, true, ty);
+                    } else {
+                        self.write_temp_expr(value, true);
+                    }
                     self.writeln(";");
 
                     if needs_memcpy {
@@ -3621,6 +3698,12 @@ impl Codegen {
     fn generate_stmt(&mut self, stmt: &IRStmt) {
         match stmt {
             IRStmt::Let(let_stmt) => {
+                let hoist_mark = self.temp_hoist.len();
+                if let Some(init) = let_stmt.init.as_ref()
+                    && self.type_is_array(&let_stmt.ty)
+                {
+                    self.begin_temp_hoist(init, true);
+                }
                 let c_name = self.alloc_c_name(&let_stmt.name);
                 if let Some(ref init) = let_stmt.init
                     && let Some((array_name, size, elem_ty)) =
@@ -3643,6 +3726,7 @@ impl Codegen {
                         temp
                     ));
                     self.finish_let(&let_stmt.name, &c_name, &let_stmt.ty, Some(init));
+                    self.end_temp_hoist_to(hoist_mark);
                     return;
                 }
                 self.write_indent();
@@ -3714,11 +3798,13 @@ impl Codegen {
                                 ));
                                 self.emit_ion_channel_new(elem_type, &[], &c_name, &temp_rx_name);
                                 self.scope_register_c(&let_stmt.name, c_name.clone(), &let_stmt.ty);
+                                self.end_temp_hoist_to(hoist_mark);
                                 return;
                             }
                         } else if *tuple_destructure_index == Some(1) {
                             self.write(" = _channel_rx_temp;");
                             self.writeln("");
+                            self.end_temp_hoist_to(hoist_mark);
                             return;
                         }
                     }
@@ -3740,6 +3826,7 @@ impl Codegen {
                             scrutinee_type.as_ref(),
                         );
                         self.finish_let(&let_stmt.name, &c_name, &let_stmt.ty, Some(match_expr));
+                        self.end_temp_hoist_to(hoist_mark);
                         return;
                     }
 
@@ -3749,10 +3836,10 @@ impl Codegen {
                         if let IREexpr::StringLit(value) = init {
                             self.write_ion_string_from_literal(value);
                         } else {
-                            self.generate_expr_with_type(init, Some(&let_stmt.ty));
+                            self.write_temp_expr_typed(init, true, &let_stmt.ty);
                         }
                     } else if matches!(&let_stmt.ty, Type::Generic { .. }) {
-                        self.generate_expr_with_type(init, Some(&let_stmt.ty));
+                        self.write_temp_expr_typed(init, true, &let_stmt.ty);
                     } else if matches!(let_stmt.ty, Type::Int) {
                         // Special handling: if declared type is Int but init is a variable,
                         // it might actually be a Vec pointer (type inference limitation).
@@ -3760,19 +3847,20 @@ impl Codegen {
                         if let IREexpr::Var(_) = init {
                             // For variables, generate as-is - the type might be wrong but
                             // we'll let the C compiler handle it or fix in a later pass
-                            self.generate_expr_with_type(init, Some(&let_stmt.ty));
+                            self.write_temp_expr_typed(init, true, &let_stmt.ty);
                         } else {
-                            self.generate_expr_with_type(init, Some(&let_stmt.ty));
+                            self.write_temp_expr_typed(init, true, &let_stmt.ty);
                         }
                     } else {
                         // Pass type context so enum/struct literals can use monomorphized names
-                        self.generate_expr_with_type(init, Some(&let_stmt.ty));
+                        self.write_temp_expr_typed(init, true, &let_stmt.ty);
                     }
                 } else if self.needs_drop(&let_stmt.ty) {
                     self.write(" = 0");
                 }
 
                 self.writeln(";");
+                self.end_temp_hoist_to(hoist_mark);
                 self.finish_let(
                     &let_stmt.name,
                     &c_name,
@@ -3825,7 +3913,7 @@ impl Codegen {
                         self.indent_level += 1;
                         self.write_indent();
                         self.write(&format!("{c_ty} {val_tmp} = "));
-                        self.generate_expr_with_type(value, Some(value_type));
+                        self.write_temp_expr_typed(value, true, value_type);
                         self.writeln(";");
                         self.write_indent();
                         self.writeln(&format!(
@@ -3869,7 +3957,7 @@ impl Codegen {
                         self.indent_level += 1;
                         self.write_indent();
                         self.write(&format!("{c_ty} {val_tmp} = "));
-                        self.generate_expr_with_type(&args[1], Some(&value_type));
+                        self.write_temp_expr_typed(&args[1], true, &value_type);
                         self.writeln(";");
                         self.write_indent();
                         self.writeln(&format!(
@@ -3889,10 +3977,7 @@ impl Codegen {
                         self.flush_pending_field_nulls();
                     }
                     IREexpr::Call { callee, .. } if callee == "Vec::set" => {
-                        self.write_indent();
-                        self.write("(void)(");
-                        self.generate_expr(expr);
-                        self.writeln(");");
+                        self.write_temp_stmt(expr);
                         self.mark_moves_in_expr(expr);
                         self.flush_pending_field_nulls();
                     }
@@ -3928,7 +4013,11 @@ impl Codegen {
                             self.write_indent();
                             self.write(&c_place);
                             self.write(" = ");
-                            self.generate_expr_with_type(value, ty.as_ref());
+                            if let Some(ty) = ty.as_ref() {
+                                self.write_temp_expr_typed(value, true, ty);
+                            } else {
+                                self.write_temp_expr(value, true);
+                            }
                             self.writeln(";");
                         }
                         self.mark_moves_in_expr(expr);
@@ -3996,16 +4085,14 @@ impl Codegen {
                             self.write_indent();
                             self.generate_expr(target);
                             self.write(" = ");
-                            self.generate_expr_with_type(value, Some(field_ty));
+                            self.write_temp_expr_typed(value, true, field_ty);
                             self.writeln(";");
                         }
                         self.mark_moves_in_expr(expr);
                         self.flush_pending_field_nulls();
                     }
                     _ => {
-                        self.write_indent();
-                        self.generate_expr(expr);
-                        self.writeln(";");
+                        self.write_temp_stmt(expr);
                         self.mark_moves_in_expr(expr);
                         self.flush_pending_field_nulls();
                     }
@@ -4024,7 +4111,7 @@ impl Codegen {
                 // Generate: if (cond) { ... } else { ... }
                 self.write_indent();
                 self.write("if (");
-                self.generate_expr_conditional(&ir_if.cond);
+                self.write_temp_conditional(&ir_if.cond);
                 self.writeln(") {");
                 self.indent_level += 1;
                 self.generate_block(&ir_if.then_block);
@@ -4054,7 +4141,7 @@ impl Codegen {
                 self.loop_unwind_depth = self.scope_stack.len();
                 self.write_indent();
                 self.write("while (");
-                self.generate_expr_conditional(&ir_while.cond);
+                self.write_temp_conditional(&ir_while.cond);
                 self.writeln(") {");
                 self.indent_level += 1;
                 self.generate_block(&ir_while.body);
@@ -4138,6 +4225,11 @@ impl Codegen {
     }
 
     fn generate_expr_with_type(&mut self, expr: &IREexpr, type_context: Option<&Type>) {
+        if let Some(name) = self.bound_operand_name(expr) {
+            let name = name.to_string();
+            self.write(&name);
+            return;
+        }
         match expr {
             IREexpr::Lit(value) => {
                 self.write(&value.to_string());
@@ -4218,7 +4310,7 @@ impl Codegen {
                         self.c_enum_literal(&result_c, "SendResult", "Closed", Some(&val_tmp));
                     self.write("({ ");
                     self.write(&format!("{c_ty} {val_tmp} = "));
-                    self.generate_expr_with_type(value, Some(value_type));
+                    self.write_temp_expr_typed(value, true, value_type);
                     self.write("; ");
                     self.write(&format!(
                         "int {st_tmp} = ion_channel_send({sender_addr}, &{val_tmp}); "
@@ -4669,7 +4761,11 @@ impl Codegen {
                             if i > 0 {
                                 self.write(", ");
                             }
-                            self.generate_expr_with_type(value_expr, elem_ty.as_ref());
+                            if let Some(ty) = elem_ty.as_ref() {
+                                self.write_temp_expr_typed(value_expr, true, ty);
+                            } else {
+                                self.write_temp_expr(value_expr, true);
+                            }
                         }
                         self.write("}");
                     }
@@ -4680,7 +4776,11 @@ impl Codegen {
                         if i > 0 {
                             self.write(", ");
                         }
-                        self.generate_expr_with_type(elem, elem_ty.as_ref());
+                        if let Some(ty) = elem_ty.as_ref() {
+                            self.write_temp_expr_typed(elem, true, ty);
+                        } else {
+                            self.write_temp_expr(elem, true);
+                        }
                     }
                     self.write("}");
                 }
@@ -4817,7 +4917,11 @@ impl Codegen {
                 } else {
                     self.write(&c_place);
                     self.write(" = ");
-                    self.generate_expr_with_type(value, ty.as_ref());
+                    if let Some(ty) = ty.as_ref() {
+                        self.write_temp_expr_typed(value, true, ty);
+                    } else {
+                        self.write_temp_expr(value, true);
+                    }
                 }
             }
             IREexpr::AssignIndex {
@@ -4843,7 +4947,11 @@ impl Codegen {
                     let bounds_check = self.bounds_check_for_target_type(Some(&resolved_target));
                     let mut value_code = String::new();
                     let old = std::mem::replace(&mut self.output, value_code);
-                    self.generate_expr_with_type(value, elem_ty.as_ref());
+                    if let Some(ty) = elem_ty.as_ref() {
+                        self.write_temp_expr_typed(value, true, ty);
+                    } else {
+                        self.write_temp_expr(value, true);
+                    }
                     value_code = std::mem::replace(&mut self.output, old);
                     if self.in_unsafe_block {
                         self.emit_index_access(target, index, bounds_check.as_ref());
@@ -4946,7 +5054,7 @@ impl Codegen {
                 } else {
                     self.generate_expr(target);
                     self.write(" = ");
-                    self.generate_expr_with_type(value, Some(field_ty));
+                    self.write_temp_expr_typed(value, true, field_ty);
                 }
             }
             IREexpr::FnLiteral(lit) => {
@@ -5655,7 +5763,7 @@ impl Codegen {
         let c_ty = self.type_to_c(&stored_ty);
         self.write_indent();
         self.write(&format!("{c_ty} {match_var_name} = "));
-        self.generate_expr(expr);
+        self.write_temp_expr(expr, true);
         self.writeln(";");
         self.mark_moves_in_expr(expr);
         self.scope_register_binding(&match_var_name, &stored_ty);
@@ -5683,7 +5791,7 @@ impl Codegen {
                     if pattern_cond.is_some() {
                         self.write(" && ");
                     }
-                    self.generate_expr(guard);
+                    self.write_temp_expr(guard, false);
                 }
                 self.writeln(") {");
             } else if opened {
@@ -5759,14 +5867,14 @@ impl Codegen {
                 "{} {} = *",
                 monomorphized_enum_name, match_var_name
             ));
-            self.generate_expr(expr);
+            self.write_temp_expr(expr, true);
             self.writeln(";");
         } else {
             self.write(&format!(
                 "{} {} = ",
                 monomorphized_enum_name, match_var_name
             ));
-            self.generate_expr(expr);
+            self.write_temp_expr(expr, true);
             self.writeln(";");
             self.mark_moves_in_expr(expr);
         }
@@ -5853,7 +5961,7 @@ impl Codegen {
                     if let Some(ref guard) = arm.guard {
                         self.write_indent();
                         self.write("if (");
-                        self.generate_expr(guard);
+                        self.write_temp_expr(guard, false);
                         self.writeln(") {");
                         self.indent_level += 1;
                         if let Some((result_var, result_type)) = match_result {
@@ -6139,7 +6247,7 @@ impl Codegen {
         if let Some(ref guard) = arm.guard {
             self.write_indent();
             self.write("if (");
-            self.generate_expr(guard);
+            self.write_temp_expr(guard, false);
             self.writeln(") {");
             self.indent_level += 1;
             if let Some((result_var, result_type)) = match_result {
@@ -8520,5 +8628,71 @@ fn main() -> int {
             label.trim().ends_with(": ;"),
             "break label must be an empty statement so the next declaration is valid C, got:\n{c}"
         );
+    }
+
+    #[test]
+    fn owned_temporary_is_evaluated_once_and_freed() {
+        let src = r#"fn make() -> String {
+    return String::from("0");
+}
+fn hello(n: int) -> String {
+    return String::from("hello");
+}
+fn take(s: String) {
+}
+fn main() -> int {
+    let a: String = String::from("a");
+    if a != String::from("0") {
+    }
+    if make() != make() {
+    }
+    let n: int = String::len(&hello(1));
+    take(String::from("abc"));
+    String::from("discard");
+    if false && String::len(&String::from("skip")) == 2 {
+    }
+    return n;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let hello_calls = c.matches("hello(1)").count();
+        assert_eq!(
+            hello_calls, 1,
+            "String::len must evaluate the call once, got {hello_calls} in:\n{c}"
+        );
+        assert!(
+            c.contains("ion_string_free"),
+            "owned comparison and len temporaries must be freed in:\n{c}"
+        );
+        assert!(
+            c.contains("&&"),
+            "&& must stay a short-circuit operator in:\n{c}"
+        );
+        let skip_at = c.find("ion_string_from_literal(\"skip\"").unwrap_or(usize::MAX);
+        let and_at = c.rfind("&&").unwrap_or(0);
+        assert!(
+            skip_at > and_at,
+            "the right-hand side of && must be the right operand, got:\n{c}"
+        );
+    }
+
+    #[test]
+    fn len_of_call_with_ref_arg_is_one_eval() {
+        let src = r#"fn hello(tx: &Sender<int>) -> String {
+    return String::from("hello");
+}
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let n: int = String::len(&hello(&tx));
+    return n;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let calls = c.matches("hello(&tx)").count();
+        assert_eq!(calls, 1, "one call, got {calls} in:\n{c}");
     }
 }

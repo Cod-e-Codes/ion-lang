@@ -127,6 +127,10 @@ jobs:
           test_closure_drop_box 0
           test_closure_drop_sender 0
           test_channel_discard_receiver 0
+          test_owned_temp_drop 0
+          test_fmt_int_to_string 0
+          test_handle_arena_copy_struct 42
+          test_stdlib_path 5
           EOF
 
       - name: Generated C thread sanitizer (Linux)

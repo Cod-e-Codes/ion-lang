@@ -1,0 +1,179 @@
+// Owned rvalues used by comparison, borrow, projection, or a discarded
+// statement are evaluated once and dropped at the end of that expression.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+struct Guard {
+    tx: Sender<int>;
+    n: int;
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+        send(self.tx, self.n);
+    }
+}
+
+struct Pair {
+    name: String;
+}
+
+fn make(tx: Sender<int>) -> String {
+    send(&tx, 1);
+    return String::from("0");
+}
+
+fn hello(tx: Sender<int>) -> String {
+    send(&tx, 2);
+    return String::from("hello");
+}
+
+fn make_vec(tx: Sender<int>) -> Vec<int> {
+    send(&tx, 3);
+    let mut v: Vec<int> = Vec::with_capacity(4);
+    Vec::push(&mut v, 7);
+    return v;
+}
+
+fn make_vec_cap(tx: Sender<int>) -> Vec<int> {
+    send(&tx, 4);
+    return Vec::with_capacity(4);
+}
+
+fn make_word(tx: Sender<int>) -> String {
+    send(&tx, 5);
+    return String::from("ab");
+}
+
+fn make_pair(tx: Sender<int>) -> Pair {
+    send(&tx, 6);
+    return Pair { name: String::from("a") };
+}
+
+fn make_tup(tx: Sender<int>) -> (String, int) {
+    send(&tx, 7);
+    return (String::from("a"), 1);
+}
+
+fn side(tx: Sender<int>, v: int) -> bool {
+    send(&tx, v);
+    return false;
+}
+
+fn make_guard(tx: Sender<int>, n: int) -> Guard {
+    return Guard { tx: tx, n: n };
+}
+
+fn make_box(tx: Sender<int>, n: int) -> Box<Guard> {
+    return Box::new(Guard { tx: tx, n: n });
+}
+
+fn hold(b: Box<Guard>) {
+}
+
+fn eat(s: String) {
+}
+
+fn extra(tx: Sender<int>) -> String {
+    send(&tx, 15);
+    return String::from("z");
+}
+
+fn produce(tx: Sender<int>) -> int {
+    let a: String = String::from("a");
+    if a != String::from("0") {
+    }
+    if make(clone_sender(&tx)) != make(clone_sender(&tx)) {
+        return 20;
+    }
+    let n: int = String::len(&hello(clone_sender(&tx)));
+    if n != 5 {
+        return 21;
+    }
+    let vlen: int = Vec::len(&make_vec(clone_sender(&tx)));
+    if vlen != 1 {
+        return 22;
+    }
+    let vcap: int = Vec::capacity(&make_vec_cap(clone_sender(&tx)));
+    if vcap < 4 {
+        return 23;
+    }
+    let ch: u8 = make_word(clone_sender(&tx))[0];
+    if ch != 97 as u8 {
+        return 24;
+    }
+    if make_pair(clone_sender(&tx)) != make_pair(clone_sender(&tx)) {
+        return 25;
+    }
+    let plen: int = String::len(&make_pair(clone_sender(&tx)).name);
+    if plen != 1 {
+        return 26;
+    }
+    let moved: String = make_pair(clone_sender(&tx)).name;
+    if String::len(&moved) != 1 {
+        return 27;
+    }
+    if make_tup(clone_sender(&tx)) != make_tup(clone_sender(&tx)) {
+        return 28;
+    }
+    if side(clone_sender(&tx), 8) && side(clone_sender(&tx), 9) {
+        return 29;
+    }
+    make_guard(clone_sender(&tx), 10);
+    make_box(clone_sender(&tx), 11);
+    hold(make_box(clone_sender(&tx), 12));
+    eat(String::from("abc"));
+    let mut buf: String = String::from("a");
+    String::push_str(&mut buf, extra(clone_sender(&tx)));
+    if String::len(&buf) != 2 {
+        return 30;
+    }
+    match File::open(String::from("ion-owned-temp-missing")) {
+        Option::Some(owned) => {
+            let mut file: File = owned;
+            File::close(&mut file);
+            return 31;
+        }
+        Option::None => {
+        }
+    }
+    return 0;
+}
+
+fn main() -> int {
+    let (tx, rx): (Sender<int>, Receiver<int>) = channel<int>(64);
+    let status: int = produce(tx);
+    if status != 0 {
+        return status;
+    }
+    let checks: [int; 17] = [1, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7, 8, 10, 11, 12, 15];
+    let mut i: int = 0;
+    while i < 17 {
+        match recv(&mut rx) {
+            Option::Some(got) => {
+                if got != checks[i] {
+                    return 100 + i;
+                }
+            }
+            Option::None => {
+                return 100 + i;
+            }
+        }
+        i = i + 1;
+    }
+    match recv(&mut rx) {
+        Option::Some(extra_val) => {
+            return 40 + extra_val;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

@@ -1009,6 +1009,8 @@ fn process() {
 
 Uninitialized `Box`/`Vec`/`String` bindings are zero-initialized to `NULL` so drop is a no-op.
 
+An owned operand that is not moved into a binding, a return, a store, or an owning parameter is an expression temporary. It is evaluated once. It is dropped at the end of the full expression that created it, after that expression's result is produced. A full expression is a statement, an `if` or `while` condition, a `let` initializer, an assignment right-hand side, a `return` operand, or a match scrutinee. Arguments of one call share that call. A temporary moved into an owning parameter, an aggregate field or payload, or the expression result is not dropped there. The new owner drops it. Temporaries of one full expression drop in reverse creation order. `&&` and `||` keep short-circuit behavior: each side is its own full expression, so the right-hand side's temporaries are created and dropped only when that side runs. A place (a binding, or a field or index of a place) is not a temporary. Borrowing a place does not drop the owner's value. `ion_panic` still aborts with no drops. A reference to a temporary cannot be stored or returned (Section 5.4), so the borrow ends with the full expression.
+
 ### 6. Memory Model
 
 #### 6.1 Stack and Heap
@@ -1031,7 +1033,7 @@ Ion guarantees that every owned value is dropped exactly once, except when:
 
 - The program terminates abnormally (e.g., process abort).
 
-Scope exit drops the value a binding still owns. Replacing a value drops it at the assignment instead.
+Scope exit drops the value a binding still owns. Replacing a value drops it at the assignment instead. An expression temporary is dropped at the end of its full expression (Section 5.5). That includes an owned value used only by `==` or `!=`, by a borrow, by a field or `len` projection, or as a discarded statement. The operand is evaluated once. A move into a binding, return, store, or owning parameter is not an extra drop.
 
 In particular:
 

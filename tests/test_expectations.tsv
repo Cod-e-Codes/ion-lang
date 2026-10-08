@@ -617,3 +617,5 @@ test_get_ref_qualified_disjoint.ion	run	7
 test_get_ref_qualified_same_field_error.ion	error		BorrowConflict
 test_replace_consume_cgen.ion	cgen			b = _ion_set_	ion_box_free(b)
 test_replace_field_null_cgen.ion	cgen			w.b = _ion_set_	= NULL
+test_owned_temp_drop.ion	run	0
+test_owned_temp_drop.ion	cgen			ion_string_free

@@ -838,7 +838,7 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
         for (word, _) in KEYWORDS {
             assert!(
-                labels.iter().any(|label| *label == *word),
+                labels.contains(word),
                 "completion missing {word}"
             );
             let in_grammar = grammar.contains(&format!("|{word}|"))

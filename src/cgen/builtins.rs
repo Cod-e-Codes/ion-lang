@@ -374,6 +374,8 @@ impl Codegen {
         }
 
         // Vec::len<T>(vec: &Vec<T>) -> int
+        // The operand text is one evaluation. A temporary is a C name, so the
+        // null check and the len load share that name.
         if callee == "Vec::len" && args.len() == 1 {
             let mut code = String::new();
             // Generate vec argument - it's a reference, so we need to dereference it
@@ -391,6 +393,7 @@ impl Codegen {
         }
 
         // Vec::capacity<T>(vec: &Vec<T>) -> int
+        // Same single evaluation as Vec::len: the null check and the capacity load share one name.
         if callee == "Vec::capacity" && args.len() == 1 {
             let mut code = String::new();
             let mut arg_code = String::new();
@@ -797,6 +800,8 @@ impl Codegen {
         }
 
         // String::len(s: &String) -> int
+        // The operand text is one evaluation. A temporary is a C name, so the
+        // null check and the len load share that name.
         if callee == "String::len" && args.len() == 1 {
             let mut code = String::new();
             let mut arg_code = String::new();
@@ -842,6 +847,7 @@ impl Codegen {
                     "String::push_str failed",
                 )
             } else if other_is_str_slice {
+                // `other_code` is a name when the operand is not a place or a literal.
                 wrap_status_panic(
                     &format!(
                         "ion_string_push_str({deref_str}, {other_code}, strlen({other_code}))"
