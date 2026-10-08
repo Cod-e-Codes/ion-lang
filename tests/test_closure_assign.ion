@@ -1,0 +1,36 @@
+// A captured int is stored through the closure. The outer binding stays put.
+fn main() -> int {
+    let mut x: int = 1;
+    let y: int = 4;
+    let f = fn() -> int {
+        x = x + 1;
+        x += 1;
+        if x == 3 {
+            x = 4;
+        }
+        let mut i: int = 0;
+        while i < 2 {
+            x = x + 1;
+            i = i + 1;
+        }
+        match x {
+            6 => {
+                x = x + 1;
+            }
+            _ => {
+                x = 0;
+            }
+        }
+        let z: int = x + y;
+        let x: int = 10;
+        return x + z;
+    };
+    let n: int = f();
+    if x != 1 {
+        return 1;
+    }
+    if n != 21 {
+        return n;
+    }
+    return 0;
+}

@@ -106,6 +106,9 @@ pub struct Codegen {
     fn_literal_forward_decls: String,
     fn_literal_definitions: String,
     generated_fn_literals: std::collections::HashSet<String>,
+    /// Captures of the closure function currently being generated. Nested
+    /// closure and spawn fills read these as `env->name` when no local shadows them.
+    enclosing_closure_captures: HashMap<String, Type>,
     scope_stack: Vec<ScopeFrame>,
     epilogue_label: String,
     loop_continue_label: Option<String>,
@@ -167,6 +170,7 @@ impl Codegen {
             fn_literal_forward_decls: String::new(),
             fn_literal_definitions: String::new(),
             generated_fn_literals: std::collections::HashSet::new(),
+            enclosing_closure_captures: HashMap::new(),
             scope_stack: Vec::new(),
             epilogue_label: "epilogue".to_string(),
             loop_continue_label: None,
@@ -2514,6 +2518,81 @@ impl Codegen {
         }
     }
 
+    /// C arrays are not assignable. Copy into `place`, dropping the old value first
+    /// when it still owns resources.
+    fn emit_array_store_stmt(
+        &mut self,
+        place: &str,
+        local_ion: Option<&str>,
+        dest_key: Option<&str>,
+        value: &IREexpr,
+        ty: &Type,
+        drop_old: bool,
+    ) {
+        let tmp = format!("_ion_arr_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let c_ty = self.type_to_c(ty);
+        self.write_indent();
+        if let Some(src) = self.field_access_c_path(value) {
+            self.writeln(&format!("{c_ty} {tmp};"));
+            self.write_indent();
+            self.writeln(&format!("memcpy({tmp}, {src}, sizeof({tmp}));"));
+        } else {
+            self.write(&format!("{c_ty} {tmp} = "));
+            self.generate_expr_with_type(value, Some(ty));
+            self.writeln(";");
+        }
+        if drop_old && self.type_needs_drop(ty) {
+            let consumed = self.consume_dest_before_drop(dest_key, local_ion);
+            if !consumed {
+                self.emit_drop_at_path(place, ty);
+            }
+        }
+        self.write_indent();
+        self.writeln(&format!("memcpy({place}, {tmp}, sizeof({tmp}));"));
+        if self.type_needs_drop(ty)
+            && let Some(name) = local_ion
+        {
+            self.scope_mark_live(name);
+        }
+    }
+
+    fn emit_array_store_expr(
+        &mut self,
+        place: &str,
+        local_ion: Option<&str>,
+        dest_key: Option<&str>,
+        value: &IREexpr,
+        ty: &Type,
+        drop_old: bool,
+    ) {
+        let tmp = format!("_ion_arr_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let c_ty = self.type_to_c(ty);
+        self.write("({ ");
+        if let Some(src) = self.field_access_c_path(value) {
+            self.write(&format!(
+                "{c_ty} {tmp}; memcpy({tmp}, {src}, sizeof({tmp})); "
+            ));
+        } else {
+            self.write(&format!("{c_ty} {tmp} = "));
+            self.generate_expr_with_type(value, Some(ty));
+            self.write("; ");
+        }
+        if drop_old && self.type_needs_drop(ty) {
+            let consumed = self.consume_dest_before_drop(dest_key, local_ion);
+            if !consumed {
+                self.emit_drop_at_path(place, ty);
+            }
+        }
+        self.write(&format!("memcpy({place}, {tmp}, sizeof({tmp})); 0; }})"));
+        if self.type_needs_drop(ty)
+            && let Some(name) = local_ion
+        {
+            self.scope_mark_live(name);
+        }
+    }
+
     /// Bounds-checked index store that drops the previous element.
     /// Emits a GNU statement expression.
     fn emit_dropping_index_assign(
@@ -2966,11 +3045,13 @@ impl Codegen {
         let saved_epilogue = self.epilogue_label.clone();
         let saved_params = self.current_function_params.clone();
         let saved_return = self.current_return_type.clone();
+        let saved_captures = std::mem::take(&mut self.enclosing_closure_captures);
 
         self.indent_level = 1;
         self.scope_stack.clear();
         self.epilogue_label = epilogue.clone();
         self.current_return_type = lit.return_type.clone();
+        self.enclosing_closure_captures = lit.captures.iter().cloned().collect();
         self.current_function_params.clear();
         for param in &lit.params {
             self.current_function_params
@@ -3009,8 +3090,81 @@ impl Codegen {
         self.epilogue_label = saved_epilogue;
         self.current_function_params = saved_params;
         self.current_return_type = saved_return;
+        self.enclosing_closure_captures = saved_captures;
 
         self.fn_literal_definitions.push_str(&def);
+    }
+
+    /// A local shadows an enclosing capture. Otherwise a capture of the closure
+    /// being generated is `env->name`.
+    fn closure_capture_source(&self, name: &str) -> String {
+        if self.lookup_binding_type(name).is_some() {
+            return self.binding_c_name(name);
+        }
+        if self.enclosing_closure_captures.contains_key(name) {
+            return format!("env->{name}");
+        }
+        self.binding_c_name(name)
+    }
+
+    fn type_is_array(&self, ty: &Type) -> bool {
+        matches!(
+            resolve_type_alias(ty, &self.type_aliases),
+            Type::Array { .. }
+        )
+    }
+
+    fn value_is_copy(&self, ty: &Type) -> bool {
+        let resolved = resolve_type_alias(ty, &self.type_aliases);
+        crate::tc::type_is_copy(
+            &resolved,
+            &self.struct_map,
+            &self.enum_map,
+            &self.drop_impls,
+        )
+    }
+
+    /// Clear a place after its owned value was copied into a closure or thread.
+    fn moved_place_clear(&self, src: &str, ty: &Type) -> String {
+        if self.type_is_array(ty) {
+            format!("memset(&({src}), 0, sizeof({src}))")
+        } else {
+            format!("{src} = {}", self.zero_value_for_type(ty))
+        }
+    }
+
+    fn copy_place_into(&self, dest: &str, src: &str, ty: &Type) -> String {
+        if self.type_is_array(ty) {
+            format!("memcpy({dest}, {src}, sizeof({dest}))")
+        } else {
+            format!("{dest} = {src}")
+        }
+    }
+
+    fn emit_closure_value(&mut self, lit: &crate::ir::IRFnLiteral) {
+        let struct_name = lit.env_struct.as_deref().unwrap_or("ion_closure");
+        let tmp = format!("_ion_cl_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        self.write("({ ");
+        self.write(&format!("{struct_name} {tmp}; "));
+        for (name, ty) in &lit.captures {
+            let src = self.closure_capture_source(name);
+            let dest = format!("{tmp}.{name}");
+            self.write(&self.copy_place_into(&dest, &src, ty));
+            self.write("; ");
+        }
+        for (name, ty) in &lit.captures {
+            if self.value_is_copy(ty) {
+                continue;
+            }
+            let src = self.closure_capture_source(name);
+            self.write(&self.moved_place_clear(&src, ty));
+            self.write("; ");
+            if self.lookup_binding_type(name).is_some() {
+                self.scope_mark_moved(name);
+            }
+        }
+        self.write(&format!("{tmp}; }})"));
     }
 
     fn spawn_capture_fill_lines(&self, spawn: &IRSpawn, ctx_name: &str) -> Vec<String> {
@@ -3019,8 +3173,10 @@ impl Codegen {
             "if (!ctx) { ion_panic(\"spawn allocation failed\"); }".to_string(),
         ];
         for (name, ty) in &spawn.captures {
-            lines.push(format!("ctx->{name} = {name};"));
-            lines.push(format!("{name} = {};", self.zero_value_for_type(ty)));
+            let src = self.closure_capture_source(name);
+            let dest = format!("ctx->{name}");
+            lines.push(format!("{};", self.copy_place_into(&dest, &src, ty)));
+            lines.push(format!("{};", self.moved_place_clear(&src, ty)));
         }
         lines
     }
@@ -3710,7 +3866,17 @@ impl Codegen {
                                 && !Self::rhs_is_same_local(target, value)
                         });
                         let c_place = self.binding_c_name(target);
-                        if let Some(ty) = ty.as_ref().filter(|ty| self.type_needs_drop(ty)) {
+                        if let Some(ty) = ty.as_ref().filter(|ty| self.type_is_array(ty)) {
+                            let key = format!("v:{target}");
+                            self.emit_array_store_stmt(
+                                &c_place,
+                                Some(target),
+                                Some(&key),
+                                value,
+                                ty,
+                                drop_old,
+                            );
+                        } else if let Some(ty) = ty.as_ref().filter(|ty| self.type_needs_drop(ty)) {
                             let key = format!("v:{target}");
                             self.emit_replacing_store_stmt(
                                 &c_place,
@@ -3766,7 +3932,18 @@ impl Codegen {
                     } => {
                         let drop_old = self.type_needs_drop(field_ty)
                             && !Self::same_field_place(target, value);
-                        if drop_old {
+                        if self.type_is_array(field_ty) {
+                            let path = self.capture_expr_code(target);
+                            let key = Self::place_key(target);
+                            self.emit_array_store_stmt(
+                                &path,
+                                None,
+                                key.as_deref(),
+                                value,
+                                field_ty,
+                                drop_old,
+                            );
+                        } else if drop_old {
                             let path = self.capture_expr_code(target);
                             let key = Self::place_key(target);
                             self.emit_replacing_store_stmt(
@@ -4582,7 +4759,17 @@ impl Codegen {
                         && !Self::rhs_is_same_local(target, value)
                 });
                 let c_place = self.binding_c_name(target);
-                if let Some(ty) = ty.as_ref().filter(|ty| self.type_needs_drop(ty)) {
+                if let Some(ty) = ty.as_ref().filter(|ty| self.type_is_array(ty)) {
+                    let key = format!("v:{target}");
+                    self.emit_array_store_expr(
+                        &c_place,
+                        Some(target),
+                        Some(&key),
+                        value,
+                        ty,
+                        drop_old,
+                    );
+                } else if let Some(ty) = ty.as_ref().filter(|ty| self.type_needs_drop(ty)) {
                     let key = format!("v:{target}");
                     self.emit_replacing_store_expr(
                         &c_place,
@@ -4699,7 +4886,18 @@ impl Codegen {
             } => {
                 let drop_old =
                     self.type_needs_drop(field_ty) && !Self::same_field_place(target, value);
-                if drop_old {
+                if self.type_is_array(field_ty) {
+                    let path = self.capture_expr_code(target);
+                    let key = Self::place_key(target);
+                    self.emit_array_store_expr(
+                        &path,
+                        None,
+                        key.as_deref(),
+                        value,
+                        field_ty,
+                        drop_old,
+                    );
+                } else if drop_old {
                     let path = self.capture_expr_code(target);
                     let key = Self::place_key(target);
                     self.emit_replacing_store_expr(
@@ -4721,21 +4919,7 @@ impl Codegen {
                 if lit.captures.is_empty() {
                     self.write(&lit.symbol);
                 } else {
-                    let struct_name = lit.env_struct.as_deref().unwrap_or("ion_closure");
-                    self.write(&format!("({struct_name}){{"));
-                    for (i, (name, _)) in lit.captures.iter().enumerate() {
-                        if i > 0 {
-                            self.write(", ");
-                        }
-                        let c_name = self.binding_c_name(name);
-                        self.write(&format!(".{name} = {c_name}"));
-                        if let Some(ty) = lit.captures.get(i).map(|(_, ty)| ty)
-                            && self.type_needs_drop(ty)
-                        {
-                            self.scope_mark_moved(name);
-                        }
-                    }
-                    self.write("}");
+                    self.emit_closure_value(lit);
                 }
             }
             IREexpr::Spawn {

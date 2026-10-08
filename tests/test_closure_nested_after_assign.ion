@@ -1,0 +1,13 @@
+fn main() -> int {
+    let mut x: int = 1;
+    let f = fn() -> int {
+        x = x + 1;
+        let g = fn() -> int { return x; };
+        return g();
+    };
+    let n: int = f();
+    if x != 1 {
+        return 1;
+    }
+    return n;
+}

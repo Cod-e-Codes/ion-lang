@@ -326,6 +326,23 @@ test_fn_literal_return.ion	run	6
 test_fn_literal_capture_error.ion	error		fn(int) -> int
 test_move_closure.ion	run	21
 test_move_closure_consume_error.ion	error		UseAfterMove
+test_closure_assign.ion	run	0
+test_closure_assign.ion	cgen			env->x
+test_closure_assign_agg.ion	run	0
+test_closure_assign_drop.ion	run	1
+test_array_whole_assign.ion	run	17
+test_closure_array_assign.ion	run	17
+test_closure_nested.ion	run	4
+test_closure_nested.ion	cgen			env->x
+test_closure_nested_3.ion	run	2
+test_closure_nested_after_assign.ion	run	2
+test_closure_field_store.ion	run	12
+test_closure_field_store.ion	cgen			env->p.x
+test_closure_copy_two.ion	run	13
+test_closure_box_once.ion	run	1
+test_closure_spawn_read.ion	run	0
+test_closure_box_twice_error.ion	error		UseAfterMove
+test_closure_vec_twice_error.ion	error		UseAfterMove
 test_closure_unused_borrow_error.ion	error		BorrowConflict
 test_unwrap_after_borrow.ion	run	1
 test_closure_copy_after_borrow.ion	run	10

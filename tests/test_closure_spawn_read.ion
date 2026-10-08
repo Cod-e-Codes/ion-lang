@@ -1,0 +1,10 @@
+fn main() -> int {
+    let x: int = 7;
+    let f = fn() -> int {
+        spawn {
+            let y: int = x;
+        };
+        return 0;
+    };
+    return f();
+}

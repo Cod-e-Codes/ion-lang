@@ -1,0 +1,11 @@
+fn main() -> int {
+    let x: int = 2;
+    let f = fn() -> int {
+        let g = fn() -> int {
+            let h = fn() -> int { return x; };
+            return h();
+        };
+        return g();
+    };
+    return f();
+}

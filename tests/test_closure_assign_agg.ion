@@ -1,0 +1,47 @@
+struct P {
+    x: int;
+    y: int;
+}
+
+enum E {
+    A;
+    B;
+}
+
+fn main() -> int {
+    let mut p: P = P { x: 1, y: 2 };
+    let mut t: (int, int) = (1, 2);
+    let mut e: E = E::A;
+    let f = fn() -> int {
+        p = P { x: 9, y: 8 };
+        t = (3, 4);
+        e = E::B;
+        let mut n: int = p.x + p.y + t.0 + t.1;
+        match e {
+            E::A => {
+                n = 0;
+            }
+            E::B => {
+                n = n + 1;
+            }
+        }
+        return n;
+    };
+    let n: int = f();
+    if p.x != 1 {
+        return 1;
+    }
+    if t.0 != 1 {
+        return 2;
+    }
+    match e {
+        E::A => {}
+        E::B => {
+            return 3;
+        }
+    }
+    if n != 25 {
+        return n;
+    }
+    return 0;
+}

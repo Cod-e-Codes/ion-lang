@@ -156,7 +156,7 @@ let f: fn(int) -> int = fn(x: int) -> int { return x + 5; };
 return f(7);
 ```
 
-A literal that names an outer owned binding moves that binding into a closure value. The value is not a `fn(...) -> R`. A call that moves a non-`Copy` capture consumes the closure. A reference capture is `ClosureCapture`. See [tests/test_fn_literal_basic.ion](../../../tests/test_fn_literal_basic.ion), [tests/test_move_closure.ion](../../../tests/test_move_closure.ion), and [tests/test_fn_literal_ref_capture_error.ion](../../../tests/test_fn_literal_ref_capture_error.ion).
+A literal that names an outer owned binding moves that binding into a closure value. The value is not a `fn(...) -> R`. A call that moves a non-`Copy` capture consumes the closure. A store writes the closure's copy, and a second non-`Copy` capture is `UseAfterMove`. A reference capture is `ClosureCapture`. See [tests/test_fn_literal_basic.ion](../../../tests/test_fn_literal_basic.ion), [tests/test_move_closure.ion](../../../tests/test_move_closure.ion), and [tests/test_fn_literal_ref_capture_error.ion](../../../tests/test_fn_literal_ref_capture_error.ion).
 
 ## Documentation comments
 

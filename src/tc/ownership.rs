@@ -1752,6 +1752,16 @@ impl TypeChecker {
                     if self.is_copy_type(cap_ty) {
                         continue;
                     }
+                    if self
+                        .variables
+                        .get(name)
+                        .is_some_and(|info| info.state == OwnershipState::Moved)
+                    {
+                        return Err(TypeCheckError::UseAfterMove {
+                            name: name.clone(),
+                            span: lit.span,
+                        });
+                    }
                     self.check_closure_capture_move(name, lit.span)?;
                     if let Some(info) = self.variables.get_mut(name) {
                         info.state = OwnershipState::Moved;

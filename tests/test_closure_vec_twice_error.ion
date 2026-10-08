@@ -1,0 +1,6 @@
+fn main() -> int {
+    let v: Vec<int> = Vec::new();
+    let f = fn() -> int { return v.len(); };
+    let g = fn() -> int { return v.len(); };
+    return f() + g();
+}

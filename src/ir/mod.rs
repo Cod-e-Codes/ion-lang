@@ -6,7 +6,7 @@ use crate::tc::{TypeInfo, collect_captured_vars};
 pub(crate) const MATCH_PARENT_SCRUTINEE: &str = "__ion_match_parent_scrutinee";
 use crate::types_util::{infer_generic_substitutions, ref_to_vec_elem, slice_elem_type};
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
@@ -2417,7 +2417,8 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
                 }
                 let mut body = IRBuilder::lower_ast_block("fn_lit_body", &lit.body, &mut lit_ctx);
                 let capture_names: HashMap<String, Type> = sig.captures.iter().cloned().collect();
-                rewrite_closure_body(&mut body, &capture_names);
+                let mut closure_locals = HashSet::new();
+                rewrite_closure_body(&mut body, &capture_names, &mut closure_locals);
                 IREexpr::FnLiteral(IRFnLiteral {
                     symbol: sig.symbol,
                     params: lit_params,
@@ -2453,161 +2454,274 @@ fn build_expr_with_ctx(expr: &Expr, ctx: &LoweringContext) -> IREexpr {
     }
 }
 
-fn rewrite_closure_body(block: &mut IRBlock, captures: &HashMap<String, Type>) {
+fn rewrite_closure_body(
+    block: &mut IRBlock,
+    captures: &HashMap<String, Type>,
+    locals: &mut HashSet<String>,
+) {
+    let mut defer_locals = Vec::new();
     for stmt in &mut block.statements {
-        rewrite_closure_stmt(stmt, captures);
+        if matches!(stmt, IRStmt::Defer(_)) {
+            defer_locals.push(locals.clone());
+        }
+        rewrite_closure_stmt(stmt, captures, locals);
     }
-    for defer in &mut block.defers {
-        rewrite_closure_expr(defer, captures);
+    for (defer, at) in block.defers.iter_mut().zip(defer_locals) {
+        rewrite_closure_expr(defer, captures, &at);
     }
 }
 
-fn rewrite_closure_stmt(stmt: &mut IRStmt, captures: &HashMap<String, Type>) {
+fn rewrite_closure_stmt(
+    stmt: &mut IRStmt,
+    captures: &HashMap<String, Type>,
+    locals: &mut HashSet<String>,
+) {
     match stmt {
         IRStmt::Let(let_stmt) => {
             if let Some(init) = &mut let_stmt.init {
-                rewrite_closure_expr(init, captures);
+                rewrite_closure_expr(init, captures, locals);
+            }
+            if !let_stmt.name.is_empty() {
+                locals.insert(let_stmt.name.clone());
             }
         }
         IRStmt::Return(ret) => {
             if let Some(value) = &mut ret.value {
-                rewrite_closure_expr(value, captures);
+                rewrite_closure_expr(value, captures, locals);
             }
         }
-        IRStmt::Expr(expr) | IRStmt::Defer(expr) => rewrite_closure_expr(expr, captures),
+        IRStmt::Expr(expr) | IRStmt::Defer(expr) => rewrite_closure_expr(expr, captures, locals),
         IRStmt::If(ir_if) => {
-            rewrite_closure_expr(&mut ir_if.cond, captures);
-            rewrite_closure_body(&mut ir_if.then_block, captures);
+            rewrite_closure_expr(&mut ir_if.cond, captures, locals);
+            let mut then_locals = locals.clone();
+            rewrite_closure_body(&mut ir_if.then_block, captures, &mut then_locals);
             if let Some(else_block) = &mut ir_if.else_block {
-                rewrite_closure_body(else_block, captures);
+                let mut else_locals = locals.clone();
+                rewrite_closure_body(else_block, captures, &mut else_locals);
             }
         }
         IRStmt::While(ir_while) => {
-            rewrite_closure_expr(&mut ir_while.cond, captures);
-            rewrite_closure_body(&mut ir_while.body, captures);
+            rewrite_closure_expr(&mut ir_while.cond, captures, locals);
+            let mut body_locals = locals.clone();
+            rewrite_closure_body(&mut ir_while.body, captures, &mut body_locals);
             if let Some(step) = &mut ir_while.step {
-                rewrite_closure_body(step, captures);
+                let mut step_locals = locals.clone();
+                rewrite_closure_body(step, captures, &mut step_locals);
             }
         }
-        IRStmt::UnsafeBlock(block) => rewrite_closure_body(&mut block.body, captures),
-        IRStmt::Scope(block) => rewrite_closure_body(&mut block.body, captures),
-        IRStmt::Spawn(spawn) => rewrite_closure_body(&mut spawn.body, captures),
+        IRStmt::UnsafeBlock(block) => {
+            let mut inner = locals.clone();
+            rewrite_closure_body(&mut block.body, captures, &mut inner);
+        }
+        IRStmt::Scope(block) => {
+            let mut inner = locals.clone();
+            rewrite_closure_body(&mut block.body, captures, &mut inner);
+        }
+        // The thread entry copies captures into its own locals. Rewriting that
+        // body to this closure's `env` would name a pointer the thread does not have.
+        IRStmt::Spawn(_) => {}
         IRStmt::Select(sel) => {
             for arm in &mut sel.recv_arms {
-                rewrite_closure_expr(&mut arm.channel, captures);
-                rewrite_closure_body(&mut arm.body, captures);
+                rewrite_closure_expr(&mut arm.channel, captures, locals);
+                let mut arm_locals = locals.clone();
+                if let Some(name) = &arm.binding {
+                    arm_locals.insert(name.clone());
+                }
+                rewrite_closure_body(&mut arm.body, captures, &mut arm_locals);
             }
             if let Some(body) = &mut sel.default_body {
-                rewrite_closure_body(body, captures);
+                let mut inner = locals.clone();
+                rewrite_closure_body(body, captures, &mut inner);
             }
             if let Some(ms) = &mut sel.timeout_ms {
-                rewrite_closure_expr(ms, captures);
+                rewrite_closure_expr(ms, captures, locals);
             }
             if let Some(body) = &mut sel.timeout_body {
-                rewrite_closure_body(body, captures);
+                let mut inner = locals.clone();
+                rewrite_closure_body(body, captures, &mut inner);
             }
         }
         IRStmt::Break | IRStmt::Continue => {}
     }
 }
 
-fn rewrite_closure_expr(expr: &mut IREexpr, captures: &HashMap<String, Type>) {
+fn live_capture<'a>(
+    name: &str,
+    captures: &'a HashMap<String, Type>,
+    locals: &HashSet<String>,
+) -> Option<&'a Type> {
+    if locals.contains(name) {
+        None
+    } else {
+        captures.get(name)
+    }
+}
+
+fn env_capture_field(name: &str, ty: &Type) -> IREexpr {
+    IREexpr::FieldAccess {
+        base: Box::new(IREexpr::Var("env".to_string())),
+        field: name.to_string(),
+        is_pointer: true,
+        ty: ty.clone(),
+    }
+}
+
+fn add_ir_pattern_bindings(pattern: &IRPattern, locals: &mut HashSet<String>) {
+    match pattern {
+        IRPattern::Binding { name, .. } => {
+            locals.insert(name.clone());
+        }
+        IRPattern::At { name, pattern } => {
+            locals.insert(name.clone());
+            add_ir_pattern_bindings(pattern, locals);
+        }
+        IRPattern::Variant {
+            sub_patterns,
+            named_fields,
+            ..
+        } => {
+            for sub in sub_patterns {
+                add_ir_pattern_bindings(sub, locals);
+            }
+            if let Some(fields) = named_fields {
+                for (_, sub) in fields {
+                    add_ir_pattern_bindings(sub, locals);
+                }
+            }
+        }
+        IRPattern::Or { alts } => {
+            if let Some(alt) = alts.first() {
+                add_ir_pattern_bindings(alt, locals);
+            }
+        }
+        IRPattern::Struct { fields, .. } => {
+            for (_, field) in fields {
+                add_ir_pattern_bindings(field, locals);
+            }
+        }
+        IRPattern::Wildcard | IRPattern::Lit { .. } | IRPattern::Range { .. } | IRPattern::Rest => {
+        }
+    }
+}
+
+fn rewrite_closure_expr(
+    expr: &mut IREexpr,
+    captures: &HashMap<String, Type>,
+    locals: &HashSet<String>,
+) {
     if let IREexpr::Var(name) = expr
-        && let Some(ty) = captures.get(name)
+        && let Some(ty) = live_capture(name, captures, locals)
     {
-        *expr = IREexpr::FieldAccess {
-            base: Box::new(IREexpr::Var("env".to_string())),
-            field: name.clone(),
-            is_pointer: true,
-            ty: ty.clone(),
-        };
+        let ty = ty.clone();
+        let name = name.clone();
+        *expr = env_capture_field(&name, &ty);
+        return;
+    }
+    if let IREexpr::Assign { target, value } = expr {
+        rewrite_closure_expr(value, captures, locals);
+        if let Some(ty) = live_capture(target, captures, locals) {
+            let field_ty = ty.clone();
+            let name = target.clone();
+            let value = std::mem::replace(value, Box::new(IREexpr::Lit(0)));
+            *expr = IREexpr::AssignField {
+                target: Box::new(env_capture_field(&name, &field_ty)),
+                value,
+                field_ty,
+            };
+        }
         return;
     }
     match expr {
         IREexpr::AddressOf { inner, .. }
         | IREexpr::UnOp { operand: inner, .. }
         | IREexpr::Recv { channel: inner, .. }
-        | IREexpr::Cast { expr: inner, .. } => rewrite_closure_expr(inner, captures),
+        | IREexpr::Cast { expr: inner, .. } => rewrite_closure_expr(inner, captures, locals),
         IREexpr::BinOp { left, right, .. } => {
-            rewrite_closure_expr(left, captures);
-            rewrite_closure_expr(right, captures);
+            rewrite_closure_expr(left, captures, locals);
+            rewrite_closure_expr(right, captures, locals);
         }
         IREexpr::Send { channel, value, .. } => {
-            rewrite_closure_expr(channel, captures);
-            rewrite_closure_expr(value, captures);
+            rewrite_closure_expr(channel, captures, locals);
+            rewrite_closure_expr(value, captures, locals);
         }
-        IREexpr::FieldAccess { base, .. } => rewrite_closure_expr(base, captures),
+        IREexpr::FieldAccess { base, .. } => rewrite_closure_expr(base, captures, locals),
         IREexpr::Index { target, index, .. } => {
-            rewrite_closure_expr(target, captures);
-            rewrite_closure_expr(index, captures);
+            rewrite_closure_expr(target, captures, locals);
+            rewrite_closure_expr(index, captures, locals);
         }
-        IREexpr::Assign { value, .. } => rewrite_closure_expr(value, captures),
         IREexpr::AssignIndex {
             target,
             index,
             value,
             ..
         } => {
-            rewrite_closure_expr(target, captures);
-            rewrite_closure_expr(index, captures);
-            rewrite_closure_expr(value, captures);
+            rewrite_closure_expr(target, captures, locals);
+            rewrite_closure_expr(index, captures, locals);
+            rewrite_closure_expr(value, captures, locals);
         }
         IREexpr::AssignField { target, value, .. } => {
-            rewrite_closure_expr(target, captures);
-            rewrite_closure_expr(value, captures);
+            rewrite_closure_expr(target, captures, locals);
+            rewrite_closure_expr(value, captures, locals);
         }
         IREexpr::Call { args, .. } => {
             for arg in args {
-                rewrite_closure_expr(arg, captures);
+                rewrite_closure_expr(arg, captures, locals);
             }
         }
         IREexpr::StructLit { fields, .. } => {
             for field in fields {
-                rewrite_closure_expr(&mut field.value, captures);
+                rewrite_closure_expr(&mut field.value, captures, locals);
             }
         }
         IREexpr::EnumLit {
             args, named_fields, ..
         } => {
             for arg in args {
-                rewrite_closure_expr(arg, captures);
+                rewrite_closure_expr(arg, captures, locals);
             }
             if let Some(fields) = named_fields {
                 for (_, value) in fields {
-                    rewrite_closure_expr(value, captures);
+                    rewrite_closure_expr(value, captures, locals);
                 }
             }
         }
         IREexpr::TupleLit { elements, .. } => {
             for elem in elements {
-                rewrite_closure_expr(elem, captures);
+                rewrite_closure_expr(elem, captures, locals);
             }
         }
         IREexpr::ArrayLiteral { elements, repeat } => {
             for elem in elements {
-                rewrite_closure_expr(elem, captures);
+                rewrite_closure_expr(elem, captures, locals);
             }
             if let Some((value, _)) = repeat {
-                rewrite_closure_expr(value, captures);
+                rewrite_closure_expr(value, captures, locals);
             }
         }
-        IREexpr::Match { expr, arms, .. } => {
-            rewrite_closure_expr(expr, captures);
+        IREexpr::Match {
+            expr: scrutinee,
+            arms,
+            ..
+        } => {
+            rewrite_closure_expr(scrutinee, captures, locals);
             for arm in arms {
+                let mut arm_locals = locals.clone();
+                add_ir_pattern_bindings(&arm.pattern, &mut arm_locals);
                 if let Some(guard) = &mut arm.guard {
-                    rewrite_closure_expr(guard, captures);
+                    rewrite_closure_expr(guard, captures, &arm_locals);
                 }
-                rewrite_closure_body(&mut arm.body, captures);
+                rewrite_closure_body(&mut arm.body, captures, &mut arm_locals);
             }
         }
-        IREexpr::Spawn { body, .. } => rewrite_closure_body(body, captures),
-        IREexpr::FnLiteral(lit) => rewrite_closure_body(&mut lit.body, captures),
+        // Nested closures and spawn entries already rewrote their own bodies.
+        IREexpr::Spawn { .. } | IREexpr::FnLiteral(_) => {}
         IREexpr::Lit(_)
         | IREexpr::BoolLiteral(_)
         | IREexpr::FloatLiteral(_)
         | IREexpr::IntLimit { .. }
         | IREexpr::Var(_)
-        | IREexpr::StringLit(_) => {}
+        | IREexpr::StringLit(_)
+        | IREexpr::Assign { .. } => {}
     }
 }
 
