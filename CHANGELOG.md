@@ -2,8 +2,10 @@
 
 ## Unreleased
 
+## 0.4.8 - 2026-10-08
+
 - **Fix**: Replacing a local, field, or array element does not drop a place the right-hand side already moved. A partial move is cleared before the aggregate drop, and that clear is not written after the store. A move on one `match` arm nulls only that arm. This impacts generated C for programs that replace a `Box`, `String`, `Vec`, struct, enum, array element, or field: regenerate that C. The runtime is unchanged, so relink is not required. Assigning a place to itself stays a single store.
-- **Fix**: A `let` may reuse a name in the same block. Generated C gives that binding its own name, and the previous binding is dropped at block end if it still owns a value. This impacts generated C for a shadowed `let`: regenerate that C. The runtime is unchanged, so relink is not required.
+- **Fix**: A `let` may reuse a name in the same block. Generated C gives that binding its own name, and the previous binding is dropped at block end if it still owns a value. An unread `select` or `match` binding is silenced under that C name. This impacts generated C for a shadowed `let`: regenerate that C. The runtime is unchanged, so relink is not required.
 - **Language**: Qualified `Vec::get_ref`, `Slice::get_ref`, and `Arena::get_ref` shared-borrow the place of the reference argument, the same place as the method form. A disjoint field stays legal. A push of that same place is still `BorrowConflict`. This is not an ABI change. Relink is not required. Generated C for programs that still compile is unchanged.
 
 ## 0.4.7 - 2026-10-07
