@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fix**: A closure value drops its remaining captures when it goes out of scope, including after a call that consumed it. The call does not take the struct. A capture the body moved is cleared. A capture the body left in place, or stored back into the closure, is dropped with the closure. That releases a `Sender` still held by the closure, so a discarded `Receiver` can free the channel. This impacts generated C for a closure that holds a non-`Copy` capture: regenerate that C. The runtime is unchanged, so relink is not required.
+
 ## 0.4.9 - 2026-10-08
 
 - **Fix**: A store of a captured binding writes that field of the closure, including a whole struct, tuple, enum, or array. A nested fn literal copies from that field. A non-`Copy` binding moves into only one closure. A second closure that names it is `UseAfterMove`. A whole-array store copies through a temporary. This impacts generated C for a closure that assigns a capture or nests another closure, and for a whole-array store: regenerate that C. The runtime is unchanged, so relink is not required.
