@@ -1,0 +1,9 @@
+struct S {
+    v: int;
+}
+
+fn main() -> int {
+    let b: Box<S> = Box::new(S { v: 1 });
+    let f = fn() -> int { return Box::unwrap(b).v; };
+    return 0;
+}

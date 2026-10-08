@@ -1,0 +1,4 @@
+fn main() -> int {
+    let (tx, _rx): (Sender<int>, Receiver<int>) = channel<int>();
+    return 0;
+}

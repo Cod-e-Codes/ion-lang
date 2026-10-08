@@ -54,4 +54,4 @@ Inside `unsafe { ... }`:
 
 Primitives, `bool`, integers (`i8`-`i64`, `u8`-`u64`), `f32`/`f64`, structs, enums (tuple + struct variants), generics, `[T; N]`, `[]T`, `Box<T>`, `Vec<T>`, `String`, `JoinHandle<T>`, `Allocator`, `File`, raw `*T`, protocol endpoints.
 
-`if`/`while` conditions must be `bool`. `for x in expr` over `Vec<T>`, `[T; N]`, `String` (bytes as `u8`), or `Iter<T>`. A capture-free fn literal is `fn(...) -> R`. A literal that moves owned outer bindings is a closure value. A reference capture is `ClosureCapture`. Postfix `?` works on owned `Option`/`Result` and on an owned enum with one success variant when the function returns that same enum.
+`if`/`while` conditions must be `bool`. `for x in expr` over `Vec<T>`, `[T; N]`, `String` (bytes as `u8`), or `Iter<T>`. A capture-free fn literal is `fn(...) -> R`. A literal that moves owned outer bindings is a closure value, and that value drops its remaining captures at scope exit. A reference capture is `ClosureCapture`. Postfix `?` works on owned `Option`/`Result` and on an owned enum with one success variant when the function returns that same enum.

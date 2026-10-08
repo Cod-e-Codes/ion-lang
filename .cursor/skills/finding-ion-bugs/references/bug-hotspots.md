@@ -27,6 +27,7 @@ CLI errors use `TypeCheckError` Debug form (`UseAfterMove { ... }`). LSP reforma
 ## Codegen (`src/cgen/`)
 
 - **Integer wrap**: `+ - *` emit same-width unsigned C ops then cast back; never rely on `-fwrapv`. `/` `%` insert zero and signed MIN/-1 panics; shifts insert width panics. `AssignIndex` must bounds-check like `Index` (`test_int_wrap.ion`, `test_div_zero_panic.ion`, `test_assign_index_oob.ion`).
+- **Closure drop**: a move closure is a struct of its captures. Scope exit drops that struct, including after a call that consumed it. The call does not take the struct. A capture the body left in place, or stored back, is dropped with the closure (`test_closure_assign_drop.ion`, `test_closure_drop_sender.ion`, `test_closure_drop_box.ion`).
 - **String UTF-8**: `ion_utf8_valid` on from_literal / push_str; `push_byte` rejects `>= 0x80`. OOM and grow failure `ion_panic`, not NULL. `String::from_utf8` returns `Option<String>` (`test_string_from_utf8.ion`).
 - **Struct field move-out**: owned fields null after a partial move on the next statement (`board.items = NULL`; deferred when the move is a call argument). A replacing store of that aggregate clears the moved subplace before the drop, and does not write the null after the store.
 - **Vec::push lvalues**: struct variables and field paths use `&item`, not compound literal (`vec_push_struct_var_uses_address_of_lvalue`)

@@ -9,8 +9,8 @@ use self::types::{
 };
 
 use crate::ast::{
-    BinOp, EnumDecl, ExternBlock, PatLit, Program, Span, StructDecl, Type, TypeAliasDecl,
-    TypeParam, UnOp, synthetic_option_enum,
+    BinOp, EnumDecl, ExternBlock, PatLit, Program, Span, StructDecl, StructField, Type,
+    TypeAliasDecl, TypeParam, UnOp, synthetic_option_enum,
 };
 use crate::ir::*;
 use crate::tc::TypeInfo;
@@ -191,6 +191,40 @@ impl Codegen {
         self.compilation_return_types = types.function_returns.clone();
         self.closures = types.closures.clone();
         self.protocols = types.protocols.clone();
+    }
+
+    /// Closure values are structs of their captures. They are not in the source
+    /// struct list, but scope exit must drop the captures that are still live.
+    fn register_closure_structs(&mut self) {
+        let closures: Vec<(String, Vec<(String, Type)>)> = self
+            .closures
+            .iter()
+            .map(|(name, sig)| (name.clone(), sig.captures.clone()))
+            .collect();
+        for (name, captures) in closures {
+            if self.struct_map.contains_key(&name) {
+                continue;
+            }
+            self.struct_map.insert(
+                name.clone(),
+                StructDecl {
+                    doc: None,
+                    pub_: false,
+                    name,
+                    generics: Vec::new(),
+                    fields: captures
+                        .into_iter()
+                        .map(|(field, ty)| StructField {
+                            doc: None,
+                            name: field,
+                            ty,
+                            span: Span::default(),
+                        })
+                        .collect(),
+                    span: Span::default(),
+                },
+            );
+        }
     }
 
     fn lookup_param_types(&self, resolved_callee: &str, func_name: &str) -> Option<&Vec<Type>> {
@@ -564,6 +598,7 @@ impl Codegen {
         for s in &program.structs {
             self.struct_map.insert(s.name.clone(), s.clone());
         }
+        self.register_closure_structs();
         self.drop_impls = program.drop_impls.clone();
         // Build type alias map for type resolution
         self.type_aliases.clear();
@@ -791,6 +826,7 @@ impl Codegen {
         for s in &program.structs {
             self.struct_map.insert(s.name.clone(), s.clone());
         }
+        self.register_closure_structs();
         self.drop_impls = program.drop_impls.clone();
         self.generated_types.clear();
         self.spawn_counter = 0;
@@ -4494,9 +4530,6 @@ impl Codegen {
                         self.mark_moves_in_expr(arg);
                     }
                     self.write(")");
-                    if sig.consumes {
-                        self.scope_mark_moved(&resolved_callee);
-                    }
                 } else {
                     // Regular function call.
                     let func_name = self.resolve_c_function_name(&resolved_callee);

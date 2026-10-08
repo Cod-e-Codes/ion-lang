@@ -123,6 +123,10 @@ jobs:
           test_channel_queued_string_drop 0
           test_channel_string 3
           test_channel_send_closed 9
+          test_closure_assign_drop 1
+          test_closure_drop_box 0
+          test_closure_drop_sender 0
+          test_channel_discard_receiver 0
           EOF
 
       - name: Generated C thread sanitizer (Linux)
