@@ -1,0 +1,14 @@
+struct Hold<T> {
+    v: T;
+}
+
+fn mkv() -> Vec<int> {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    return v;
+}
+
+fn main() -> int {
+    let h: Hold<&Vec<int>> = Hold { v: &mkv() };
+    return Vec::len(h.v);
+}

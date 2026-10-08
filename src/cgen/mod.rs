@@ -4,9 +4,9 @@ mod temps;
 mod types;
 
 use self::types::{
-    array_type_name, fn_type_to_c_decl, fn_type_to_c_function_header, format_ret_val_decl,
-    int_c_repr, mangle_module_callee, mangle_type_name, resolve_type_alias, ret_val_decl,
-    substitute_type_params, tuple_type_name, type_to_c_impl, type_to_c_return_type,
+    array_return_wrapper_name, array_type_name, fn_type_to_c_decl, fn_type_to_c_function_header,
+    format_ret_val_decl, int_c_repr, mangle_module_callee, mangle_type_name, resolve_type_alias,
+    ret_val_decl, substitute_type_params, tuple_type_name, type_to_c_impl, type_to_c_return_type,
 };
 
 use crate::ast::{
@@ -1091,6 +1091,12 @@ impl Codegen {
         }
         let mut header_array_typedefs: Vec<(String, Type)> = header_arrays.into_iter().collect();
         header_array_typedefs.sort_by(|a, b| a.0.cmp(&b.0));
+        // The .c file may already have recorded these typedefs. The header is a
+        // separate output and still needs the names.
+        for (name, _) in &header_array_typedefs {
+            self.generated_types.remove(name);
+            self.generated_types.remove(&format!("ion_ret_{name}"));
+        }
         self.emit_ready_array_typedefs(&header_array_typedefs);
 
         // Generate public struct definitions
@@ -1113,7 +1119,7 @@ impl Codegen {
                 let return_type = func
                     .return_type
                     .as_ref()
-                    .map(type_to_c_impl)
+                    .map(|ty| type_to_c_return_type(&resolve_type_alias(ty, &self.type_aliases)))
                     .unwrap_or_else(|| "void".to_string());
                 let c_name = format!("{}_{}", symbol_prefix, func.name);
                 self.write(&format!("{} {}(", return_type, c_name));
@@ -2650,6 +2656,9 @@ impl Codegen {
             self.writeln(&format!("{c_ty} {tmp};"));
             self.write_indent();
             self.writeln(&format!("memcpy({tmp}, {src}, sizeof({tmp}));"));
+        } else if self.expr_returns_array(value) {
+            self.writeln(&format!("{c_ty} {tmp};"));
+            self.copy_array_expr_into(&tmp, value, ty);
         } else {
             self.write(&format!("{c_ty} {tmp} = "));
             self.generate_expr_with_type(value, Some(ty));
@@ -2688,6 +2697,16 @@ impl Codegen {
         if let Some(src) = self.field_access_c_path(value) {
             self.write(&format!(
                 "{c_ty} {tmp}; memcpy({tmp}, {src}, sizeof({tmp})); "
+            ));
+        } else if self.expr_returns_array(value) {
+            let resolved = resolve_type_alias(ty, &self.type_aliases);
+            let wrapper = array_return_wrapper_name(&resolved);
+            let ret_tmp = format!("_ion_arr_ret_{}", self.temp_var_counter);
+            self.temp_var_counter += 1;
+            self.write(&format!("{c_ty} {tmp}; {wrapper} {ret_tmp} = "));
+            self.generate_expr_with_type(value, Some(ty));
+            self.write(&format!(
+                "; memcpy({tmp}, {ret_tmp}._data, sizeof({tmp})); "
             ));
         } else {
             self.write(&format!("{c_ty} {tmp} = "));
@@ -2900,19 +2919,13 @@ impl Codegen {
             };
 
             if is_array_return {
-                if let Some(ret_ty) = self.current_return_type.clone()
-                    && let Type::Array { inner, size, .. } = &ret_ty
-                {
-                    let base_type = self.type_to_c(inner);
+                // C has no array return type. The value is copied into the
+                // wrapper struct's `_data` field and returned by value.
+                if let Some(ret_ty) = self.current_return_type.clone() {
+                    let ret_ty = resolve_type_alias(&ret_ty, &self.type_aliases);
                     self.begin_temp_hoist(value, true);
-                    self.writeln(&format!("static {} _ret_array[{}] = ", base_type, size));
-                    self.write_indent();
-                    self.write("    ");
-                    self.generate_expr_with_type(value, Some(&ret_ty));
-                    self.writeln(";");
+                    self.copy_array_expr_into("ret_val._data", value, &ret_ty);
                     self.end_temp_hoist();
-                    self.write_indent();
-                    self.writeln("ret_val = _ret_array;");
                 }
             } else {
                 let return_ty = self.current_return_type.clone();
@@ -3046,10 +3059,8 @@ impl Codegen {
                 ));
                 self.writeln(" {");
             } else {
-                let return_type = match ret_ty {
-                    Type::Array { inner, .. } => format!("{}*", self.type_to_c(inner)),
-                    _ => self.type_to_c(ret_ty),
-                };
+                let return_type =
+                    type_to_c_return_type(&resolve_type_alias(ret_ty, &self.type_aliases));
                 self.write(&format!("{} {}(", return_type, c_name));
                 self.write(&param_list);
                 self.writeln(") {");
@@ -3134,10 +3145,7 @@ impl Codegen {
         let return_type_c = lit
             .return_type
             .as_ref()
-            .map(|t| match t {
-                Type::Array { inner, .. } => format!("{}*", self.type_to_c(inner)),
-                _ => self.type_to_c(t),
-            })
+            .map(|t| type_to_c_return_type(&resolve_type_alias(t, &self.type_aliases)))
             .unwrap_or_else(|| "void".to_string());
 
         let param_list = self.format_ir_param_list_c(&lit.params);
@@ -3234,6 +3242,99 @@ impl Codegen {
             resolve_type_alias(ty, &self.type_aliases),
             Type::Array { .. }
         )
+    }
+
+    /// A call whose result is `[T; N]`. The C callee returns the wrapper struct.
+    fn expr_returns_array(&self, expr: &IREexpr) -> bool {
+        let IREexpr::Call {
+            callee,
+            return_type,
+            ..
+        } = expr
+        else {
+            return false;
+        };
+        if return_type
+            .as_ref()
+            .is_some_and(|ty| self.type_is_array(ty))
+        {
+            return true;
+        }
+        let from_sig = self.lookup_return_type(callee).and_then(|ret| ret.clone());
+        from_sig.is_some_and(|ty| self.type_is_array(&ty))
+    }
+
+    fn array_expr_type(&self, expr: &IREexpr) -> Option<Type> {
+        let IREexpr::Call {
+            callee,
+            return_type,
+            ..
+        } = expr
+        else {
+            return None;
+        };
+        if let Some(ty) = return_type.clone().filter(|ty| self.type_is_array(ty)) {
+            return Some(resolve_type_alias(&ty, &self.type_aliases));
+        }
+        self.lookup_return_type(callee)
+            .and_then(|ret| ret.clone())
+            .filter(|ty| self.type_is_array(ty))
+            .map(|ty| resolve_type_alias(&ty, &self.type_aliases))
+    }
+
+    /// Copy `value` into the array `dest`. A call result is the wrapper struct's
+    /// `_data` field. The wrapper temporary is not dropped: the destination owns
+    /// the bits. A source binding is marked moved by the caller.
+    fn copy_array_expr_into(&mut self, dest: &str, value: &IREexpr, ty: &Type) {
+        let ty = resolve_type_alias(ty, &self.type_aliases);
+        if self.expr_returns_array(value) {
+            let wrapper = array_return_wrapper_name(&ty);
+            let tmp = format!("_ion_arr_ret_{}", self.temp_var_counter);
+            self.temp_var_counter += 1;
+            self.write_indent();
+            self.write(&format!("{wrapper} {tmp} = "));
+            self.generate_expr_with_type(value, Some(&ty));
+            self.writeln(";");
+            self.write_indent();
+            self.writeln(&format!("memcpy({dest}, {tmp}._data, sizeof({dest}));"));
+            return;
+        }
+        let src = match value {
+            IREexpr::Var(name) => Some(self.binding_c_name(name)),
+            _ => self.field_access_c_path(value),
+        };
+        if let Some(src) = src {
+            self.write_indent();
+            self.writeln(&format!("memcpy({dest}, {src}, sizeof({dest}));"));
+            return;
+        }
+        let c_ty = self.type_to_c(&ty);
+        let tmp = format!("_ion_arr_src_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        self.write_indent();
+        self.write(&format!("{c_ty} {tmp} = "));
+        self.generate_expr_with_type(value, Some(&ty));
+        self.writeln(";");
+        self.write_indent();
+        self.writeln(&format!("memcpy({dest}, {tmp}, sizeof({tmp}));"));
+    }
+
+    /// Pass an array-returning call as an array argument. The temporary array
+    /// lives for the call, which copies it into the callee's return wrapper.
+    fn emit_array_call_arg(&mut self, arg: &IREexpr, ty: &Type) {
+        let ty = resolve_type_alias(ty, &self.type_aliases);
+        let wrapper = array_return_wrapper_name(&ty);
+        let ret_tmp = format!("_ion_arr_ret_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let arr_tmp = format!("_ion_arr_arg_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let c_ty = self.type_to_c(&ty);
+        self.write("({ ");
+        self.write(&format!("{wrapper} {ret_tmp} = "));
+        self.generate_expr_with_type(arg, Some(&ty));
+        self.write(&format!(
+            "; {c_ty} {arr_tmp}; memcpy({arr_tmp}, {ret_tmp}._data, sizeof({arr_tmp})); {arr_tmp}; }})"
+        ));
     }
 
     fn value_is_copy(&self, ty: &Type) -> bool {
@@ -3739,48 +3840,7 @@ impl Codegen {
                     return;
                 }
                 self.write_indent();
-                // Special handling: if initialized from function call that returns array,
-                // declare as pointer (C doesn't allow returning arrays)
-                // Otherwise, if type is array, declare as array
-                // Check if this is a function call returning an array (regardless of let_stmt.ty)
-                let call_returns_array_type = if let Some(IREexpr::Call {
-                    callee,
-                    return_type,
-                    ..
-                }) = let_stmt.init.as_ref()
-                {
-                    // First check if return_type is set in the Call expression
-                    let from_call = return_type.as_ref().and_then(|rt| {
-                        if let Type::Array { inner, .. } = rt {
-                            Some(self.type_to_c(inner))
-                        } else {
-                            None
-                        }
-                    });
-                    // If not set, look up the function's return type
-                    if from_call.is_none() {
-                        self.lookup_return_type(callee).and_then(|ret_ty_opt| {
-                            ret_ty_opt.as_ref().and_then(|rt| {
-                                if let Type::Array { inner, .. } = rt {
-                                    Some(self.type_to_c(inner))
-                                } else {
-                                    None
-                                }
-                            })
-                        })
-                    } else {
-                        from_call
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(base_type) = call_returns_array_type {
-                    // Function call returning array - declare as pointer
-                    self.write(&format!("{}* {}", base_type, c_name));
-                } else {
-                    self.write(&self.c_named_decl(&c_name, &let_stmt.ty));
-                }
+                self.write(&self.c_named_decl(&c_name, &let_stmt.ty));
 
                 if let Some(ref init) = let_stmt.init {
                     if let IREexpr::Call {
@@ -3836,6 +3896,14 @@ impl Codegen {
                         );
                         self.finish_let(&let_stmt.name, &c_name, &let_stmt.ty, Some(match_expr));
                         self.end_temp_hoist_to(hoist_mark);
+                        return;
+                    }
+
+                    if self.type_is_array(&let_stmt.ty) && self.expr_returns_array(init) {
+                        self.writeln(";");
+                        self.copy_array_expr_into(&c_name, init, &let_stmt.ty);
+                        self.end_temp_hoist_to(hoist_mark);
+                        self.finish_let(&let_stmt.name, &c_name, &let_stmt.ty, Some(init));
                         return;
                     }
 
@@ -4101,7 +4169,21 @@ impl Codegen {
                         self.flush_pending_field_nulls();
                     }
                     _ => {
-                        self.write_temp_stmt(expr);
+                        if let Some(ty) = self
+                            .array_expr_type(expr)
+                            .filter(|ty| self.type_needs_drop(ty))
+                        {
+                            let wrapper = array_return_wrapper_name(&ty);
+                            let tmp = format!("_ion_arr_discard_{}", self.temp_var_counter);
+                            self.temp_var_counter += 1;
+                            self.write_indent();
+                            self.write(&format!("{wrapper} {tmp} = "));
+                            self.generate_expr(expr);
+                            self.writeln(";");
+                            self.emit_drop_at_path(&format!("{tmp}._data"), &ty);
+                        } else {
+                            self.write_temp_stmt(expr);
+                        }
                         self.mark_moves_in_expr(expr);
                         self.flush_pending_field_nulls();
                     }
@@ -4629,7 +4711,15 @@ impl Codegen {
                     self.write(&resolved_callee);
                     for (index, arg) in args.iter().enumerate() {
                         self.write(", ");
-                        self.generate_expr(arg);
+                        if self.expr_returns_array(arg) {
+                            if let Some(ty) = self.array_expr_type(arg) {
+                                self.emit_array_call_arg(arg, &ty);
+                            } else {
+                                self.generate_expr(arg);
+                            }
+                        } else {
+                            self.generate_expr(arg);
+                        }
                         self.mark_call_arg_move(&resolved_callee, index, arg);
                     }
                     self.write(")");
@@ -4705,6 +4795,10 @@ impl Codegen {
                             continue;
                         }
                         if let Some(ref pty) = param_ty {
+                            if self.expr_returns_array(arg) && self.type_is_array(pty) {
+                                self.emit_array_call_arg(arg, pty);
+                                continue;
+                            }
                             if matches!(arg, IREexpr::ArrayLiteral { .. })
                                 && let Type::Array { .. } = pty
                             {
@@ -7085,7 +7179,12 @@ impl Codegen {
                     name,
                     size
                 ));
+                let wrapper = format!("ion_ret_{name}");
+                self.writeln(&format!(
+                    "typedef struct {wrapper} {{ {name} _data; }} {wrapper};"
+                ));
                 self.generated_types.insert(name.clone(), true);
+                self.generated_types.insert(wrapper, true);
                 progressed = true;
             }
             if !progressed {

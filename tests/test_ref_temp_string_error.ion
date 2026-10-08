@@ -1,0 +1,4 @@
+fn main() -> int {
+    let r: &String = &String::from("hi");
+    return String::len(r);
+}

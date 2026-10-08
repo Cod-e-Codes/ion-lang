@@ -1,0 +1,19 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn arr() -> [int; 3] {
+    return [1, 2, 3];
+}
+
+fn main() -> int {
+    match Slice::get_ref(&arr(), 0) {
+        Option::Some(x) => {
+            return x;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

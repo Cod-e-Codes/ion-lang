@@ -6,6 +6,10 @@ pub fn multiply(a: int, b: int) -> int {
     return a * b;
 }
 
+pub fn id3(a: [int; 3]) -> [int; 3] {
+    return a;
+}
+
 // Private function - not accessible from other modules
 fn helper(x: int) -> int {
     return x + 1;

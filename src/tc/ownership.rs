@@ -223,11 +223,12 @@ impl TypeChecker {
             return;
         }
         let owner = borrow.owner.clone();
+        let owner_span = borrow.owner_span;
         let mutable = borrow.mutable;
         let whole = borrow.fields.is_none();
         self.live_borrows[idx].released = true;
         if whole {
-            self.release_borrow(&owner, mutable);
+            self.release_borrow(&owner, owner_span, mutable);
         }
     }
 
@@ -261,6 +262,7 @@ impl TypeChecker {
                 || self.loan_ignored_as_match_sibling(idx)
                 || borrow.released
                 || borrow.owner != owner
+                || !self.loan_is_current_owner(borrow)
                 || self.loan_ignored_in_branch(idx)
             {
                 continue;
@@ -299,10 +301,10 @@ impl TypeChecker {
         ignore: &[usize],
     ) -> Result<(), TypeCheckError> {
         self.check_borrow_allowed_except(owner, fields.as_deref(), mutable, span, ignore)?;
-        let owner_depth = self
+        let (owner_depth, owner_span) = self
             .variables
             .get(owner)
-            .map(|info| info.decl_depth)
+            .map(|info| (info.decl_depth, info.definition_span))
             .expect("owner exists after check");
         if fields.is_none() {
             let info = self
@@ -318,6 +320,7 @@ impl TypeChecker {
         let idx = self.live_borrows.len();
         self.live_borrows.push(LiveBorrow {
             owner: owner.to_string(),
+            owner_span,
             fields,
             mutable,
             released: false,
@@ -669,7 +672,8 @@ impl TypeChecker {
     }
 
     /// Record the loan of a `&` / `&mut` that is stored in a value, not bound
-    /// by itself. A second walk of the same expression does not register again.
+    /// by itself. A reference into an owned temporary is `ReferenceEscape`.
+    /// A second walk of the same expression does not register again.
     fn register_stored_ref(
         &mut self,
         ref_expr: &RefExpr,
@@ -682,8 +686,9 @@ impl TypeChecker {
             if let Some((name, ended_span)) = self.ended_binding(&ref_expr.inner) {
                 return Err(Self::ref_outlived(&name, ended_span));
             }
-            self.stored_ref_loans.insert(ref_expr.id, Vec::new());
-            return Ok(Vec::new());
+            // A stored `&` with no place borrows an owned temporary. The
+            // temporary ends with this full expression.
+            return Err(Self::temp_ref_escape(ref_expr.span));
         };
         let before = self.live_borrows.len();
         let mut carried = Vec::new();
@@ -952,7 +957,8 @@ impl TypeChecker {
     /// `dest` is not used again outside the owner's block, and the assignment is
     /// not inside a loop. Assignment (`in_scope` false) drops `dest`'s previous
     /// loans when no other carrier still holds them. Returns the loan this
-    /// `&` / `&mut` registered, when it did.
+    /// `&` / `&mut` registered, when it did. A referent that is not an in-scope
+    /// place is `ReferenceEscape`.
     pub(crate) fn finish_ref_loan(
         &mut self,
         dest: &str,
@@ -961,7 +967,10 @@ impl TypeChecker {
         in_scope: bool,
     ) -> Result<Option<usize>, TypeCheckError> {
         let Some((owner, fields, span)) = self.place_from_expr(inner) else {
-            return Ok(None);
+            if let Some((name, ended_span)) = self.ended_binding(inner) {
+                return Err(Self::ref_outlived(&name, ended_span));
+            }
+            return Err(Self::temp_ref_escape(inner.span()));
         };
         let carrier_depth = self.carrier_depth(dest, in_scope);
         if self.is_projected_reborrow(&owner, fields.as_deref(), inner) {
@@ -1043,6 +1052,158 @@ impl TypeChecker {
         TypeCheckError::ReferenceEscape {
             description: format!("'{owner}' does not live long enough for this reference"),
             span,
+        }
+    }
+
+    fn temp_ref_escape(span: Span) -> TypeCheckError {
+        TypeCheckError::ReferenceEscape {
+            description: "temporary does not live long enough for this reference".to_string(),
+            span,
+        }
+    }
+
+    /// The value of `expr` contains a reference into an owned temporary created
+    /// by `expr`. A place is not a temporary. Arguments of a call are not part
+    /// of that call's result, so a borrow used only as an argument stays legal.
+    pub(crate) fn reject_escaping_temporary(&self, expr: &Expr) -> Result<(), TypeCheckError> {
+        if self.expr_result_borrows_temporary(expr) {
+            Err(Self::temp_ref_escape(expr.span()))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// A match arm result is kept after the arm expression ends.
+    pub(crate) fn reject_block_result_temporary(
+        &self,
+        block: &crate::ast::Block,
+    ) -> Result<(), TypeCheckError> {
+        self.reject_stmts_result_temporary(&block.statements)
+    }
+
+    fn reject_stmts_result_temporary(
+        &self,
+        stmts: &[crate::ast::Stmt],
+    ) -> Result<(), TypeCheckError> {
+        let Some(last) = stmts.last() else {
+            return Ok(());
+        };
+        match last {
+            crate::ast::Stmt::Expr(expr) => self.reject_escaping_temporary(&expr.expr),
+            crate::ast::Stmt::If(if_stmt) => {
+                self.reject_block_result_temporary(&if_stmt.then_block)?;
+                if let Some(else_block) = &if_stmt.else_block {
+                    self.reject_block_result_temporary(else_block)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// True when `expr`'s value holds a reference whose referent is an owned
+    /// temporary of this expression, not an in-scope place.
+    fn expr_result_borrows_temporary(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Ref(ref_expr) => self.ref_inner_is_temporary(&ref_expr.inner),
+            Expr::Call(_) | Expr::MethodCall(_) if self.is_get_ref_result(expr) => {
+                self.get_ref_place(expr).is_none()
+            }
+            Expr::StructLit(lit) => lit
+                .fields
+                .iter()
+                .any(|field| self.expr_result_borrows_temporary(&field.value)),
+            Expr::EnumLit(lit) => {
+                lit.args
+                    .iter()
+                    .any(|arg| self.expr_result_borrows_temporary(arg))
+                    || lit.named_fields.as_ref().is_some_and(|fields| {
+                        fields
+                            .iter()
+                            .any(|(_, value)| self.expr_result_borrows_temporary(value))
+                    })
+            }
+            Expr::TupleLit(tuple) => tuple
+                .elements
+                .iter()
+                .any(|elem| self.expr_result_borrows_temporary(elem)),
+            Expr::ArrayLiteral(arr) => {
+                if let Some((value, _)) = &arr.repeat {
+                    self.expr_result_borrows_temporary(value)
+                } else {
+                    arr.elements
+                        .iter()
+                        .any(|elem| self.expr_result_borrows_temporary(elem))
+                }
+            }
+            Expr::FieldAccess(_) | Expr::Index(_) => self.projection_borrows_temporary(expr),
+            Expr::Try(try_expr) => self.expr_result_borrows_temporary(&try_expr.operand),
+            Expr::Match(match_expr) => {
+                self.expr_result_borrows_temporary(&match_expr.expr)
+                    || match_expr
+                        .arms
+                        .iter()
+                        .any(|arm| self.stmts_result_borrows_temporary(&arm.body.statements))
+            }
+            _ => false,
+        }
+    }
+
+    fn stmts_result_borrows_temporary(&self, stmts: &[crate::ast::Stmt]) -> bool {
+        let Some(last) = stmts.last() else {
+            return false;
+        };
+        match last {
+            crate::ast::Stmt::Expr(expr) => self.expr_result_borrows_temporary(&expr.expr),
+            crate::ast::Stmt::If(if_stmt) => {
+                self.stmts_result_borrows_temporary(&if_stmt.then_block.statements)
+                    || if_stmt.else_block.as_ref().is_some_and(|else_block| {
+                        self.stmts_result_borrows_temporary(&else_block.statements)
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// `&expr` / `&mut expr` borrows a temporary when `expr` is not a place.
+    /// A binding that has already ended is a separate `ReferenceEscape`.
+    fn ref_inner_is_temporary(&self, inner: &Expr) -> bool {
+        if self.place_from_expr(inner).is_some() || self.ended_binding(inner).is_some() {
+            return false;
+        }
+        true
+    }
+
+    fn is_get_ref_result(&self, expr: &Expr) -> bool {
+        Self::is_get_ref_call(expr) || self.is_container_method_get_ref(expr)
+    }
+
+    /// A field or index result borrows a temporary only when that result is a
+    /// reference into one. A copy or a move of an owned field does not.
+    fn projection_borrows_temporary(&self, expr: &Expr) -> bool {
+        if self.place_from_expr(expr).is_some() {
+            return false;
+        }
+        let Some(ty) = self.type_info.expr_types.get(&expr.id()) else {
+            return false;
+        };
+        if !self.is_reference_containing(ty) {
+            return false;
+        }
+        match expr {
+            Expr::FieldAccess(acc) => self.referent_is_temporary(&acc.base),
+            Expr::Index(index) => self.referent_is_temporary(&index.target),
+            _ => false,
+        }
+    }
+
+    fn referent_is_temporary(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Var(_) => false,
+            Expr::Ref(ref_expr) => self.ref_inner_is_temporary(&ref_expr.inner),
+            Expr::FieldAccess(acc) => self.referent_is_temporary(&acc.base),
+            Expr::Index(index) => self.referent_is_temporary(&index.target),
+            other => self.expr_result_borrows_temporary(other),
         }
     }
 
@@ -1434,8 +1595,18 @@ impl TypeChecker {
         }
     }
 
-    fn release_borrow(&mut self, owner: &str, mutable: bool) {
+    /// A loan applies only to the binding that existed when it was registered.
+    fn loan_is_current_owner(&self, borrow: &LiveBorrow) -> bool {
+        self.variables
+            .get(&borrow.owner)
+            .is_some_and(|info| info.definition_span == borrow.owner_span)
+    }
+
+    fn release_borrow(&mut self, owner: &str, owner_span: Span, mutable: bool) {
         if let Some(info) = self.variables.get_mut(owner) {
+            if info.definition_span != owner_span {
+                return;
+            }
             if mutable {
                 info.mut_borrow_count = info.mut_borrow_count.saturating_sub(1);
             } else {
@@ -1518,7 +1689,7 @@ impl TypeChecker {
     ) -> Result<(), TypeCheckError> {
         self.check_owner_not_borrowed(owner, span)?;
         for borrow in &self.live_borrows {
-            if borrow.owner != owner {
+            if borrow.owner != owner || !self.loan_is_current_owner(borrow) {
                 continue;
             }
             if !borrow_paths_conflict(borrow.mutable, borrow.fields.as_deref(), true, None) {

@@ -619,3 +619,24 @@ test_replace_consume_cgen.ion	cgen			b = _ion_set_	ion_box_free(b)
 test_replace_field_null_cgen.ion	cgen			w.b = _ion_set_	= NULL
 test_owned_temp_drop.ion	run	0
 test_owned_temp_drop.ion	cgen			ion_string_free
+test_ref_temp_let_error.ion	error		ReferenceEscape
+test_ref_temp_string_error.ion	error		ReferenceEscape
+test_ref_temp_assign_error.ion	error		ReferenceEscape
+test_ref_temp_field_error.ion	error		ReferenceEscape
+test_ref_temp_index_error.ion	error		ReferenceEscape
+test_ref_temp_match_get_ref_error.ion	error		ReferenceEscape
+test_ref_temp_match_method_error.ion	error		ReferenceEscape
+test_ref_temp_match_slice_error.ion	error		ReferenceEscape
+test_ref_temp_match_arena_error.ion	error		ReferenceEscape
+test_ref_temp_match_struct_error.ion	error		ReferenceEscape
+test_ref_temp_tuple_error.ion	error		ReferenceEscape
+test_ref_temp_enum_error.ion	error		ReferenceEscape
+test_ref_temp_struct_error.ion	error		ReferenceEscape
+test_ref_temp_match_yield_error.ion	error		ReferenceEscape
+test_ref_temp_assign_get_ref_error.ion	error		ReferenceEscape
+test_ref_temp_ephemeral.ion	run	0
+test_shadow_borrow.ion	run	3
+test_shadow_borrow_same_error.ion	error		BorrowConflict
+test_array_return.ion	run	7
+test_array_return.ion	cgen			ion_ret_arr_int_3	_ret_array
+test_array_return_string.ion	run	0

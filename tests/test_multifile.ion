@@ -4,6 +4,11 @@ fn main() -> int {
     // Test calling a public function from another module
     let result1: int = utils::add(5, 10);
     let result2: int = utils::multiply(3, 4);
+    let a: [int; 3] = [1, 2, 3];
+    let b: [int; 3] = utils::id3(a);
+    if b[0] != 1 || b[2] != 3 {
+        return 1;
+    }
     return result1 + result2; // 15 + 12 = 27
 }
 

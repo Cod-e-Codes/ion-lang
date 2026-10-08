@@ -1,0 +1,7 @@
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let r: &Vec<int> = &v;
+    Vec::push(&mut v, 2);
+    return Vec::len(r);
+}

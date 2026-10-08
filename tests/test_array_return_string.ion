@@ -1,0 +1,13 @@
+fn id1(a: [String; 1]) -> [String; 1] {
+    return a;
+}
+
+fn main() -> int {
+    let a: [String; 1] = [String::from("hi")];
+    let b: [String; 1] = id1(a);
+    let c: [String; 1] = id1(b);
+    id1(c);
+    let d: [String; 1] = [String::from("xy")];
+    id1(d);
+    return 0;
+}

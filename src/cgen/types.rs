@@ -65,9 +65,9 @@ pub(crate) enum RetValDecl {
 
 pub(crate) fn ret_val_decl(resolved: &Type) -> RetValDecl {
     match resolved {
-        Type::Array { inner, .. } => RetValDecl::Value {
-            ty: format!("{}*", type_to_c_impl(inner)),
-            init: "0".to_string(),
+        Type::Array { .. } => RetValDecl::Value {
+            ty: array_return_wrapper_name(resolved),
+            init: "{0}".to_string(),
         },
         Type::Fn { .. } => RetValDecl::FnPtr {
             decl: format!("{} = 0", fn_type_to_c_decl(resolved, "ret_val")),
@@ -237,7 +237,7 @@ pub(crate) fn fn_type_to_c_ptr(ty: &Type) -> String {
     else {
         panic!("fn_type_to_c_ptr called on non-fn type");
     };
-    let ret = type_to_c_impl(return_type);
+    let ret = type_to_c_return_type(return_type);
     let param_strs: Vec<String> = params.iter().map(type_to_c_impl).collect();
     format!("{} (*)({})", ret, param_strs.join(", "))
 }
@@ -356,13 +356,20 @@ pub(crate) fn type_to_c_impl(ty: &Type) -> String {
     }
 }
 
-// In src/cgen/mod.rs, near your existing type helper functions
+/// C cannot return an array type. A function that returns `[T; N]` returns this
+/// struct by value. Callers copy `_data` into a real array.
+pub(crate) fn array_return_wrapper_name(ty: &Type) -> String {
+    match ty {
+        Type::Array { inner, size, .. } => {
+            format!("ion_ret_{}", array_type_name(inner, *size))
+        }
+        _ => panic!("compiler bug: array return wrapper for a non-array"),
+    }
+}
+
 pub(crate) fn type_to_c_return_type(ty: &Type) -> String {
     match ty {
-        Type::Array { inner, size: _, .. } => {
-            // CRITICAL FIX: Array return types in Ion must become pointers in C.
-            format!("{}*", type_to_c_impl(inner))
-        }
+        Type::Array { .. } => array_return_wrapper_name(ty),
         _ => type_to_c_impl(ty),
     }
 }

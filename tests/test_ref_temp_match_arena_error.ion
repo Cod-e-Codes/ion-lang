@@ -1,0 +1,24 @@
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn mk() -> Arena<int> {
+    let mut arena: Arena<int> = handle::new();
+    return arena;
+}
+
+fn main() -> int {
+    let mut arena: Arena<int> = handle::new();
+    let h: Handle = handle::insert(&mut arena, 1);
+    match mk().get_ref(h) {
+        Option::Some(x) => {
+            return x;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

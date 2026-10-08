@@ -1,0 +1,12 @@
+fn mkv() -> Vec<int> {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    return v;
+}
+
+fn main() -> int {
+    let keep: Vec<int> = mkv();
+    let mut r: &Vec<int> = &keep;
+    r = &mkv();
+    return Vec::len(r);
+}

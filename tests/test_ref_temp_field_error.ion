@@ -1,0 +1,12 @@
+struct Pair {
+    name: String;
+}
+
+fn make() -> Pair {
+    return Pair { name: String::from("a") };
+}
+
+fn main() -> int {
+    let r: &String = &make().name;
+    return String::len(r);
+}

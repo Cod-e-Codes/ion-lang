@@ -1,0 +1,16 @@
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let r: &Vec<int> = &v;
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 2);
+    Vec::push(&mut v, 3);
+    if true {
+        let mut v: Vec<int> = Vec::new();
+        Vec::push(&mut v, 4);
+        if Vec::len(&v) != 1 {
+            return 9;
+        }
+    }
+    return Vec::len(r) + Vec::len(&v);
+}

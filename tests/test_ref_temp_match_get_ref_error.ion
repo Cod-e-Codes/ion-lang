@@ -1,0 +1,21 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn mkv() -> Vec<int> {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 7);
+    return v;
+}
+
+fn main() -> int {
+    match Vec::get_ref(&mkv(), 0) {
+        Option::Some(x) => {
+            return x;
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}

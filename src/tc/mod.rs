@@ -33,6 +33,9 @@ pub(crate) struct VariableInfo {
 #[derive(Debug, Clone)]
 pub(crate) struct LiveBorrow {
     owner: String,
+    /// Definition span of `owner` when the loan was registered. A later `let`
+    /// of the same name is a different binding and does not carry this loan.
+    owner_span: Span,
     /// `None` borrows the whole owner. `Some` is a field path from that owner.
     fields: Option<Vec<String>>,
     mutable: bool,
@@ -2544,6 +2547,7 @@ impl TypeChecker {
                         .iter()
                         .position(|p| matches!(p, Pattern::Rest { .. }));
                     let tail = rest_at.map(|i| patterns.len() - i - 1).unwrap_or(0);
+                    self.reject_escaping_temporary(init)?;
                     self.check_expr_for_moves(init)?;
                     for (i, pattern) in patterns.iter().enumerate() {
                         if matches!(pattern, Pattern::Rest { .. }) {
@@ -2681,6 +2685,7 @@ impl TypeChecker {
                     // For minimal subset, infer type from init
                     let var_type = resolved_type_ann.as_ref().unwrap_or(&init_type).clone();
                     self.check_no_off_stack_reference(&var_type, let_stmt.span)?;
+                    self.reject_escaping_temporary(init)?;
 
                     // Then mark moves in the initializer expression
                     // This handles cases like `let y = x;` where `x` is moved to `y`
@@ -4725,6 +4730,9 @@ impl TypeChecker {
             Expr::Match(match_expr) => {
                 // Check the match expression type
                 let expr_ty = self.check_expr(&match_expr.expr)?;
+                // The scrutinee is its own full expression. A reference into a
+                // temporary would be read by the arms after that temporary drops.
+                self.reject_escaping_temporary(&match_expr.expr)?;
 
                 let (scrutinee_ty, match_through_ref, ref_mutability) = match &expr_ty {
                     Type::Ref { inner, mutable } => {
@@ -4949,6 +4957,7 @@ impl TypeChecker {
                     let escaping = self.loans_in_block(&arm.body);
                     let parent_depth = self.borrow_scopes.len().saturating_sub(1);
                     self.ensure_block_owners_enclose(&arm.body, parent_depth, arm.span)?;
+                    self.reject_block_result_temporary(&arm.body)?;
                     self.keep_arm_result_loans(match_expr.id, &escaping, arm.span)?;
                     self.pop_borrow_scope();
                     match self.infer_block_result_type(&arm.body, arm.span)? {
@@ -5748,6 +5757,7 @@ impl TypeChecker {
                             span: assign_expr.value.span(),
                         });
                     }
+                    self.reject_escaping_temporary(&assign_expr.value)?;
 
                     let ref_loan = if let Expr::Ref(ref_expr) = assign_expr.value.as_ref() {
                         Some((
@@ -6055,6 +6065,7 @@ impl TypeChecker {
             let escaping = self.loans_in_block(&arm.body);
             let parent_depth = self.borrow_scopes.len().saturating_sub(1);
             self.ensure_block_owners_enclose(&arm.body, parent_depth, arm.span)?;
+            self.reject_block_result_temporary(&arm.body)?;
             self.keep_arm_result_loans(match_expr.id, &escaping, arm.span)?;
             self.pop_borrow_scope();
             match self.infer_block_result_type(&arm.body, arm.span)? {

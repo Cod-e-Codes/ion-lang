@@ -1,0 +1,23 @@
+fn id3(a: [int; 3]) -> [int; 3] {
+    return a;
+}
+
+fn main() -> int {
+    let a: [int; 3] = [7, 8, 9];
+    let b: [int; 3] = id3(a);
+    if b[0] != 7 || b[1] != 8 || b[2] != 9 {
+        return 1;
+    }
+    let c: [int; 3] = id3(id3(b));
+    if c[0] != 7 || c[2] != 9 {
+        return 2;
+    }
+    let id = fn(x: [int; 3]) -> [int; 3] {
+        return x;
+    };
+    let d: [int; 3] = id(c);
+    if d[1] != 8 {
+        return 3;
+    }
+    return 7;
+}

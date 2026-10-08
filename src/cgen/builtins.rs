@@ -1,5 +1,5 @@
 use super::*;
-use crate::cgen::types::mangle_type_name;
+use crate::cgen::types::{array_return_wrapper_name, mangle_type_name};
 
 impl Codegen {
     fn owned_option_c_name(&self, return_type: Option<&Type>, elem_ty: Option<&Type>) -> String {
@@ -304,8 +304,9 @@ impl Codegen {
             self.generate_expr(&args[0]);
             arg_code = std::mem::replace(&mut self.output, old_output);
             let code = if matches!(inner_type, Type::Array { .. }) {
+                let wrapper = array_return_wrapper_name(&inner_type);
                 format!(
-                    "({{ {ty}* _box = {arg}; static {ty} _val; memcpy(&_val, _box, sizeof(_val)); ion_box_free(_box); _val; }})",
+                    "({{ {wrapper} _ion_unwrapped = {{0}}; {ty}* _box = {arg}; memcpy(_ion_unwrapped._data, _box, sizeof(_ion_unwrapped._data)); ion_box_free(_box); _ion_unwrapped; }})",
                     ty = inner_c_type,
                     arg = arg_code
                 )

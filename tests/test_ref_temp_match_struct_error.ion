@@ -1,0 +1,15 @@
+struct Pair {
+    name: String;
+}
+
+fn make() -> Pair {
+    return Pair { name: String::from("ab") };
+}
+
+fn main() -> int {
+    match &make() {
+        Pair { name } => {
+            return String::len(name);
+        }
+    }
+}

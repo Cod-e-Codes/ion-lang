@@ -1,0 +1,61 @@
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct S {
+    v: int;
+}
+
+fn mkv() -> Vec<S> {
+    let mut v: Vec<S> = Vec::new();
+    Vec::push(&mut v, S { v: 7 });
+    return v;
+}
+
+fn mk_ints() -> Vec<int> {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 3);
+    return v;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn first(o: Option<&S>) -> int {
+    match o {
+        Option::Some(x) => {
+            return read(x);
+        }
+        Option::None => {
+            return 0;
+        }
+    }
+}
+
+fn main() -> int {
+    if first(Vec::get_ref(&mkv(), 0)) != 7 {
+        return 1;
+    }
+    if mk_ints().len() != 1 {
+        return 2;
+    }
+    let v: Vec<int> = mk_ints();
+    let r: &Vec<int> = &v;
+    if Vec::len(r) != 1 {
+        return 3;
+    }
+    match make_s() {
+        S { v } => {
+            if v != 4 {
+                return 4;
+            }
+        }
+    };
+    return 0;
+}
+
+fn make_s() -> S {
+    return S { v: 4 };
+}
