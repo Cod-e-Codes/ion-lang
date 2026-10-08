@@ -3292,7 +3292,10 @@ impl Codegen {
                     "if (_ion_sel_st{sid} == 0) {{ {c_name} = {some}; }} else {{ {c_name} = {none}; }}"
                 ));
                 self.scope_begin(&[]);
-                self.scope_register_c(name, c_name, &option_ty);
+                self.scope_register_c(name, c_name.clone(), &option_ty);
+                if Self::should_silence_unused_binding(name, &option_ty) {
+                    self.emit_silence_unused_binding(&c_name);
+                }
             }
             self.generate_block(&arm.body);
             if arm.binding.is_some() {
@@ -5674,9 +5677,14 @@ impl Codegen {
             other => (None, other),
         };
         if let Some(name) = at_name {
+            let c_name = self.alloc_c_name(name);
+            let bound_ty = Type::Enum(enum_type.to_string());
             self.write_indent();
-            self.writeln(&format!("{enum_type} {name} = {match_var_name};"));
-            self.scope_register_binding(name, &Type::Enum(enum_type.to_string()));
+            self.writeln(&format!("{enum_type} {c_name} = {match_var_name};"));
+            self.scope_register_c(name, c_name.clone(), &bound_ty);
+            if Self::should_silence_unused_binding(name, &bound_ty) {
+                self.emit_silence_unused_binding(&c_name);
+            }
         }
         let IRPattern::Variant {
             variant,
@@ -5813,16 +5821,20 @@ impl Codegen {
         src: &str,
         moved_out: (&str, usize, &str),
     ) {
+        let c_name = self.alloc_c_name(name);
         if matches!(bound_ty, Type::Ref { .. }) && !matches!(field_ty, Type::Ref { .. }) {
-            self.write(&format!("{} {name} = &({src});", self.type_to_c(bound_ty)));
+            self.write(&format!(
+                "{} {c_name} = &({src});",
+                self.type_to_c(bound_ty)
+            ));
             self.writeln("");
-            self.scope_register_binding(name, bound_ty);
+            self.scope_register_c(name, c_name.clone(), bound_ty);
         } else if matches!(bound_ty, Type::Ref { .. }) {
-            self.write(&format!("{} {name} = {src};", self.type_to_c(bound_ty)));
+            self.write(&format!("{} {c_name} = {src};", self.type_to_c(bound_ty)));
             self.writeln("");
-            self.scope_register_binding(name, bound_ty);
+            self.scope_register_c(name, c_name.clone(), bound_ty);
         } else {
-            self.emit_binding_from_c_expr(bound_ty, name, src);
+            self.emit_binding_from_c_expr(bound_ty, &c_name, src);
             self.writeln("");
             self.emit_match_scrutinee_payload_moved_out(
                 moved_out.0,
@@ -5830,10 +5842,10 @@ impl Codegen {
                 moved_out.2,
                 bound_ty,
             );
-            self.scope_register_binding(name, bound_ty);
+            self.scope_register_c(name, c_name.clone(), bound_ty);
         }
         if Self::should_silence_unused_binding(name, bound_ty) {
-            self.emit_silence_unused_binding(name);
+            self.emit_silence_unused_binding(&c_name);
         }
     }
 
