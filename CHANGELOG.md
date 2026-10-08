@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.9 - 2026-10-08
+
+- **Fix**: A store of a captured binding writes that field of the closure, including a whole struct, tuple, enum, or array. A nested fn literal copies from that field. A non-`Copy` binding moves into only one closure. A second closure that names it is `UseAfterMove`. A whole-array store copies through a temporary. This impacts generated C for a closure that assigns a capture or nests another closure, and for a whole-array store: regenerate that C. The runtime is unchanged, so relink is not required.
+
 ## 0.4.8 - 2026-10-08
 
 - **Fix**: Replacing a local, field, or array element does not drop a place the right-hand side already moved. A partial move is cleared before the aggregate drop, and that clear is not written after the store. A move on one `match` arm nulls only that arm. This impacts generated C for programs that replace a `Box`, `String`, `Vec`, struct, enum, array element, or field: regenerate that C. The runtime is unchanged, so relink is not required. Assigning a place to itself stays a single store.
