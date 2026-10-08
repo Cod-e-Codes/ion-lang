@@ -2698,8 +2698,7 @@ impl TypeChecker {
                     }
 
                     // Shared borrow of the get_ref place while `Option<&T>` is live.
-                    // Qualified calls loan the root owner. Method calls loan the
-                    // receiver place (binding or field path).
+                    // Qualified calls and method calls loan that place (binding or field path).
                     if let Some(place) = self.get_ref_place(init) {
                         self.register_borrow(
                             &place.owner,

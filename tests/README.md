@@ -314,6 +314,15 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_assign_self_cgen.ion` - `b = b` stays a plain store (codegen grep)
 - `test_move_then_assign_drop.ion` - reassignment after a move does not drop the moved value (exit 42)
 - `test_array_move_then_assign_drop.ion` - a moved-out array element is not dropped again on the next store (exit 42)
+- `test_replace_rhs_move.ion` - a local `Box`, `Vec` (including a loop), `String`, or `Option` replaced by a call that moved it is not dropped again (exit 0)
+- `test_replace_field_move.ion` - field, nested field, `&mut` field, partial move, and one `match` arm (exit 0)
+- `test_replace_array_move.ion` - array element update through a literal index and a variable index (exit 0)
+- `test_replace_vec_set.ion` - `Vec::set` of a fresh `Box` and of `Vec::get` on that index (exit 0)
+- `test_shadow_let.ion` - same-scope `let` reuses a name; the initializer sees the previous binding (exit 0)
+- `test_get_ref_qualified_disjoint.ion` - `Vec::get_ref(&vm.code, 0)` then `Vec::push` on `vm.stack` (exit 7)
+- `test_get_ref_qualified_same_field_error.ion` - `Vec::get_ref(&vm.code, 0)` then `Vec::push` on `vm.code` is `BorrowConflict`
+- `test_replace_consume_cgen.ion` - a consuming local update stores the temp and does not free that local
+- `test_replace_field_null_cgen.ion` - a field update does not assign `NULL` after the store
 - `test_aggregate_eq.ion` - struct, enum, and array `==` compare fields, the active variant, and elements (exit 0)
 - `test_drop_partial_move_error.ion` - `Drop` types cannot be partially moved
 - `test_drop_match_partial_move_error.ion` - `match` cannot move a non-Copy field out of a `Drop` value

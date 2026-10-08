@@ -1,0 +1,14 @@
+struct W {
+    b: Box<int>;
+    n: int;
+}
+
+fn same(incoming: Box<int>) -> Box<int> {
+    return incoming;
+}
+
+fn main() -> int {
+    let mut w: W = W { b: Box::new(1), n: 0 };
+    w.b = same(w.b);
+    return 0;
+}

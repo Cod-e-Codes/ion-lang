@@ -1,0 +1,43 @@
+// Qualified get_ref loans the field, so a push of a disjoint field stays legal.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum Op {
+    Push { val: int };
+    Halt;
+}
+
+struct VM {
+    stack: Vec<int>;
+    code: Vec<Op>;
+}
+
+fn main() -> int {
+    let mut vm: VM = VM { stack: Vec::new(), code: Vec::new() };
+    Vec::push(&mut vm.code, Op::Push { val: 7 });
+    match Vec::get_ref(&vm.code, 0) {
+        Option::Some(op) => {
+            match op {
+                Op::Push { val: v } => {
+                    Vec::push(&mut vm.stack, v);
+                }
+                Op::Halt => {
+                    return 1;
+                }
+            };
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+    match Vec::get(&vm.stack, 0) {
+        Option::Some(n) => {
+            return n;
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+}

@@ -1,0 +1,49 @@
+// Vec::set evaluates the new element before it drops the slot. Vec::get hollows a drop element first.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SetResult {
+    Ok;
+    OutOfBounds;
+}
+
+fn main() -> int {
+    let mut fresh: Vec<Box<int>> = Vec::new();
+    Vec::push(&mut fresh, Box::new(1));
+    Vec::set(&mut fresh, 0, Box::new(9));
+    match Vec::get(&fresh, 0) {
+        Option::Some(b) => {
+            if Box::unwrap(b) != 9 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+
+    let mut again: Vec<Box<int>> = Vec::new();
+    Vec::push(&mut again, Box::new(8));
+    let moved: Box<int> = match Vec::get(&again, 0) {
+        Option::Some(b) => {
+            b;
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+    Vec::set(&mut again, 0, moved);
+    match Vec::get(&again, 0) {
+        Option::Some(b) => {
+            if Box::unwrap(b) != 8 {
+                return 4;
+            }
+        }
+        Option::None => {
+            return 5;
+        }
+    };
+    return 0;
+}

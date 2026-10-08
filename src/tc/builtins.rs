@@ -853,17 +853,6 @@ impl TypeChecker {
         Ok(None)
     }
 
-    /// Root owner binding for `Vec::get_ref` / `Slice::get_ref` receivers (`&owner` or `&owner.field`).
-    pub(crate) fn vec_owner_from_get_ref_receiver(
-        &self,
-        receiver: &Expr,
-    ) -> Option<(String, Span)> {
-        if let Expr::Ref(r) = receiver {
-            return self.borrow_owner_from_expr(&r.inner);
-        }
-        None
-    }
-
     pub(crate) fn is_get_ref_call(expr: &Expr) -> bool {
         matches!(
             expr,
@@ -876,11 +865,11 @@ impl TypeChecker {
 
     /// Place shared-borrowed while `Option<&T>` from `get_ref` is live.
     ///
-    /// Qualified `Vec::get_ref` / `Slice::get_ref` / `Arena::get_ref` keep the
-    /// root binding (`fields: None`), including `&order.lines`. Method
-    /// `place.get_ref` on `Vec`, `Slice`, an array, or `Arena` uses the
-    /// receiver place, so `a.slots.get_ref` loans `slots` and `v.get_ref`
-    /// loans `v`. A user method named `get_ref` is not a loan.
+    /// Qualified `Vec::get_ref` / `Slice::get_ref` / `Arena::get_ref` and method
+    /// `place.get_ref` use the same place. `v.get_ref` and `Vec::get_ref(&v, i)`
+    /// loan `v`. `a.slots.get_ref` and `Vec::get_ref(&order.lines, i)` loan that
+    /// field path. A disjoint field does not conflict. A user method named
+    /// `get_ref` is not a loan.
     pub(crate) fn get_ref_place(&self, expr: &Expr) -> Option<GetRefPlace> {
         match expr {
             Expr::Call(call)
@@ -889,10 +878,14 @@ impl TypeChecker {
                     || call.callee == "Arena::get_ref")
                     && call.args.len() == 2 =>
             {
-                let (owner, span) = self.vec_owner_from_get_ref_receiver(&call.args[0])?;
+                let place_expr = match &call.args[0] {
+                    Expr::Ref(r) => r.inner.as_ref(),
+                    other => other,
+                };
+                let (owner, fields, span) = self.place_from_expr(place_expr)?;
                 Some(GetRefPlace {
                     owner,
-                    fields: None,
+                    fields,
                     span,
                 })
             }
@@ -947,15 +940,19 @@ impl TypeChecker {
         }
     }
 
-    /// Register a shared borrow on the root owner while `Option<&T>` from a
-    /// qualified `get_ref` call is live. Errors when that call has no local owner.
+    /// Register the shared borrow of a qualified `get_ref` place. Errors when
+    /// that call has no local owner. Field paths stay on that field.
     pub(crate) fn register_get_ref_borrow_from_receiver(
         &mut self,
         receiver: &Expr,
         span: Span,
     ) -> Result<(), TypeCheckError> {
-        if let Some((owner, owner_span)) = self.vec_owner_from_get_ref_receiver(receiver) {
-            self.register_borrow(&owner, None, false, owner_span)?;
+        let place_expr = match receiver {
+            Expr::Ref(r) => r.inner.as_ref(),
+            other => other,
+        };
+        if let Some((owner, fields, owner_span)) = self.place_from_expr(place_expr) {
+            self.register_borrow(&owner, fields, false, owner_span)?;
         } else {
             let _ = self.check_expr(receiver)?;
             return Err(Self::missing_get_ref_owner(span));

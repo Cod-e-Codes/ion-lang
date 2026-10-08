@@ -122,8 +122,9 @@ blocks may omit those checks.
   access `s.len` is not a slice API; slices are not structs.
 - `Slice::get_ref` returns a stack-local `Option<&T>` the same way as
   `Vec::get_ref` (pointer into the slice/array buffer, or `None` on OOB). The
-  root owner is shared-borrowed while the result is live. `&[T; N]` may coerce
-  to `&[]T` for this builtin.
+  place of the reference argument is shared-borrowed while the result is live
+  (the binding, or the field path). A disjoint field is not a conflict.
+  `&[T; N]` may coerce to `&[]T` for this builtin.
 
 ## Enums and structs
 

@@ -1,0 +1,13 @@
+fn same(incoming: Box<int>) -> Box<int> {
+    return incoming;
+}
+
+fn eat(x: Box<int>) -> int {
+    return Box::unwrap(x);
+}
+
+fn main() -> int {
+    let mut b: Box<int> = Box::new(1);
+    b = same(b);
+    return eat(b);
+}

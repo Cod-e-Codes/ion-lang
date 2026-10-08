@@ -1,0 +1,102 @@
+// Replacing a local with a call that already moved it must not drop that value again.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn same_box(b: Box<int>) -> Box<int> {
+    return b;
+}
+
+fn eat(b: Box<int>) -> int {
+    return Box::unwrap(b);
+}
+
+fn same_vec(v: Vec<int>) -> Vec<int> {
+    Vec::push(&mut v, 1);
+    return v;
+}
+
+fn same_string(s: String) -> String {
+    return s;
+}
+
+fn same_opt(o: Option<Box<int>>) -> Option<Box<int>> {
+    return o;
+}
+
+fn check_box() -> int {
+    let mut b: Box<int> = Box::new(4);
+    b = same_box(b);
+    return Box::unwrap(b);
+}
+
+fn check_eat() -> int {
+    let mut b: Box<int> = Box::new(3);
+    b = Box::new(eat(b));
+    return Box::unwrap(b);
+}
+
+fn check_vec() -> int {
+    let mut v: Vec<int> = Vec::new();
+    let mut i: int = 0;
+    while i < 3 {
+        v = same_vec(v);
+        i = i + 1;
+    }
+    return Vec::len(&v);
+}
+
+fn check_string() -> int {
+    let mut s: String = String::from("hi");
+    s = same_string(s);
+    return String::len(&s);
+}
+
+fn check_opt() -> int {
+    let mut o: Option<Box<int>> = Option::Some(Box::new(9));
+    o = same_opt(o);
+    match o {
+        Option::Some(b) => {
+            return Box::unwrap(b);
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}
+
+fn check_if(flag: bool) -> int {
+    let mut b: Box<int> = Box::new(8);
+    if flag {
+        b = same_box(b);
+    } else {
+        b = Box::new(0);
+    }
+    return Box::unwrap(b);
+}
+
+fn main() -> int {
+    if check_box() != 4 {
+        return 1;
+    }
+    if check_eat() != 3 {
+        return 2;
+    }
+    if check_vec() != 3 {
+        return 3;
+    }
+    if check_string() != 2 {
+        return 4;
+    }
+    if check_opt() != 9 {
+        return 5;
+    }
+    if check_if(true) != 8 {
+        return 6;
+    }
+    if check_if(false) != 0 {
+        return 7;
+    }
+    return 0;
+}

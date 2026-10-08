@@ -48,9 +48,19 @@ fn primitive_type_from_mangled_name(name: &str) -> Option<Type> {
 #[derive(Clone)]
 struct ScopeBinding {
     name: String,
+    /// C identifier. Differs from `name` when this `let` reuses a name that is still in scope.
+    c_name: String,
     ty: Type,
     dropped: bool,
     read: bool,
+}
+
+/// A moved-out field or array element, cleared in C before anything drops the old bits.
+struct PendingNull {
+    /// Place identity from [`Codegen::place_key`]. `None` when the place is not a local path.
+    key: Option<String>,
+    path: String,
+    line: String,
 }
 
 #[derive(Clone)]
@@ -111,8 +121,10 @@ pub struct Codegen {
     mangle_merged_module_calls: bool,
     /// Set during multi-file codegen: prefix this module's functions (`io_print_int`).
     multi_file_module: Option<String>,
-    /// Owned struct fields moved in the current statement; flushed after the statement completes.
-    pending_field_nulls: Vec<String>,
+    /// Owned fields and elements moved in the current statement.
+    /// A replacing store emits the ones under its destination before the drop.
+    /// The rest are flushed after the statement, and never after that store.
+    pending_field_nulls: Vec<PendingNull>,
     pending_field_null_set: std::collections::HashSet<String>,
 }
 
@@ -1146,9 +1158,15 @@ impl Codegen {
     }
 
     fn scope_register_binding(&mut self, name: &str, ty: &Type) {
+        let c_name = self.alloc_c_name(name);
+        self.scope_register_c(name, c_name, ty);
+    }
+
+    fn scope_register_c(&mut self, name: &str, c_name: String, ty: &Type) {
         if let Some(frame) = self.scope_stack.last_mut() {
             frame.bindings.push(ScopeBinding {
                 name: name.to_string(),
+                c_name,
                 ty: ty.clone(),
                 dropped: false,
                 read: false,
@@ -1156,10 +1174,61 @@ impl Codegen {
         }
     }
 
+    /// Mark moves in the initializer while the previous binding is still in scope,
+    /// then register the new binding as live.
+    fn finish_let(&mut self, ion_name: &str, c_name: &str, ty: &Type, init: Option<&IREexpr>) {
+        if let Some(init) = init {
+            self.mark_moves_in_expr(init);
+        }
+        self.flush_pending_field_nulls();
+        self.scope_register_c(ion_name, c_name.to_string(), ty);
+        if Self::should_silence_unused_binding(ion_name, ty) {
+            self.emit_silence_unused_binding(c_name);
+        }
+    }
+
+    /// C name for a new binding. A name still in scope gets `name_1`, `name_2`, ...
+    fn alloc_c_name(&self, ion_name: &str) -> String {
+        let shadowed = self.scope_stack.iter().any(|frame| {
+            frame
+                .bindings
+                .iter()
+                .any(|binding| binding.name == ion_name)
+        });
+        if !shadowed {
+            return ion_name.to_string();
+        }
+        let mut n = 1u32;
+        loop {
+            let candidate = format!("{ion_name}_{n}");
+            let taken = self.scope_stack.iter().any(|frame| {
+                frame
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.c_name == candidate)
+            });
+            if !taken {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
+    /// Innermost live binding's C name. Unregistered names pass through.
+    fn binding_c_name(&self, name: &str) -> String {
+        for frame in self.scope_stack.iter().rev() {
+            if let Some(binding) = frame.bindings.iter().rev().find(|b| b.name == name) {
+                return binding.c_name.clone();
+            }
+        }
+        name.to_string()
+    }
+
     fn scope_register_param_binding(&mut self, name: &str, ty: &Type) {
         self.scope_register_binding(name, ty);
         if Self::should_silence_unused_binding(name, ty) {
-            self.emit_silence_unused_binding(name);
+            let c_name = self.binding_c_name(name);
+            self.emit_silence_unused_binding(&c_name);
         }
     }
 
@@ -1482,7 +1551,7 @@ impl Codegen {
 
     fn field_access_c_path(&self, expr: &IREexpr) -> Option<String> {
         match expr {
-            IREexpr::Var(name) => Some(name.clone()),
+            IREexpr::Var(name) => Some(self.binding_c_name(name)),
             IREexpr::FieldAccess {
                 base,
                 field,
@@ -1496,6 +1565,20 @@ impl Codegen {
                     format!("{base_path}.{field}")
                 })
             }
+            IREexpr::Index { target, index, .. } => {
+                let base = self.field_access_c_path(target)?;
+                let index_c = self.pure_place_atom(index)?;
+                Some(format!("({base})[{index_c}]"))
+            }
+            _ => None,
+        }
+    }
+
+    /// C text for a place atom that does not allocate temps: a local or a literal.
+    fn pure_place_atom(&self, expr: &IREexpr) -> Option<String> {
+        match expr {
+            IREexpr::Var(name) => Some(self.binding_c_name(name)),
+            IREexpr::Lit(n) => Some(n.to_string()),
             _ => None,
         }
     }
@@ -1514,30 +1597,117 @@ impl Codegen {
         if !self.needs_drop(&ty) {
             return;
         }
+        let zero = self.zero_value_for_scrutinee_payload(&ty);
+        let key = Self::place_key(expr);
+        self.queue_moved_null(key, path, &zero);
+    }
+
+    fn queue_moved_null(&mut self, key: Option<String>, path: String, zero: &str) {
         if !self.pending_field_null_set.insert(path.clone()) {
             return;
         }
-        self.pending_field_nulls.push(format!(
-            "{} = {};",
-            path,
-            self.zero_value_for_scrutinee_payload(&ty)
-        ));
+        self.pending_field_nulls.push(PendingNull {
+            key,
+            path: path.clone(),
+            line: format!("{path} = {zero};"),
+        });
     }
 
     fn flush_pending_field_nulls(&mut self) {
-        let lines: Vec<String> = self.pending_field_nulls.drain(..).collect();
+        let lines: Vec<PendingNull> = self.pending_field_nulls.drain(..).collect();
         self.pending_field_null_set.clear();
-        for line in lines {
+        for item in lines {
             self.write_indent();
-            self.writeln(&line);
+            self.writeln(&item.line);
         }
     }
 
-    fn cancel_pending_null(&mut self, path: &str) {
-        let prefix = format!("{path} =");
+    /// Emit nulls queued since `start` and leave earlier ones pending.
+    /// Match-arm tails use this so a move on one arm does not run on the other.
+    fn flush_pending_range(&mut self, start: usize) {
+        if start >= self.pending_field_nulls.len() {
+            return;
+        }
+        let tail: Vec<PendingNull> = self.pending_field_nulls.drain(start..).collect();
+        for item in &tail {
+            self.pending_field_null_set.remove(&item.path);
+        }
+        for item in tail {
+            self.write_indent();
+            self.writeln(&item.line);
+        }
+    }
+
+    fn pending_has_exact(&self, key: &str) -> bool {
         self.pending_field_nulls
-            .retain(|line| !line.starts_with(&prefix));
-        self.pending_field_null_set.remove(path);
+            .iter()
+            .any(|item| item.key.as_deref() == Some(key))
+    }
+
+    /// `child` is a field or index of `parent`, not `parent` itself.
+    fn key_under(parent: &str, child: &str) -> bool {
+        child.starts_with(&format!("{parent}.")) || child.starts_with(&format!("{parent}["))
+    }
+
+    fn cancel_nulls_under_key(&mut self, parent_key: &str) {
+        let mut removed = Vec::new();
+        self.pending_field_nulls.retain(|item| {
+            let drop_it = item
+                .key
+                .as_deref()
+                .is_some_and(|key| key == parent_key || Self::key_under(parent_key, key));
+            if drop_it {
+                removed.push(item.path.clone());
+            }
+            !drop_it
+        });
+        for path in removed {
+            self.pending_field_null_set.remove(&path);
+        }
+    }
+
+    /// Write clears for moved fields and elements of `parent_key`, then drop them from the queue.
+    fn emit_strict_subplace_nulls(&mut self, parent_key: &str) {
+        let mut keep = Vec::new();
+        let mut emit = Vec::new();
+        for item in self.pending_field_nulls.drain(..) {
+            if item
+                .key
+                .as_deref()
+                .is_some_and(|key| Self::key_under(parent_key, key))
+            {
+                self.pending_field_null_set.remove(&item.path);
+                emit.push(item);
+            } else {
+                keep.push(item);
+            }
+        }
+        self.pending_field_nulls = keep;
+        for item in emit {
+            self.write_indent();
+            self.writeln(&item.line);
+        }
+    }
+
+    /// The right-hand side has been evaluated. Clear moved subplaces of the
+    /// destination. Return true when the destination itself was consumed and
+    /// must not be dropped.
+    fn consume_dest_before_drop(
+        &mut self,
+        dest_key: Option<&str>,
+        local_ion: Option<&str>,
+    ) -> bool {
+        let local_moved = local_ion.is_some_and(|name| self.binding_is_dropped(name));
+        let Some(key) = dest_key else {
+            return local_moved;
+        };
+        let exact = self.pending_has_exact(key);
+        if local_moved || exact {
+            self.cancel_nulls_under_key(key);
+            return true;
+        }
+        self.emit_strict_subplace_nulls(key);
+        false
     }
 
     /// C lvalue of an index element, without the bounds-check wrapper.
@@ -1579,11 +1749,9 @@ impl Codegen {
             return;
         }
         let path = self.index_element_lvalue(target, index, &resolved);
-        if !self.pending_field_null_set.insert(path.clone()) {
-            return;
-        }
         let zero = self.zero_value_for_scrutinee_payload(&elem);
-        self.pending_field_nulls.push(format!("{path} = {zero};"));
+        let key = Self::index_place_key(target, index);
+        self.queue_moved_null(key, path, &zero);
     }
 
     fn is_string_compare_operand(&self, expr: &IREexpr) -> bool {
@@ -2084,7 +2252,8 @@ impl Codegen {
         self.write("&(");
         self.write(&slice_type);
         self.write("){");
-        self.write(array_name);
+        let c_name = self.binding_c_name(array_name);
+        self.write(&c_name);
         self.write(", ");
         self.write(&size.to_string());
         self.write("}");
@@ -2149,6 +2318,9 @@ impl Codegen {
             IREexpr::Cast { expr, .. } => self.mark_moves_in_expr(expr),
             IREexpr::Assign { target, value } => {
                 self.mark_moves_in_expr(value);
+                // The store overwrote this local. A null queued for it, or for a
+                // field the right-hand side moved, must not run after the store.
+                self.cancel_nulls_under_key(&format!("v:{target}"));
                 if let Some(ty) = self.lookup_var_type(target)
                     && self.needs_drop(&ty)
                 {
@@ -2161,21 +2333,17 @@ impl Codegen {
                 target,
                 index,
                 value,
-                target_type,
+                target_type: _,
             } => {
-                let restore = Self::same_index_slot(target, index, value);
                 self.mark_moves_in_expr(value);
-                if restore && let Some(target_type) = target_type.as_ref() {
-                    let resolved = resolve_type_alias(target_type, &self.type_aliases);
-                    let path = self.index_element_lvalue(target, index, &resolved);
-                    self.cancel_pending_null(&path);
+                if let Some(key) = Self::index_place_key(target, index) {
+                    self.cancel_nulls_under_key(&key);
                 }
             }
             IREexpr::AssignField { target, value, .. } => {
-                let restore = Self::same_field_place(target, value);
                 self.mark_moves_in_expr(value);
-                if restore && let Some(path) = self.field_access_c_path(target) {
-                    self.cancel_pending_null(&path);
+                if let Some(key) = Self::place_key(target) {
+                    self.cancel_nulls_under_key(&key);
                 }
             }
             IREexpr::Index {
@@ -2228,10 +2396,19 @@ impl Codegen {
             IREexpr::Var(name) => Some(format!("v:{name}")),
             IREexpr::Lit(n) => Some(format!("l:{n}")),
             IREexpr::FieldAccess { base, field, .. } => {
-                Some(format!("f:{}:{field}", Self::place_key(base)?))
+                Some(format!("{}.{field}", Self::place_key(base)?))
             }
+            IREexpr::Index { target, index, .. } => Self::index_place_key(target, index),
             _ => None,
         }
+    }
+
+    fn index_place_key(target: &IREexpr, index: &IREexpr) -> Option<String> {
+        Some(format!(
+            "{}[{}]",
+            Self::place_key(target)?,
+            Self::place_key(index)?
+        ))
     }
 
     fn same_field_place(target: &IREexpr, value: &IREexpr) -> bool {
@@ -2260,11 +2437,15 @@ impl Codegen {
         matches!(value, IREexpr::Var(name) if name == target)
     }
 
-    /// `place = value`. When `drop_old`, evaluate the right-hand side first, drop
-    /// the previous value, then store.
+    /// `place = value`. When `drop_old`, evaluate the right-hand side first.
+    /// A place the right-hand side already consumed is not dropped. Moved
+    /// subplaces are cleared before the drop. Then store.
+    /// `local_ion` is set when `place` is a local. `dest_key` is its place key.
     fn emit_replacing_store_stmt(
         &mut self,
         place: &str,
+        local_ion: Option<&str>,
+        dest_key: Option<&str>,
         value: &IREexpr,
         ty: &Type,
         drop_old: bool,
@@ -2277,9 +2458,15 @@ impl Codegen {
             self.write(&format!("{c_ty} {tmp} = "));
             self.generate_expr_with_type(value, Some(ty));
             self.writeln(";");
-            self.emit_drop_at_path(place, ty);
+            let consumed = self.consume_dest_before_drop(dest_key, local_ion);
+            if !consumed {
+                self.emit_drop_at_path(place, ty);
+            }
             self.write_indent();
             self.writeln(&format!("{place} = {tmp};"));
+            if let Some(name) = local_ion {
+                self.scope_mark_live(name);
+            }
         } else {
             self.write_indent();
             self.write(place);
@@ -2294,6 +2481,8 @@ impl Codegen {
     fn emit_replacing_store_expr(
         &mut self,
         place: &str,
+        local_ion: Option<&str>,
+        dest_key: Option<&str>,
         value: &IREexpr,
         ty: &Type,
         drop_old: bool,
@@ -2309,9 +2498,15 @@ impl Codegen {
             self.write(" = ");
             self.generate_expr_with_type(value, Some(ty));
             self.write("; ");
-            self.emit_drop_at_path(place, ty);
+            let consumed = self.consume_dest_before_drop(dest_key, local_ion);
+            if !consumed {
+                self.emit_drop_at_path(place, ty);
+            }
             self.write_indent();
             self.write(&format!("{place} = {tmp}; {tmp}; }})"));
+            if let Some(name) = local_ion {
+                self.scope_mark_live(name);
+            }
         } else {
             self.write(place);
             self.write(" = ");
@@ -2378,7 +2573,11 @@ impl Codegen {
         self.write(" = ");
         self.generate_expr_with_type(value, Some(elem_ty));
         self.write("; ");
-        self.emit_drop_at_path(&place, elem_ty);
+        let consumed =
+            self.consume_dest_before_drop(Self::index_place_key(target, index).as_deref(), None);
+        if !consumed {
+            self.emit_drop_at_path(&place, elem_ty);
+        }
         self.write_indent();
         self.write(&format!("{place} = {tmp}; }})"));
     }
@@ -2425,15 +2624,15 @@ impl Codegen {
                 && !binding.read
                 && !Self::should_silence_unused_binding(&binding.name, &binding.ty)
             {
-                self.emit_silence_unused_binding(&binding.name);
+                self.emit_silence_unused_binding(&binding.c_name);
             }
         }
         for binding in frame.bindings.iter().rev() {
             if !binding.dropped && self.needs_drop(&binding.ty) {
                 if frame.join_handles && matches!(binding.ty, Type::JoinHandle { .. }) {
-                    self.emit_scope_join(&binding.name, &binding.ty);
+                    self.emit_scope_join(&binding.c_name, &binding.ty);
                 } else {
-                    self.emit_drop(&binding.name, &binding.ty);
+                    self.emit_drop(&binding.c_name, &binding.ty);
                 }
             }
         }
@@ -3085,14 +3284,15 @@ impl Codegen {
                 let tmp = format!("_ion_sel_v{sid}_{i}");
                 let some = self.c_enum_literal(&option_c, "Option", "Some", Some(&tmp));
                 let none = self.c_enum_literal(&option_c, "Option", "None", None);
+                let c_name = self.alloc_c_name(name);
                 self.write_indent();
-                self.writeln(&format!("{option_c} {name};"));
+                self.writeln(&format!("{option_c} {c_name};"));
                 self.write_indent();
                 self.writeln(&format!(
-                    "if (_ion_sel_st{sid} == 0) {{ {name} = {some}; }} else {{ {name} = {none}; }}"
+                    "if (_ion_sel_st{sid} == 0) {{ {c_name} = {some}; }} else {{ {c_name} = {none}; }}"
                 ));
                 self.scope_begin(&[]);
-                self.scope_register_param_binding(name, &option_ty);
+                self.scope_register_c(name, c_name, &option_ty);
             }
             self.generate_block(&arm.body);
             if arm.binding.is_some() {
@@ -3185,17 +3385,19 @@ impl Codegen {
                     && let Type::Sender { elem_type } = &elements[0]
                     && let Some(IREexpr::Call { args, .. }) = &let1.init
                 {
+                    let c1 = self.alloc_c_name(&let1.name);
+                    let c2 = self.alloc_c_name(&let2.name);
                     self.write_indent();
-                    self.write(&format!("{} {}", self.type_to_c(&let1.ty), let1.name));
+                    self.write(&format!("{} {}", self.type_to_c(&let1.ty), c1));
                     self.writeln(";");
                     self.write_indent();
-                    self.write(&format!("{} {}", self.type_to_c(&let2.ty), let2.name));
+                    self.write(&format!("{} {}", self.type_to_c(&let2.ty), c2));
                     self.writeln(";");
 
-                    self.emit_ion_channel_new(elem_type, args, &let1.name, &let2.name);
+                    self.emit_ion_channel_new(elem_type, args, &c1, &c2);
 
-                    self.scope_register_binding(&let1.name, &let1.ty);
-                    self.scope_register_binding(&let2.name, &let2.ty);
+                    self.scope_register_c(&let1.name, c1, &let1.ty);
+                    self.scope_register_c(&let2.name, c2, &let2.ty);
 
                     i += 2;
                     continue;
@@ -3222,6 +3424,7 @@ impl Codegen {
     fn generate_stmt(&mut self, stmt: &IRStmt) {
         match stmt {
             IRStmt::Let(let_stmt) => {
+                let c_name = self.alloc_c_name(&let_stmt.name);
                 if let Some(ref init) = let_stmt.init
                     && let Some((array_name, size, elem_ty)) =
                         self.match_array_to_slice_coercion(&let_stmt.ty, init)
@@ -3229,22 +3432,20 @@ impl Codegen {
                     let slice_type = self.slice_struct_name_for_elem(&elem_ty);
                     let temp = format!("__ion_arr_slice_{}", self.temp_var_counter);
                     self.temp_var_counter += 1;
+                    let array_c = self.binding_c_name(&array_name);
                     self.write_indent();
                     self.writeln(&format!(
                         "{} {} = {{ {}, {} }};",
-                        slice_type, temp, array_name, size
+                        slice_type, temp, array_c, size
                     ));
                     self.write_indent();
-                    self.write(&format!(
+                    self.writeln(&format!(
                         "{} {} = &{};",
                         self.type_to_c(&let_stmt.ty),
-                        let_stmt.name,
+                        c_name,
                         temp
                     ));
-                    self.writeln(";");
-                    self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
-                    self.mark_moves_in_expr(init);
-                    self.flush_pending_field_nulls();
+                    self.finish_let(&let_stmt.name, &c_name, &let_stmt.ty, Some(init));
                     return;
                 }
                 self.write_indent();
@@ -3286,9 +3487,9 @@ impl Codegen {
 
                 if let Some(base_type) = call_returns_array_type {
                     // Function call returning array - declare as pointer
-                    self.write(&format!("{}* {}", base_type, let_stmt.name));
+                    self.write(&format!("{}* {}", base_type, c_name));
                 } else {
-                    self.write(&self.c_named_decl(&let_stmt.name, &let_stmt.ty));
+                    self.write(&self.c_named_decl(&c_name, &let_stmt.ty));
                 }
 
                 if let Some(ref init) = let_stmt.init {
@@ -3314,13 +3515,8 @@ impl Codegen {
                                     self.type_to_c(&elements[1]),
                                     temp_rx_name
                                 ));
-                                self.emit_ion_channel_new(
-                                    elem_type,
-                                    &[],
-                                    &let_stmt.name,
-                                    &temp_rx_name,
-                                );
-                                self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
+                                self.emit_ion_channel_new(elem_type, &[], &c_name, &temp_rx_name);
+                                self.scope_register_c(&let_stmt.name, c_name.clone(), &let_stmt.ty);
                                 return;
                             }
                         } else if *tuple_destructure_index == Some(1) {
@@ -3343,12 +3539,10 @@ impl Codegen {
                             match_expr,
                             enum_type,
                             arms,
-                            Some((&let_stmt.name, &let_stmt.ty)),
+                            Some((&c_name, &let_stmt.ty)),
                             scrutinee_type.as_ref(),
                         );
-                        self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
-                        self.mark_moves_in_expr(match_expr);
-                        self.flush_pending_field_nulls();
+                        self.finish_let(&let_stmt.name, &c_name, &let_stmt.ty, Some(match_expr));
                         return;
                     }
 
@@ -3382,14 +3576,12 @@ impl Codegen {
                 }
 
                 self.writeln(";");
-                self.scope_register_binding(&let_stmt.name, &let_stmt.ty);
-                if Self::should_silence_unused_binding(&let_stmt.name, &let_stmt.ty) {
-                    self.emit_silence_unused_binding(&let_stmt.name);
-                }
-                if let Some(init) = &let_stmt.init {
-                    self.mark_moves_in_expr(init);
-                }
-                self.flush_pending_field_nulls();
+                self.finish_let(
+                    &let_stmt.name,
+                    &c_name,
+                    &let_stmt.ty,
+                    let_stmt.init.as_ref(),
+                );
             }
             IRStmt::Return(ret) => {
                 self.emit_function_return(ret);
@@ -3514,11 +3706,20 @@ impl Codegen {
                                 && !self.binding_is_dropped(target)
                                 && !Self::rhs_is_same_local(target, value)
                         });
+                        let c_place = self.binding_c_name(target);
                         if let Some(ty) = ty.as_ref().filter(|ty| self.type_needs_drop(ty)) {
-                            self.emit_replacing_store_stmt(target, value, ty, drop_old);
+                            let key = format!("v:{target}");
+                            self.emit_replacing_store_stmt(
+                                &c_place,
+                                Some(target),
+                                Some(&key),
+                                value,
+                                ty,
+                                drop_old,
+                            );
                         } else {
                             self.write_indent();
-                            self.write(target);
+                            self.write(&c_place);
                             self.write(" = ");
                             self.generate_expr_with_type(value, ty.as_ref());
                             self.writeln(";");
@@ -3564,7 +3765,15 @@ impl Codegen {
                             && !Self::same_field_place(target, value);
                         if drop_old {
                             let path = self.capture_expr_code(target);
-                            self.emit_replacing_store_stmt(&path, value, field_ty, true);
+                            let key = Self::place_key(target);
+                            self.emit_replacing_store_stmt(
+                                &path,
+                                None,
+                                key.as_deref(),
+                                value,
+                                field_ty,
+                                true,
+                            );
                         } else {
                             self.write_indent();
                             self.generate_expr(target);
@@ -3733,7 +3942,8 @@ impl Codegen {
                     self.write(&resolved);
                 } else {
                     self.scope_mark_binding_read(name);
-                    self.write(name);
+                    let c_name = self.binding_c_name(name);
+                    self.write(&c_name);
                 }
             }
             IREexpr::AddressOf {
@@ -4368,10 +4578,19 @@ impl Codegen {
                         && !self.binding_is_dropped(target)
                         && !Self::rhs_is_same_local(target, value)
                 });
+                let c_place = self.binding_c_name(target);
                 if let Some(ty) = ty.as_ref().filter(|ty| self.type_needs_drop(ty)) {
-                    self.emit_replacing_store_expr(target, value, ty, drop_old);
+                    let key = format!("v:{target}");
+                    self.emit_replacing_store_expr(
+                        &c_place,
+                        Some(target),
+                        Some(&key),
+                        value,
+                        ty,
+                        drop_old,
+                    );
                 } else {
-                    self.write(target);
+                    self.write(&c_place);
                     self.write(" = ");
                     self.generate_expr_with_type(value, ty.as_ref());
                 }
@@ -4479,7 +4698,15 @@ impl Codegen {
                     self.type_needs_drop(field_ty) && !Self::same_field_place(target, value);
                 if drop_old {
                     let path = self.capture_expr_code(target);
-                    self.emit_replacing_store_expr(&path, value, field_ty, true);
+                    let key = Self::place_key(target);
+                    self.emit_replacing_store_expr(
+                        &path,
+                        None,
+                        key.as_deref(),
+                        value,
+                        field_ty,
+                        true,
+                    );
                 } else {
                     self.generate_expr(target);
                     self.write(" = ");
@@ -4497,7 +4724,8 @@ impl Codegen {
                         if i > 0 {
                             self.write(", ");
                         }
-                        self.write(&format!(".{name} = {name}"));
+                        let c_name = self.binding_c_name(name);
+                        self.write(&format!(".{name} = {c_name}"));
                         if let Some(ty) = lit.captures.get(i).map(|(_, ty)| ty)
                             && self.type_needs_drop(ty)
                         {
@@ -5127,21 +5355,23 @@ impl Codegen {
                 inner: Box::new(ty.clone()),
                 mutable: false,
             };
+            let c_name = self.alloc_c_name(name);
             self.write_indent();
-            self.writeln(&format!("{} {name} = &({src});", self.type_to_c(&ref_ty)));
-            self.scope_register_binding(name, &ref_ty);
+            self.writeln(&format!("{} {c_name} = &({src});", self.type_to_c(&ref_ty)));
+            self.scope_register_c(name, c_name.clone(), &ref_ty);
             if Self::should_silence_unused_binding(name, &ref_ty) {
-                self.emit_silence_unused_binding(name);
+                self.emit_silence_unused_binding(&c_name);
             }
             return;
         }
         if through_ref {
             let c_ty = self.type_to_c(ty);
+            let c_name = self.alloc_c_name(name);
             self.write_indent();
-            self.writeln(&format!("{c_ty} {name} = {src};"));
-            self.scope_register_binding(name, ty);
+            self.writeln(&format!("{c_ty} {c_name} = {src};"));
+            self.scope_register_c(name, c_name.clone(), ty);
             if Self::should_silence_unused_binding(name, ty) {
-                self.emit_silence_unused_binding(name);
+                self.emit_silence_unused_binding(&c_name);
             }
             return;
         }
@@ -5152,18 +5382,19 @@ impl Codegen {
     /// so the scrutinee drop does not free it again.
     fn emit_moved_value_binding(&mut self, ty: &Type, name: &str, src: &str) {
         let c_ty = self.type_to_c(ty);
+        let c_name = self.alloc_c_name(name);
         if matches!(ty, Type::Array { .. }) {
             self.write_indent();
-            self.writeln(&format!("{c_ty} {name};"));
+            self.writeln(&format!("{c_ty} {c_name};"));
             self.write_indent();
-            self.writeln(&format!("memcpy(&{name}, &({src}), sizeof({name}));"));
+            self.writeln(&format!("memcpy(&{c_name}, &({src}), sizeof({c_name}));"));
             if self.needs_drop(ty) {
                 self.write_indent();
                 self.writeln(&format!("memset(&({src}), 0, sizeof({src}));"));
             }
         } else {
             self.write_indent();
-            self.writeln(&format!("{c_ty} {name} = {src};"));
+            self.writeln(&format!("{c_ty} {c_name} = {src};"));
             if self.needs_drop(ty) {
                 self.write_indent();
                 self.writeln(&format!(
@@ -5172,9 +5403,9 @@ impl Codegen {
                 ));
             }
         }
-        self.scope_register_binding(name, ty);
+        self.scope_register_c(name, c_name.clone(), ty);
         if Self::should_silence_unused_binding(name, ty) {
-            self.emit_silence_unused_binding(name);
+            self.emit_silence_unused_binding(&c_name);
         }
     }
 
@@ -5760,9 +5991,13 @@ impl Codegen {
                     } else {
                         self.write_indent();
                         self.write(&format!("{} = ", result_var));
+                        let queued = self.pending_field_nulls.len();
                         self.generate_expr_with_type(expr, Some(result_type));
                         self.writeln(";");
                         self.mark_moves_in_expr(expr);
+                        // Nulls from this arm stay inside the arm. A scrutinee
+                        // null queued before the arms is left for the statement.
+                        self.flush_pending_range(queued);
                     }
                 } else {
                     self.generate_stmt(&stmts[idx]);

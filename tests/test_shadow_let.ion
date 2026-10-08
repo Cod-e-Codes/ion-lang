@@ -1,0 +1,19 @@
+// A let may reuse a name. The initializer still sees the previous binding.
+fn same(b: Box<int>) -> Box<int> {
+    return b;
+}
+
+fn from_param(b: Box<int>) -> int {
+    let b: Box<int> = same(b);
+    return Box::unwrap(b);
+}
+
+fn main() -> int {
+    let first: Box<int> = Box::new(1);
+    let first: Box<int> = Box::new(2);
+    let n: int = from_param(Box::new(7));
+    if n != 7 {
+        return 1;
+    }
+    return 0;
+}

@@ -585,3 +585,12 @@ test_assign_int_cgen.ion	cgen			x = 2;	_ion_set_
 test_assign_self_cgen.ion	cgen			b = b;	_ion_set_
 test_assign_replace_cgen.ion	cgen			ion_box_free(b);
 test_assign_replace_cgen.ion	cgen			ion_box_free(h.b);
+test_replace_rhs_move.ion	run	0
+test_replace_field_move.ion	run	0
+test_replace_array_move.ion	run	0
+test_replace_vec_set.ion	run	0
+test_shadow_let.ion	run	0
+test_get_ref_qualified_disjoint.ion	run	7
+test_get_ref_qualified_same_field_error.ion	error		BorrowConflict
+test_replace_consume_cgen.ion	cgen			b = _ion_set_	ion_box_free(b)
+test_replace_field_null_cgen.ion	cgen			w.b = _ion_set_	= NULL

@@ -1,0 +1,157 @@
+// A field moved by the right-hand side is not dropped, and a null is not written after the store.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum SendResult<T> {
+    Sent;
+    Closed(T);
+}
+
+struct Guard {
+    tx: Sender<int>;
+    n: int;
+}
+
+impl Drop for Guard {
+    fn drop(self: &mut Guard) {
+        send(self.tx, self.n);
+    }
+}
+
+struct W {
+    b: Box<int>;
+    n: int;
+}
+
+struct Inner {
+    b: Box<int>;
+}
+
+struct Outer {
+    inner: Inner;
+}
+
+struct Hold {
+    b: Box<Guard>;
+}
+
+fn same(b: Box<int>) -> Box<int> {
+    return b;
+}
+
+fn same_guard(b: Box<Guard>) -> Box<Guard> {
+    return b;
+}
+
+fn refresh(p: &mut W) {
+    let n: int = p.n;
+    p.b = Box::new(n);
+}
+
+fn check_field() -> int {
+    let mut w: W = W { b: Box::new(4), n: 1 };
+    w.b = same(w.b);
+    return Box::unwrap(w.b);
+}
+
+fn check_nested() -> int {
+    let mut o: Outer = Outer { inner: Inner { b: Box::new(7) } };
+    o.inner.b = same(o.inner.b);
+    return Box::unwrap(o.inner.b);
+}
+
+fn check_mut() -> int {
+    let mut w: W = W { b: Box::new(1), n: 6 };
+    refresh(&mut w);
+    return Box::unwrap(w.b);
+}
+
+fn check_partial() -> int {
+    let mut w: W = W { b: Box::new(5), n: 1 };
+    w = W { b: same(w.b), n: 2 };
+    if w.n != 2 {
+        return 1;
+    }
+    return Box::unwrap(w.b);
+}
+
+fn check_match_move() -> int {
+    let mut w: W = W { b: Box::new(3), n: 0 };
+    let flag: bool = true;
+    w.b = match flag {
+        true => {
+            same(w.b);
+        }
+        false => {
+            Box::new(0);
+        }
+    };
+    return Box::unwrap(w.b);
+}
+
+fn check_match_drop() -> int {
+    let (tx1, rx): (Sender<int>, Receiver<int>) = channel<int>();
+    let (tx2, _rx2): (Sender<int>, Receiver<int>) = channel<int>();
+    let mut w: Hold = Hold { b: Box::new(Guard { tx: tx1, n: 11 }) };
+    let flag: bool = false;
+    w.b = match flag {
+        true => {
+            let _hold: Guard = Guard { tx: tx2, n: 0 };
+            same_guard(w.b);
+        }
+        false => {
+            Box::new(Guard { tx: tx2, n: 22 });
+        }
+    };
+    match recv(&mut rx) {
+        Option::Some(v) => {
+            if v != 11 {
+                return 2;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    };
+    return 0;
+}
+
+fn check_match_value() -> int {
+    let mut b: Box<int> = Box::new(10);
+    match true {
+        true => {
+            b = same(b);
+        }
+        false => {
+            b = Box::new(0);
+        }
+    };
+    return Box::unwrap(b);
+}
+
+fn main() -> int {
+    if check_field() != 4 {
+        return 1;
+    }
+    if check_nested() != 7 {
+        return 2;
+    }
+    if check_mut() != 6 {
+        return 3;
+    }
+    if check_partial() != 5 {
+        return 4;
+    }
+    if check_match_move() != 3 {
+        return 5;
+    }
+    if check_match_drop() != 0 {
+        return 6;
+    }
+    if check_match_value() != 10 {
+        return 7;
+    }
+    return 0;
+}

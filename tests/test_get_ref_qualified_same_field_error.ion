@@ -1,0 +1,36 @@
+// Qualified get_ref on a field still conflicts with a push of that same field.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum Op {
+    Push { val: int };
+    Halt;
+}
+
+struct VM {
+    stack: Vec<int>;
+    code: Vec<Op>;
+}
+
+fn main() -> int {
+    let mut vm: VM = VM { stack: Vec::new(), code: Vec::new() };
+    Vec::push(&mut vm.code, Op::Push { val: 7 });
+    match Vec::get_ref(&vm.code, 0) {
+        Option::Some(op) => {
+            Vec::push(&mut vm.code, Op::Halt);
+            match op {
+                Op::Push { val: v } => {
+                    return v;
+                }
+                Op::Halt => {
+                    return 1;
+                }
+            };
+        }
+        Option::None => {
+            return 2;
+        }
+    };
+}
