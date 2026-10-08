@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.11 - 2026-10-08
+
+- **Fix**: An owned operand that is not moved into a binding, a return, a store, or an owning parameter is evaluated once and dropped at the end of that full expression. That covers a comparison, a borrow, a field or `len` projection, and a discarded statement. `&&` and `||` still short-circuit. A place is not a temporary. A parameter of type `&T`, `&mut T`, or `&str` does not take ownership, so an owned `String` passed to `String::push_str` stays with the caller and is dropped with that binding. This impacts generated C for programs that compare, borrow, project, or discard an owned temporary, and for programs that pass an owned `String` where `&str` is expected: regenerate that C. The runtime is unchanged, so relink is not required.
+
 ## 0.4.10 - 2026-10-08
 
 - **Fix**: A closure value drops its remaining captures when it goes out of scope, including after a call that consumed it. The call does not take the struct. A capture the body moved is cleared. A capture the body left in place, or stored back into the closure, is dropped with the closure. That releases a `Sender` still held by the closure, so a discarded `Receiver` can free the channel. Building the closure names its function, so an uncalled closure stays warning-clean. This impacts generated C for a closure that holds a non-`Copy` capture: regenerate that C. The runtime is unchanged, so relink is not required.
