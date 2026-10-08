@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.4.12 - 2026-10-08
+
+- **Fix**: A reference taken from an owned temporary and then stored, assigned, or matched is `ReferenceEscape`. That includes `&f()`, a field or index of that temporary, `Vec::get_ref`, `Slice::get_ref`, and `Arena::get_ref`, and a tuple, struct, or enum that holds one. A borrow used only as a call argument stays on that call. An owned `match` scrutinee moves the value into the match. This rejects programs that previously compiled and then used a reference after the temporary was dropped. Programs that still compile do not need to be regenerated or relinked.
+- **Fix**: A loan belongs to the binding that was borrowed. A later `let` of the same name does not conflict with the previous loan, and ending the old loan does not adjust the new binding. A second borrow of the same binding is still `BorrowConflict`. This is not an ABI change. Relink is not required. Generated C for programs that still compile is unchanged.
+- **Fix**: A function that returns `[T; N]` returns a one-field struct and the caller copies `_data` into its own array. Locals, fields, and parameters stay the array typedef. A nested call copies the returned array into a temporary that lives for the outer call. `Box::unwrap` of an array returns that same struct. A discarded return of a dropping element type is dropped. The array typedef and its return struct can appear in a header and a caller; the second copy is skipped. This impacts generated C for a function that returns an array, a call that passes that return, and `Box::unwrap` of an array: regenerate that C. The runtime is unchanged, so relink is not required.
+
 ## 0.4.11 - 2026-10-08
 
 - **Fix**: An owned operand that is not moved into a binding, a return, a store, or an owning parameter is evaluated once and dropped at the end of that full expression. That covers a comparison, a borrow, a field or `len` projection, and a discarded statement. `&&` and `||` still short-circuit. A place is not a temporary. A parameter of type `&T`, `&mut T`, or `&str` does not take ownership, so an owned `String` passed to `String::push_str` stays with the caller and is dropped with that binding. This impacts generated C for programs that compare, borrow, project, or discard an owned temporary, and for programs that pass an owned `String` where `&str` is expected: regenerate that C. The runtime is unchanged, so relink is not required.
