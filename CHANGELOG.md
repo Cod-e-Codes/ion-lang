@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.10 - 2026-10-08
+
 - **Fix**: A closure value drops its remaining captures when it goes out of scope, including after a call that consumed it. The call does not take the struct. A capture the body moved is cleared. A capture the body left in place, or stored back into the closure, is dropped with the closure. That releases a `Sender` still held by the closure, so a discarded `Receiver` can free the channel. Building the closure names its function, so an uncalled closure stays warning-clean. This impacts generated C for a closure that holds a non-`Copy` capture: regenerate that C. The runtime is unchanged, so relink is not required.
 
 ## 0.4.9 - 2026-10-08
