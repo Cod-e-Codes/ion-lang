@@ -274,10 +274,7 @@ impl Codegen {
                 ..
             } => {}
             IREexpr::BinOp {
-                op,
-                left,
-                right,
-                ..
+                op, left, right, ..
             } if matches!(op, BinOp::Eq | BinOp::Ne)
                 && self.is_string_compare_operand(left)
                 && self.is_string_compare_operand(right) =>
@@ -298,9 +295,12 @@ impl Codegen {
             IREexpr::AddressOf { inner, .. } => {
                 self.plan_rec(inner, false, false, force, plan);
             }
-            IREexpr::FieldAccess { base, field, ty, .. } => {
+            IREexpr::FieldAccess {
+                base, field, ty, ..
+            } => {
                 self.plan_rec(base, false, false, false, plan);
-                if moved && self.type_needs_drop(ty)
+                if moved
+                    && self.type_needs_drop(ty)
                     && let Some(name) = self.bound_operand_name(base).map(str::to_string)
                 {
                     let sep = self.field_c_separator(base);
@@ -437,7 +437,13 @@ impl Codegen {
         None
     }
 
-    fn materialize(&mut self, expr: &IREexpr, moved: bool, string_value: bool, plan: &mut TempPlan) {
+    fn materialize(
+        &mut self,
+        expr: &IREexpr,
+        moved: bool,
+        string_value: bool,
+        plan: &mut TempPlan,
+    ) {
         let Some(ty) = self.expr_owned_type(expr) else {
             return;
         };
@@ -460,9 +466,7 @@ impl Codegen {
     }
 
     fn capture_temp_init(&mut self, expr: &IREexpr, string_value: bool) -> String {
-        if string_value
-            && let IREexpr::StringLit(value) = expr
-        {
+        if string_value && let IREexpr::StringLit(value) = expr {
             let captured = String::new();
             let old = std::mem::replace(&mut self.output, captured);
             self.write_ion_string_from_literal(value);
@@ -540,7 +544,7 @@ impl Codegen {
                 | ("File::write", 0)
                 | ("File::write", 1)
                 | ("File::close", 0)
-                |             ("Arena::get_ref", 0)
+                | ("Arena::get_ref", 0)
         )
     }
 
@@ -589,6 +593,9 @@ fn expr_ptr(expr: &IREexpr) -> usize {
 fn is_pure_literal(expr: &IREexpr) -> bool {
     matches!(
         expr,
-        IREexpr::Lit(_) | IREexpr::BoolLiteral(_) | IREexpr::FloatLiteral(_) | IREexpr::IntLimit { .. }
+        IREexpr::Lit(_)
+            | IREexpr::BoolLiteral(_)
+            | IREexpr::FloatLiteral(_)
+            | IREexpr::IntLimit { .. }
     )
 }

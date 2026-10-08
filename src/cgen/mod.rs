@@ -8670,7 +8670,9 @@ fn main() -> int {
             c.contains("&&"),
             "&& must stay a short-circuit operator in:\n{c}"
         );
-        let skip_at = c.find("ion_string_from_literal(\"skip\"").unwrap_or(usize::MAX);
+        let skip_at = c
+            .find("ion_string_from_literal(\"skip\"")
+            .unwrap_or(usize::MAX);
         let and_at = c.rfind("&&").unwrap_or(0);
         assert!(
             skip_at > and_at,
