@@ -816,7 +816,7 @@ Every value in Ion has a single owner at any point in time. Ownership is tied to
 Ownership transfers (moves) occur:
 
 - When binding a value: `let y = x;` moves from `x` to `y`.
-- When passing an argument by value.
+- When passing a non-`Copy` argument to an owning parameter. A parameter of type `&T`, `&mut T`, or `&str` does not take ownership. An owned `String` passed where `&str` is expected stays with the caller.
 - When returning a value from a function.
 - When sending a value into a channel.
 
@@ -1334,12 +1334,12 @@ Note that:
 - The same literal coercion applies when a string literal is passed as a call argument to a parameter typed `String` (not only in `let` bindings).
 - `String::from()` creates a heap-allocated copy of a string literal.
 - `String::get()` returns `Option<u8>` for a byte at `index`. Negative or out-of-range indices yield `Option::None` (non-panicking complement to `s[i]`, which still aborts on OOB). The result is a by-value `u8` (copy); no lasting borrow is registered. Method form `s.get(i)` desugars to `String::get`.
-- `String::push_str()` appends a string literal or an owned `String` (reads the source buffer). The appended bytes must be well-formed UTF-8.
+- `String::push_str()` appends a string literal or an owned `String` (reads the source buffer). The appended bytes must be well-formed UTF-8. The source `String` stays owned by the caller and is dropped with that binding.
 - `String::push_byte()` appends a single ASCII byte (`0x00..=0x7F`) to an existing `String`.
 - `==` and `!=` compare UTF-8 byte content (value equality), not pointer identity.
 
 - `String::from` and stdlib APIs accepting `&str` also accept string literals and `&String` at call sites.
-- `&str` is always a **borrowed view** into existing UTF-8 data; it cannot be returned or stored in long-lived structures in ways that would violate the no-escape rule. The standard library intentionally avoids APIs that would expose `&str` values across function boundaries in ways that require complex lifetime reasoning (e.g., `String::as_str` methods that return borrowed views).
+- `&str` is always a **borrowed view** into existing UTF-8 data. Passing an owned `String` where `&str` is expected does not move that `String`. `&str` cannot be returned or stored in long-lived structures in ways that would violate the no-escape rule. The standard library intentionally avoids APIs that would expose `&str` values across function boundaries in ways that require complex lifetime reasoning (e.g., `String::as_str` methods that return borrowed views).
 
 #### 8.4 Channels
 

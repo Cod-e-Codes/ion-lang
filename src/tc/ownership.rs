@@ -1733,8 +1733,13 @@ impl TypeChecker {
                         .expect("closure binding")
                         .state = OwnershipState::Moved;
                 }
-                for arg in &call_expr.args {
-                    self.check_expr_for_moves(arg)?;
+                // A reference or `&str` parameter leaves the caller's binding owned.
+                for (index, arg) in call_expr.args.iter().enumerate() {
+                    if self.call_arg_is_consumed(&call_expr.callee, index) {
+                        self.check_expr_for_moves(arg)?;
+                    } else {
+                        self.check_operand_for_nested_moves(arg)?;
+                    }
                 }
                 Ok(())
             }
@@ -1774,8 +1779,12 @@ impl TypeChecker {
                 // The receiver might be moved or borrowed depending on method signature
                 // For now, just check the receiver is valid (will be handled in desugaring)
                 self.check_expr(&method_call.receiver)?;
-                for arg in &method_call.args {
-                    self.check_expr_for_moves(arg)?;
+                for (index, arg) in method_call.args.iter().enumerate() {
+                    if self.method_arg_is_consumed(&method_call.method, index) {
+                        self.check_expr_for_moves(arg)?;
+                    } else {
+                        self.check_operand_for_nested_moves(arg)?;
+                    }
                 }
                 Ok(())
             }
@@ -1816,6 +1825,80 @@ impl TypeChecker {
                 Ok(())
             }
         }
+    }
+
+    /// An argument is consumed when the parameter owns a non-`Copy` value.
+    /// `&T`, `&mut T`, and `&str` leave the caller's binding in place, including
+    /// an owned `String` passed where `&str` is expected.
+    fn call_arg_is_consumed(&self, callee: &str, index: usize) -> bool {
+        if let Some(ty) = self.callee_param_type(callee, index) {
+            return self.param_type_consumes(&ty);
+        }
+        if Self::builtin_signature(callee).is_some() || callee.starts_with("Box::new") {
+            return !Self::builtin_arg_borrowed(callee, index);
+        }
+        true
+    }
+
+    fn method_arg_is_consumed(&self, method: &str, index: usize) -> bool {
+        match method {
+            "push_str" | "len" | "capacity" | "get" | "get_ref" | "push_byte" => false,
+            "push" => true,
+            "set" => index != 0,
+            _ => true,
+        }
+    }
+
+    fn callee_param_type(&self, callee: &str, index: usize) -> Option<Type> {
+        let params = if let Some(decl) = self.functions.get(callee) {
+            &decl.params
+        } else if let Some(decl) = self.extern_functions.get(callee) {
+            &decl.params
+        } else if let Some((module, name)) = callee.split_once("::") {
+            &self.module_imports.get(module)?.functions.get(name)?.params
+        } else {
+            return None;
+        };
+        params.get(index).map(|param| param.ty.clone())
+    }
+
+    fn param_type_consumes(&self, ty: &Type) -> bool {
+        let resolved = self.resolve_type_name(ty).unwrap_or_else(|_| ty.clone());
+        if matches!(resolved, Type::Ref { .. }) {
+            return false;
+        }
+        !self.is_copy_type(&resolved)
+    }
+
+    /// Builtins whose parameter is a reference or `&str`.
+    fn builtin_arg_borrowed(callee: &str, index: usize) -> bool {
+        matches!(
+            (callee, index),
+            ("String::len", 0)
+                | ("Vec::len", 0)
+                | ("Vec::capacity", 0)
+                | ("String::push_str", 0)
+                | ("String::push_str", 1)
+                | ("String::push_byte", 0)
+                | ("String::get", 0)
+                | ("String::from", 0)
+                | ("Vec::push", 0)
+                | ("Vec::pop", 0)
+                | ("Vec::get", 0)
+                | ("Vec::get_ref", 0)
+                | ("Vec::set", 0)
+                | ("Vec::set", 1)
+                | ("Slice::len", 0)
+                | ("Slice::get_ref", 0)
+                | ("File::open", 0)
+                | ("File::create", 0)
+                | ("File::read", 0)
+                | ("File::read", 1)
+                | ("File::write", 0)
+                | ("File::write", 1)
+                | ("File::close", 0)
+                | ("Arena::get_ref", 0)
+        )
     }
 
     /// A place read (`x`, `s.f`, `a[i]`) is not moved. A call nested in that

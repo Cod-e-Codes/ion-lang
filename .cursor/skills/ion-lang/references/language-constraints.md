@@ -5,7 +5,7 @@ Summarized from ION_SPEC.md §1. Read the full spec for grammar and edge cases.
 ## Ownership
 
 - Every value has exactly one owner
-- Assignment, argument passing, and `return` **move** by default
+- Assignment, `return`, and an owning parameter **move** by default. A `&T`, `&mut T`, or `&str` parameter does not. An owned `String` passed as `&str` stays with the caller.
 - Primitives, references, function pointers, and aggregates of `Copy` fields with no `impl Drop` are **copied**, not moved (ION_SPEC section 4.8 and 5.2). `Box`, `Vec`, `String`, channels, `JoinHandle`, `File`, raw pointers, and protocol endpoints are not `Copy`. `Allocator` is `Copy`.
 - Use-after-move on non-copy types → compile error (`UseAfterMove`)
 

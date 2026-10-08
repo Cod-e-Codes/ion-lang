@@ -6950,6 +6950,7 @@ impl TypeChecker {
     }
 
     /// String literal or owned String may be passed where `&str` is expected (ION_SPEC §8.3).
+    /// The owned String stays with the caller.
     fn can_coerce_to_str_ref(from: &Type) -> bool {
         matches!(from, Type::String)
             || matches!(

@@ -2407,9 +2407,9 @@ impl Codegen {
                 }
                 self.mark_moves_in_expr(value);
             }
-            IREexpr::Call { args, .. } => {
-                for arg in args {
-                    self.mark_moves_in_expr(arg);
+            IREexpr::Call { callee, args, .. } => {
+                for (index, arg) in args.iter().enumerate() {
+                    self.mark_call_arg_move(callee, index, arg);
                 }
             }
             IREexpr::ArrayLiteral {
@@ -2469,6 +2469,15 @@ impl Codegen {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A borrowed argument stays with its owner. Nested calls inside it still move theirs.
+    fn mark_call_arg_move(&mut self, callee: &str, index: usize, arg: &IREexpr) {
+        if self.call_arg_moved(callee, index, arg) {
+            self.mark_moves_in_expr(arg);
+        } else {
+            self.mark_place_operand(arg);
         }
     }
 
@@ -4606,8 +4615,8 @@ impl Codegen {
                     self.generate_builtin_call(resolved_callee.as_str(), args, builtin_return_type)
                 {
                     self.write(&code);
-                    for arg in args {
-                        self.mark_moves_in_expr(arg);
+                    for (index, arg) in args.iter().enumerate() {
+                        self.mark_call_arg_move(&resolved_callee, index, arg);
                     }
                 } else if let Some(sig) = self.lookup_var_type(&resolved_callee).and_then(|ty| {
                     let Type::Struct(name) = ty else {
@@ -4618,10 +4627,10 @@ impl Codegen {
                     self.write(&sig.symbol);
                     self.write("(&");
                     self.write(&resolved_callee);
-                    for arg in args {
+                    for (index, arg) in args.iter().enumerate() {
                         self.write(", ");
                         self.generate_expr(arg);
-                        self.mark_moves_in_expr(arg);
+                        self.mark_call_arg_move(&resolved_callee, index, arg);
                     }
                     self.write(")");
                 } else {
@@ -4707,8 +4716,8 @@ impl Codegen {
                         }
                     }
                     self.write(")");
-                    for arg in args {
-                        self.mark_moves_in_expr(arg);
+                    for (index, arg) in args.iter().enumerate() {
+                        self.mark_call_arg_move(&resolved_callee, index, arg);
                     }
                 }
             }

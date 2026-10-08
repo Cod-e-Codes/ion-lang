@@ -855,6 +855,7 @@ impl Codegen {
                     "String::push_str failed",
                 )
             } else {
+                // An owned String is a borrow of the caller's buffer. Scope exit still frees it.
                 let deref_other = other_code.strip_prefix('&').unwrap_or(&other_code);
                 format!(
                     "({{ ion_string_t* _ion_push_other = {deref_other}; if (ion_string_push_str({deref_str}, ((_ion_push_other != NULL && _ion_push_other->data != NULL) ? (const char*)_ion_push_other->data : \"\"), (_ion_push_other != NULL ? _ion_push_other->len : (size_t)0)) != 0) ion_panic(\"String::push_str failed\"); }})"

@@ -39,7 +39,7 @@ Stable beta expectations:
   does not allocate.
 - `String::push_str` appends string literals or owned `String` values (the
   latter reads `.data`/`.len` from the source heap buffer) after UTF-8
-  validation.
+  validation. The source `String` stays with the caller.
 - Dropping a `String` releases its backing allocation once, through the stored allocator.
 - `String::new` uses `heap()`. `String::new_in(alloc)` stores that `Allocator`.
 - `String == String` and `String != String` compare byte contents.

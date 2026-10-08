@@ -131,6 +131,7 @@ jobs:
           test_fmt_int_to_string 0
           test_handle_arena_copy_struct 42
           test_stdlib_path 5
+          test_string_push_str_owned 0
           EOF
 
       - name: Generated C thread sanitizer (Linux)

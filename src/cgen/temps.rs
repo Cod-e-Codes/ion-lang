@@ -496,7 +496,7 @@ impl Codegen {
         }
     }
 
-    fn call_arg_moved(&self, callee: &str, index: usize, arg: &IREexpr) -> bool {
+    pub(super) fn call_arg_moved(&self, callee: &str, index: usize, arg: &IREexpr) -> bool {
         if self.builtin_arg_borrowed(callee, index) || matches!(arg, IREexpr::AddressOf { .. }) {
             return false;
         }
