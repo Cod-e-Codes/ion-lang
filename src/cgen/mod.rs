@@ -3319,22 +3319,20 @@ impl Codegen {
         self.writeln(&format!("memcpy({dest}, {tmp}, sizeof({tmp}));"));
     }
 
-    /// Pass an array-returning call as an array argument. The temporary array
-    /// lives for the call, which copies it into the callee's return wrapper.
+    /// Pass an array-returning call as an array argument. The callee receives a
+    /// pointer, so the bytes must outlive argument evaluation. A local inside a
+    /// statement expression dies before the callee runs. Copy into a compound
+    /// literal of the enclosing block and pass its address.
     fn emit_array_call_arg(&mut self, arg: &IREexpr, ty: &Type) {
         let ty = resolve_type_alias(ty, &self.type_aliases);
-        let wrapper = array_return_wrapper_name(&ty);
-        let ret_tmp = format!("_ion_arr_ret_{}", self.temp_var_counter);
-        self.temp_var_counter += 1;
-        let arr_tmp = format!("_ion_arr_arg_{}", self.temp_var_counter);
-        self.temp_var_counter += 1;
+        let Type::Array { inner, .. } = &ty else {
+            panic!("compiler bug: array call argument is not an array");
+        };
         let c_ty = self.type_to_c(&ty);
-        self.write("({ ");
-        self.write(&format!("{wrapper} {ret_tmp} = "));
+        let elem = self.type_to_c(inner);
+        self.write(&format!("({elem}*)memcpy(&({c_ty}){{0}}, "));
         self.generate_expr_with_type(arg, Some(&ty));
-        self.write(&format!(
-            "; {c_ty} {arr_tmp}; memcpy({arr_tmp}, {ret_tmp}._data, sizeof({arr_tmp})); {arr_tmp}; }})"
-        ));
+        self.write(&format!("._data, sizeof({c_ty}))"));
     }
 
     fn value_is_copy(&self, ty: &Type) -> bool {
