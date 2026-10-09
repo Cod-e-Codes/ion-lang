@@ -1907,6 +1907,11 @@ impl Codegen {
         if !self.needs_drop(&elem) {
             return;
         }
+        // The expression plan nulls this slot before it drops the temporary array.
+        // Flushing that null after the expression would name a local that has ended.
+        if self.bound_operand_name(target).is_some() {
+            return;
+        }
         let path = self.index_element_lvalue(target, index, &resolved);
         let key = Self::index_place_key(target, index);
         self.queue_moved_null(key, path, &elem);
@@ -3330,6 +3335,8 @@ impl Codegen {
     }
 
     /// Expression context sees a C array lvalue. The callee still returns the wrapper.
+    /// The copy lives in a compound literal of the enclosing block. A local yielded
+    /// from a statement expression is dead before a subscript or address can use it.
     fn emit_unwrapped_array_call(
         &mut self,
         callee: &str,
@@ -3337,11 +3344,8 @@ impl Codegen {
         return_type: &Option<Type>,
         ty: &Type,
     ) {
-        let wrapper = array_return_wrapper_name(ty);
         let c_ty = self.type_to_c(ty);
-        let id = self.temp_var_counter;
-        self.temp_var_counter += 1;
-        self.write(&format!("({{ {wrapper} _ion_w_{id} = "));
+        self.write(&format!("(*({c_ty}*)memcpy(&({c_ty}){{0}}, "));
         let saved = self.keep_array_wrapper;
         self.keep_array_wrapper = true;
         let call = IREexpr::Call {
@@ -3352,9 +3356,7 @@ impl Codegen {
         };
         self.generate_expr_with_type(&call, Some(ty));
         self.keep_array_wrapper = saved;
-        self.write(&format!(
-            "; {c_ty} _ion_a_{id}; memcpy(_ion_a_{id}, _ion_w_{id}._data, sizeof(_ion_a_{id})); _ion_a_{id}; }})"
-        ));
+        self.write(&format!("._data, sizeof({c_ty})))"));
     }
 
     /// Emit `expr` as the wrapper struct an array-returning function uses.
@@ -9085,5 +9087,65 @@ fn main() -> int {
         let c = cg.generate(&ir, "test.ion");
         let calls = c.matches("hello(&tx)").count();
         assert_eq!(calls, 1, "one call, got {calls} in:\n{c}");
+    }
+
+    #[test]
+    fn indexed_array_call_outlives_the_subscript() {
+        let src = r#"fn f() -> [int; 3] {
+    return [7, 8, 9];
+}
+fn main() -> int {
+    if f()[1] != 8 {
+        return 1;
+    }
+    return 0;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let decl = c.find("_ion_op").expect("named array for the call");
+        let index = c
+            .find("_ion_op")
+            .and_then(|at| c[at..].find('['))
+            .map(|rel| decl + rel);
+        assert!(
+            index.is_some_and(|at| at > decl),
+            "subscript must use the named array in:\n{c}"
+        );
+        assert!(
+            !c.contains("})["),
+            "subscript must not follow a statement expression that already ended in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn indexed_box_array_call_drops_the_sibling() {
+        let src = r#"fn mk() -> [Box<int>; 2] {
+    return [Box::new(1), Box::new(2)];
+}
+fn main() -> int {
+    if Box::unwrap(mk()[0]) != 1 {
+        return 1;
+    }
+    return 0;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let null_at = c.find("= NULL").expect("moved element cleared");
+        let drop_at = c
+            .find("ion_box_free((_ion_op")
+            .expect("sibling box dropped");
+        assert!(
+            null_at < drop_at,
+            "clear the moved slot before the array drop in:\n{c}"
+        );
+        assert!(
+            c.lines()
+                .all(|line| !line.trim_start().starts_with("(_ion_op")),
+            "the array temporary must not be cleared after its statement expression in:\n{c}"
+        );
     }
 }

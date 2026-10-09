@@ -415,8 +415,13 @@ impl Codegen {
         let Some(ty) = self.expr_owned_type(expr) else {
             return false;
         };
-        if matches!(ty, Type::Void | Type::Ref { .. }) || self.type_is_array(&ty) {
+        if matches!(ty, Type::Void | Type::Ref { .. }) {
             return false;
+        }
+        // An indexed call must be a real array lvalue. Yielding the array from a
+        // statement expression ends that object before the subscript reads it.
+        if self.type_is_array(&ty) {
+            return force && self.expr_returns_array(expr);
         }
         if !moved && self.type_needs_drop(&ty) {
             return true;
@@ -444,6 +449,10 @@ impl Codegen {
         string_value: bool,
         plan: &mut TempPlan,
     ) {
+        if let Some(ty) = self.array_expr_type(expr) {
+            self.materialize_array_call(expr, &ty, moved, plan);
+            return;
+        }
         let Some(ty) = self.expr_owned_type(expr) else {
             return;
         };
@@ -462,6 +471,38 @@ impl Codegen {
             let drop_stmt = self.capture_drop_at_path(&name, &ty);
             plan.drops.push(drop_stmt);
             plan.owned.push((name, ty));
+        }
+    }
+
+    /// Copy an array-returning call into a named array. C cannot initialize an
+    /// array with `=`, and the wrapper's `_data` must be read while the wrapper
+    /// is still alive.
+    fn materialize_array_call(
+        &mut self,
+        expr: &IREexpr,
+        ty: &Type,
+        moved: bool,
+        plan: &mut TempPlan,
+    ) {
+        let c_ty = self.type_to_c(ty);
+        let wrapper = array_return_wrapper_name(ty);
+        let n = self.temp_var_counter;
+        self.temp_var_counter += 1;
+        let name = format!("_ion_op{n}");
+        let wname = format!("_ion_w{n}");
+        let saved = self.keep_array_wrapper;
+        self.keep_array_wrapper = true;
+        let init = self.capture_temp_init(expr, false);
+        self.keep_array_wrapper = saved;
+        plan.decls.push(format!(
+            "{c_ty} {name}; {wrapper} {wname} = {init}; memcpy({name}, {wname}._data, sizeof({name}));"
+        ));
+        self.bound_operands.push((expr_ptr(expr), name.clone()));
+        let drop_owned = !moved && self.type_needs_drop(ty);
+        if drop_owned {
+            let drop_stmt = self.capture_drop_at_path(&name, ty);
+            plan.drops.push(drop_stmt);
+            plan.owned.push((name, ty.clone()));
         }
     }
 
