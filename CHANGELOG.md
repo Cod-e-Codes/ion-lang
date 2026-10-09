@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.4.13 - 2026-10-09
+
+- **Fix**: After `if`, `match`, `select`, or a loop, a binding holds every loan a reachable path still held. A path that returns, breaks, or continues does not contribute. A `while` or `for` that may not run keeps the loan from before the loop. Reassignment on every reachable path releases that loan. A partial reassignment is `BorrowConflict`, including an `if` with no `else`, one `match` arm, `select`, a copied carrier, `Slice::get_ref`, and `Arena::get_ref`. This rejects programs that previously compiled and then used an owner a skipped path still loaned. This is not an ABI change. Relink is not required. Generated C for programs that still compile is unchanged by this check.
+- **Fix**: A moved array place is cleared with `memset`. A returned `[T; N]` is copied from `_data` into a named array before an index, a call argument, a struct, tuple, or enum field, `Vec::push`, `Box::new`, `Box::new_in`, or `for`. An index that does not move every element drops the rest with that array. A zeroed array payload uses nested braces. This impacts generated C for a program that moves an array or consumes a returned array: regenerate that C. The runtime is unchanged, so relink is not required.
+- **Fix**: An owned enum scrutinee is dropped, including fields a wildcard or `..` did not move. A match on a reference is not that drop. This impacts generated C for a match of an owned enum: regenerate that C. The runtime is unchanged, so relink is not required.
+- **Fix**: An `if` or `while` condition is stored in a temporary, and a move in that condition is cleared before either branch and on every iteration, including the exit. This impacts generated C for a program that uses `if` or `while`: regenerate that C. The runtime is unchanged, so relink is not required.
+
 ## 0.4.12 - 2026-10-08
 
 - **Fix**: A reference taken from an owned temporary and then stored, assigned, or matched is `ReferenceEscape`. That includes `&f()`, a field or index of that temporary, `Vec::get_ref`, `Slice::get_ref`, and `Arena::get_ref`, and a tuple, struct, or enum that holds one. A borrow used only as a call argument stays on that call. An owned `match` scrutinee moves the value into the match. This rejects programs that previously compiled and then used a reference after the temporary was dropped. Programs that still compile do not need to be regenerated or relinked.
