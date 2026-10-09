@@ -580,7 +580,9 @@ impl Codegen {
                     self.nested_designated_init = prev;
                 }
                 if !emitted {
-                    self.write("0");
+                    // The payload is an array. A bare 0 here is a nested
+                    // initializer, so it needs its own braces under -Wmissing-braces.
+                    self.write("{0}");
                 }
                 self.write(" }");
             }
@@ -9087,6 +9089,28 @@ fn main() -> int {
         let c = cg.generate(&ir, "test.ion");
         let calls = c.matches("hello(&tx)").count();
         assert_eq!(calls, 1, "one call, got {calls} in:\n{c}");
+    }
+
+    #[test]
+    fn enum_array_payload_zero_is_braced() {
+        let src = r#"enum Pack {
+    P([int; 2]);
+}
+fn fresh() -> [int; 2] {
+    return [4, 5];
+}
+fn main() -> int {
+    let packed: Pack = Pack::P(fresh());
+    return 0;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert!(
+            c.contains(".variant_0 = {{0}"),
+            "array payload zero needs nested braces in:\n{c}"
+        );
     }
 
     #[test]
