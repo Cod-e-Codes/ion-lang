@@ -131,6 +131,10 @@ jobs:
           test_ref_temp_ephemeral 0
           test_shadow_borrow 3
           test_array_return_string 0
+          test_loan_join_reassign_ok 1
+          test_array_field_move 0
+          test_array_return_use 0
+          test_match_wildcard_drop 0
           test_fmt_int_to_string 0
           test_handle_arena_copy_struct 42
           test_stdlib_path 5

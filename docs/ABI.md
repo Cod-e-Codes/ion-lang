@@ -113,8 +113,12 @@ names them `arr_{elem}_{N}` (`typedef int arr_int_2[2];`). Nested arrays compose
 array type (`arr_int_2*`). `Vec<[T; N]>` uses the typedef as the element type
 (`Vec_arr_int_2`). A function that returns `[T; N]` returns a struct
 `ion_ret_arr_{elem}_{N}` whose `_data` field is that array. The caller copies
-`_data` into a local array. Locals, fields, and parameters stay the array
-typedef. Slices `[]T` are fat views carrying a data pointer
+`_data` into a local array with `memcpy`, including when that return is indexed,
+stored in a struct or tuple field, passed to `Vec::push` or `Box::new` /
+`Box::new_in`, or used as a `for` iterable. A moved array place is cleared with
+`memset`. Locals, fields, and parameters stay the array
+typedef. Programs that move an array or consume a returned array must be
+regenerated. Relink is not required. Slices `[]T` are fat views carrying a data pointer
 and length. Safe indexing emits runtime bounds checks; indexing inside `unsafe`
 blocks may omit those checks.
 

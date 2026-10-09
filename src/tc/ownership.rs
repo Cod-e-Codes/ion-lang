@@ -1,6 +1,6 @@
 use super::*;
 use crate::types_util::substitute_type;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Join ownership states from reachable control-flow edges (ION_SPEC §5.2).
 /// Empty `states` is a caller error; prefer skipping the join when no edges reach.
@@ -22,6 +22,15 @@ pub(crate) fn join_ownership_states(
             span,
         })
     }
+}
+
+/// Lasting loans at one control-flow edge. Indices match `live_borrows`.
+#[derive(Debug, Clone)]
+pub(crate) struct LoanSnapshot {
+    live_borrows: Vec<LiveBorrow>,
+    borrow_names: HashMap<String, Vec<usize>>,
+    borrow_scopes: Vec<Vec<usize>>,
+    borrow_shadows: Vec<Vec<(String, Vec<usize>)>>,
 }
 
 /// One statement sequence. `parent_index` is that sequence's statement in the
@@ -69,6 +78,8 @@ impl TypeChecker {
             entry_states,
             continue_snaps: Vec::new(),
             break_snaps: Vec::new(),
+            continue_loan_snaps: Vec::new(),
+            break_loan_snaps: Vec::new(),
         });
     }
 
@@ -96,16 +107,348 @@ impl TypeChecker {
 
     pub(crate) fn record_loop_break_snapshot(&mut self) {
         let snap = self.snapshot_loop_entry_ownership();
+        let loans = self.snapshot_loans();
         if let Some(frame) = self.loop_frames.last_mut() {
             frame.break_snaps.push(snap);
+            frame.break_loan_snaps.push(loans);
         }
     }
 
     pub(crate) fn record_loop_continue_snapshot(&mut self) {
         let snap = self.snapshot_loop_entry_ownership();
+        let loans = self.snapshot_loans();
         if let Some(frame) = self.loop_frames.last_mut() {
             frame.continue_snaps.push(snap);
+            frame.continue_loan_snaps.push(loans);
         }
+    }
+
+    pub(crate) fn snapshot_loans(&self) -> LoanSnapshot {
+        LoanSnapshot {
+            live_borrows: self.live_borrows.clone(),
+            borrow_names: self.borrow_names.clone(),
+            borrow_scopes: self.borrow_scopes.clone(),
+            borrow_shadows: self.borrow_shadows.clone(),
+        }
+    }
+
+    /// Replace the loan tables with `snap`. Used when `snap` is a complete joined state.
+    pub(crate) fn restore_loans(&mut self, snap: &LoanSnapshot) {
+        self.live_borrows = snap.live_borrows.clone();
+        self.borrow_names = snap.borrow_names.clone();
+        self.borrow_scopes = snap.borrow_scopes.clone();
+        self.borrow_shadows = snap.borrow_shadows.clone();
+        self.recompute_borrow_counts();
+    }
+
+    /// Restore `snap` for the next arm of a split. Loans appended by earlier arms
+    /// stay in the vec so their indices remain valid. A match-result loan that is
+    /// still live stays live. Every other extra loan is released.
+    pub(crate) fn restore_split_loans(&mut self, snap: &LoanSnapshot) {
+        let keep = self.match_kept_loan_indices();
+        let tail: Vec<LiveBorrow> = self
+            .live_borrows
+            .get(snap.live_borrows.len()..)
+            .unwrap_or(&[])
+            .to_vec();
+        self.live_borrows = snap.live_borrows.clone();
+        for (offset, mut borrow) in tail.into_iter().enumerate() {
+            let idx = snap.live_borrows.len() + offset;
+            if !keep.contains(&idx) {
+                borrow.released = true;
+                borrow.carriers.clear();
+            }
+            self.live_borrows.push(borrow);
+        }
+        self.borrow_names = snap.borrow_names.clone();
+        self.borrow_scopes = snap.borrow_scopes.clone();
+        self.borrow_shadows = snap.borrow_shadows.clone();
+        for idx in snap.live_borrows.len()..self.live_borrows.len() {
+            if self.live_borrows[idx].released {
+                continue;
+            }
+            self.place_loan_in_scope(idx);
+        }
+        self.recompute_borrow_counts();
+    }
+
+    fn match_kept_loan_indices(&self) -> HashSet<usize> {
+        let mut keep = HashSet::new();
+        for loans in self.match_result_loans.values() {
+            keep.extend(loans.iter().copied());
+        }
+        for frame in &self.match_sibling_loans {
+            keep.extend(frame.iter().copied());
+        }
+        keep
+    }
+
+    fn place_loan_in_scope(&mut self, idx: usize) {
+        let depth = self.live_borrows[idx].depth;
+        let scope_i = depth.saturating_sub(1);
+        if let Some(frame) = self.borrow_scopes.get_mut(scope_i) {
+            if !frame.contains(&idx) {
+                frame.push(idx);
+            }
+            return;
+        }
+        if let Some(frame) = self.borrow_scopes.last_mut()
+            && !frame.contains(&idx)
+        {
+            frame.push(idx);
+        }
+    }
+
+    fn recompute_borrow_counts(&mut self) {
+        for info in self.variables.values_mut() {
+            info.shared_borrow_count = 0;
+            info.mut_borrow_count = 0;
+        }
+        for borrow in &self.live_borrows {
+            if borrow.released || borrow.fields.is_some() {
+                continue;
+            }
+            let Some(info) = self.variables.get_mut(&borrow.owner) else {
+                continue;
+            };
+            if info.definition_span != borrow.owner_span {
+                continue;
+            }
+            if borrow.mutable {
+                info.mut_borrow_count += 1;
+            } else {
+                info.shared_borrow_count += 1;
+            }
+        }
+    }
+
+    /// Carriers of `idx` that are still bindings in the current env.
+    fn alive_carriers(&self, snap: &LoanSnapshot, idx: usize) -> Vec<String> {
+        let Some(borrow) = snap.live_borrows.get(idx) else {
+            return Vec::new();
+        };
+        if borrow.released {
+            return Vec::new();
+        }
+        let mut names = Vec::new();
+        for (name, loans) in &snap.borrow_names {
+            if loans.contains(&idx) && self.variables.contains_key(name) && !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        for (name, _) in &borrow.carriers {
+            if self.variables.contains_key(name) && !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
+
+    fn outermost_scope(snap: &LoanSnapshot, idx: usize) -> Option<usize> {
+        snap.borrow_scopes
+            .iter()
+            .position(|scope| scope.contains(&idx))
+    }
+
+    /// May-hold join. A loan stays when any reachable `paths` edge still carries
+    /// it on a binding that exists now, or when a match result still holds it.
+    /// `entry` supplies the loan identity for loans that existed at the split.
+    pub(crate) fn union_loan_state(
+        &self,
+        entry: &LoanSnapshot,
+        paths: &[LoanSnapshot],
+    ) -> LoanSnapshot {
+        if paths.is_empty() {
+            return entry.clone();
+        }
+        let max_len = paths
+            .iter()
+            .map(|snap| snap.live_borrows.len())
+            .max()
+            .unwrap_or(entry.live_borrows.len())
+            .max(entry.live_borrows.len());
+        let mut live = entry.live_borrows.clone();
+        while live.len() < max_len {
+            let idx = live.len();
+            let src = paths
+                .iter()
+                .find(|snap| snap.live_borrows.len() > idx)
+                .expect("length was taken from a path");
+            live.push(src.live_borrows[idx].clone());
+        }
+        let mut names: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut scopes = entry.borrow_scopes.clone();
+        let kept_match = self.match_kept_loan_indices();
+        for (idx, loan) in live.iter_mut().enumerate() {
+            let mut held = Vec::new();
+            for snap in paths {
+                for name in self.alive_carriers(snap, idx) {
+                    if !held.contains(&name) {
+                        held.push(name);
+                    }
+                }
+            }
+            let match_live = kept_match.contains(&idx)
+                && paths.iter().any(|snap| {
+                    snap.live_borrows
+                        .get(idx)
+                        .is_some_and(|borrow| !borrow.released)
+                });
+            if held.is_empty() && !match_live {
+                loan.released = true;
+                loan.carriers.clear();
+                for scope in &mut scopes {
+                    scope.retain(|loan_idx| *loan_idx != idx);
+                }
+                continue;
+            }
+            loan.released = false;
+            loan.carriers.clear();
+            for name in &held {
+                let span = self
+                    .variables
+                    .get(name)
+                    .map(|info| info.definition_span)
+                    .unwrap_or(Span {
+                        start: 0,
+                        end: 0,
+                        line: 0,
+                        column: 0,
+                    });
+                loan.carriers.push((name.clone(), span));
+                names.entry(name.clone()).or_default().push(idx);
+            }
+            if let Some(scope_i) = paths.iter().find_map(|snap| {
+                if snap
+                    .live_borrows
+                    .get(idx)
+                    .is_some_and(|borrow| !borrow.released)
+                {
+                    Self::outermost_scope(snap, idx)
+                } else {
+                    None
+                }
+            }) {
+                let target = if scope_i < scopes.len() {
+                    scope_i
+                } else {
+                    scopes.len().saturating_sub(1)
+                };
+                if let Some(frame) = scopes.get_mut(target)
+                    && !frame.contains(&idx)
+                {
+                    frame.push(idx);
+                }
+                loan.depth = target + 1;
+            }
+        }
+        LoanSnapshot {
+            live_borrows: live,
+            borrow_names: names,
+            borrow_scopes: scopes,
+            borrow_shadows: entry.borrow_shadows.clone(),
+        }
+    }
+
+    fn held_loan_signature(snap: &LoanSnapshot) -> BTreeSet<String> {
+        let mut set = BTreeSet::new();
+        for (idx, borrow) in snap.live_borrows.iter().enumerate() {
+            if borrow.released {
+                continue;
+            }
+            let fields = borrow
+                .fields
+                .as_ref()
+                .map(|path| path.join("."))
+                .unwrap_or_default();
+            for (name, loans) in &snap.borrow_names {
+                if !loans.contains(&idx) {
+                    continue;
+                }
+                set.insert(format!(
+                    "{name}|{}|{}|{}|{fields}|{}",
+                    borrow.owner, borrow.owner_span.start, borrow.owner_span.end, borrow.mutable
+                ));
+            }
+        }
+        set
+    }
+
+    /// Check a loop body until the loans live on reentry stop growing, then
+    /// install the loans live on exit. `before` is the env at loop entry.
+    pub(crate) fn check_loop_body(
+        &mut self,
+        before: &HashMap<String, VariableInfo>,
+        entry_loans: &LoanSnapshot,
+        cond: Option<&Expr>,
+        body: &Block,
+        include_condition_false_exit: bool,
+        span: Span,
+    ) -> Result<(), TypeCheckError> {
+        let saved_match = self.match_result_loans.clone();
+        let saved_stored = self.stored_ref_loans.clone();
+        let mut start = entry_loans.clone();
+        let mut seen = Self::held_loan_signature(&start);
+        for _ in 0..8 {
+            self.match_result_loans = saved_match.clone();
+            self.stored_ref_loans = saved_stored.clone();
+            self.variables = before.clone();
+            self.restore_loans(&start);
+            if let Some(cond) = cond {
+                self.check_expr(cond)?;
+                self.variables = before.clone();
+                self.restore_loans(&start);
+            }
+            self.push_loop_ownership_frame();
+            self.loop_depth += 1;
+            self.push_borrow_scope();
+            let body_result = self.check_stmt_seq(&body.statements);
+            self.pop_borrow_scope();
+            self.loop_depth -= 1;
+            body_result?;
+            let body_env = self.variables.clone();
+            let Some(frame) = self.pop_loop_ownership_frame() else {
+                return Err(TypeCheckError::Message(
+                    "internal error: missing loop ownership frame".to_string(),
+                ));
+            };
+            let merged = self.finish_loop_ownership(
+                before,
+                body,
+                &body_env,
+                &frame,
+                include_condition_false_exit,
+                span,
+            )?;
+            let mut backs = frame.continue_loan_snaps.clone();
+            if block_falls_through(body) {
+                backs.push(self.snapshot_loans());
+            }
+            self.variables = before.clone();
+            let mut reentry_paths = vec![entry_loans.clone()];
+            reentry_paths.extend(backs);
+            let reentry = self.union_loan_state(entry_loans, &reentry_paths);
+            let sig = Self::held_loan_signature(&reentry);
+            if sig.is_subset(&seen) {
+                self.variables = merged;
+                let exit = if include_condition_false_exit {
+                    let mut exits = vec![reentry];
+                    exits.extend(frame.break_loan_snaps);
+                    self.union_loan_state(entry_loans, &exits)
+                } else if frame.break_loan_snaps.is_empty() {
+                    entry_loans.clone()
+                } else {
+                    self.union_loan_state(entry_loans, &frame.break_loan_snaps)
+                };
+                self.restore_loans(&exit);
+                return Ok(());
+            }
+            seen = sig;
+            start = reentry;
+        }
+        Err(TypeCheckError::Message(
+            "internal error: loan join did not settle".to_string(),
+        ))
     }
 
     /// Validate reentry edges, then join exit edges into `before` for the env after the loop.

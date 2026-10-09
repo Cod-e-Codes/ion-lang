@@ -1,0 +1,15 @@
+// Each arm reassigns to a different owner, so both loans stay live.
+fn main() -> int {
+    let mut a: Vec<int> = Vec::new();
+    let mut b: Vec<int> = Vec::new();
+    Vec::push(&mut a, 1);
+    Vec::push(&mut b, 2);
+    let mut x: &Vec<int> = &a;
+    if true {
+        x = &a;
+    } else {
+        x = &b;
+    }
+    Vec::push(&mut a, 3);
+    return Vec::len(x);
+}

@@ -1,0 +1,44 @@
+// Arena::get_ref loan survives an if that reassigns the carrier on one path.
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct S {
+    v: int;
+}
+
+fn read(a: &S) -> int {
+    return a.v;
+}
+
+fn main() -> int {
+    let mut arena: Arena<S> = handle::new();
+    let h: Handle = handle::insert(&mut arena, S { v: 1 });
+    let peek: Handle = handle::copy(&h);
+    let mut r: &S = match arena.get_ref(peek) {
+        Option::Some(s) => {
+            s;
+        }
+        Option::None => {
+            return 1;
+        }
+    };
+    let mut other: Arena<S> = handle::new();
+    let h2: Handle = handle::insert(&mut other, S { v: 2 });
+    let peek2: Handle = handle::copy(&h2);
+    if false {
+        r = match other.get_ref(peek2) {
+            Option::Some(s) => {
+                s;
+            }
+            Option::None => {
+                return 1;
+            }
+        };
+    }
+    handle::insert(&mut arena, S { v: 3 });
+    return read(r);
+}

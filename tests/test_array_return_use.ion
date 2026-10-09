@@ -1,0 +1,111 @@
+// A returned array is a C array lvalue at every consumer, copied from _data.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct WI {
+    a: [int; 3];
+}
+
+struct WB {
+    a: [Box<int>; 2];
+}
+
+enum Pack {
+    P([int; 2]);
+}
+
+fn fresh() -> [int; 3] {
+    return [7, 8, 9];
+}
+
+fn fresh2() -> [int; 2] {
+    return [4, 5];
+}
+
+fn mk() -> [Box<int>; 2] {
+    return [Box::new(1), Box::new(2)];
+}
+
+fn take(a: [int; 3]) -> int {
+    return a[0] + a[2];
+}
+
+fn main() -> int {
+    if fresh()[1] != 8 {
+        return 1;
+    }
+    if take(fresh()) != 16 {
+        return 2;
+    }
+    let mut v: Vec<[int; 3]> = Vec::new();
+    Vec::push(&mut v, fresh());
+    match Vec::get(&mut v, 0) {
+        Option::Some(item) => {
+            if item[1] != 8 {
+                return 3;
+            }
+        }
+        Option::None => {
+            return 3;
+        }
+    }
+    let boxed: Box<[int; 3]> = Box::new(fresh());
+    let got: [int; 3] = Box::unwrap(boxed);
+    if got[0] != 7 {
+        return 4;
+    }
+    let boxed_in: Box<[int; 3]> = Box::new_in(fresh(), heap());
+    let got_in: [int; 3] = Box::unwrap(boxed_in);
+    if got_in[2] != 9 {
+        return 5;
+    }
+    let w: WI = WI { a: fresh() };
+    if w.a[1] != 8 {
+        return 6;
+    }
+    let mut sum: int = 0;
+    for x in fresh() {
+        sum = sum + x;
+    }
+    if sum != 24 {
+        return 7;
+    }
+    let mut g: [[int; 3]; 2] = [[0, 0, 0], [0, 0, 0]];
+    g[1] = fresh();
+    if g[1][1] != 8 {
+        return 8;
+    }
+    let pair: ([int; 2], int) = (fresh2(), 1);
+    if pair.0[0] != 4 {
+        return 9;
+    }
+    let packed: Pack = Pack::P(fresh2());
+    match packed {
+        Pack::P(a) => {
+            if a[1] != 5 {
+                return 10;
+            }
+        }
+    }
+    let owned: Box<[Box<int>; 2]> = Box::new(mk());
+    let inner: [Box<int>; 2] = Box::unwrap(owned);
+    if Box::unwrap(inner[0]) + Box::unwrap(inner[1]) != 3 {
+        return 11;
+    }
+    let owned_in: Box<[Box<int>; 2]> = Box::new_in(mk(), heap());
+    let inner_in: [Box<int>; 2] = Box::unwrap(owned_in);
+    if Box::unwrap(inner_in[0]) != 1 {
+        return 12;
+    }
+    Box::unwrap(inner_in[1]);
+    let wb: WB = WB { a: mk() };
+    if Box::unwrap(wb.a[0]) + Box::unwrap(wb.a[1]) != 3 {
+        return 13;
+    }
+    if Box::unwrap(mk()[0]) != 1 {
+        return 14;
+    }
+    return 0;
+}

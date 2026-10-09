@@ -1,0 +1,14 @@
+// A while that may not run keeps the loan from before the loop.
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let o: Vec<int> = Vec::new();
+    let mut x: &Vec<int> = &v;
+    let mut go: int = 0;
+    while go != 0 {
+        x = &o;
+        go = 0;
+    }
+    Vec::push(&mut v, 2);
+    return Vec::len(x);
+}

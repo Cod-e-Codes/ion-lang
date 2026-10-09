@@ -360,7 +360,7 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_borrow_assign_error.ion` - Assigning a reference keeps the loan
 - `test_ref_reassign.ion` - Same-scope reference reassignment ends the previous loan (exit 12)
 - `test_ref_reassign_mut.ion` - Same-scope `&mut` reassignment frees the previous owner (exit 12)
-- `test_ref_reassign_outer.ion` - Reassigning from an inner block to an outer owner (exit 13)
+- `test_ref_reassign_outer.ion` - An `if` that may skip the reassignment still loans the original owner (`BorrowConflict`)
 - `test_ref_reassign_inside.ion` - A shorter referent used only inside its block (exit 5)
 - `test_ref_assign_shorter_error.ion` - Assigning `&inner` to an outer reference that is used later (`ReferenceEscape`)
 - `test_ref_assign_nested_error.ion` - The use is in the enclosing block (`ReferenceEscape`)

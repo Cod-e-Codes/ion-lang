@@ -1,0 +1,16 @@
+// One match arm reassigns the carrier. The other arm still holds the loan.
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let o: Vec<int> = Vec::new();
+    let mut x: &Vec<int> = &v;
+    let flag: int = 1;
+    match flag {
+        0 => {
+            x = &o;
+        }
+        _ => {}
+    }
+    Vec::push(&mut v, 2);
+    return Vec::len(x);
+}

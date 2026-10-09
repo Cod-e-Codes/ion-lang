@@ -1,0 +1,21 @@
+// One select arm reassigns the carrier. The other arm still holds the loan.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let o: Vec<int> = Vec::new();
+    let mut x: &Vec<int> = &v;
+    let (_tx, rx): (Sender<int>, Receiver<int>) = channel<int>(1);
+    select {
+        recv(&mut rx) => {}
+        default => {
+            x = &o;
+        }
+    };
+    Vec::push(&mut v, 2);
+    return Vec::len(x);
+}

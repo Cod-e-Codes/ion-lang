@@ -1,0 +1,13 @@
+// Copying the carrier (r = x) keeps the same loan across a partial reassignment.
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let o: Vec<int> = Vec::new();
+    let src: &Vec<int> = &v;
+    let mut x: &Vec<int> = src;
+    if false {
+        x = &o;
+    }
+    Vec::push(&mut v, 2);
+    return Vec::len(x);
+}

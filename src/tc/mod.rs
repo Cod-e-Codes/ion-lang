@@ -57,6 +57,8 @@ pub(crate) struct LoopOwnershipFrame {
     entry_states: HashMap<String, OwnershipState>,
     continue_snaps: Vec<HashMap<String, OwnershipState>>,
     break_snaps: Vec<HashMap<String, OwnershipState>>,
+    continue_loan_snaps: Vec<ownership::LoanSnapshot>,
+    break_loan_snaps: Vec<ownership::LoanSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2847,6 +2849,7 @@ impl TypeChecker {
                 // Save environment before the condition: checking the condition must not
                 // consume operands (e.g. `if x != 1` only borrows `x` for comparison).
                 let before = self.variables.clone();
+                let entry_loans = self.snapshot_loans();
                 let cond_ty = self.check_expr(&if_stmt.cond)?;
                 if !types_equal(&cond_ty, &Type::Bool) {
                     return Err(TypeCheckError::TypeMismatch {
@@ -2856,9 +2859,12 @@ impl TypeChecker {
                     });
                 }
                 self.variables = before.clone();
+                self.restore_loans(&entry_loans);
 
-                // Then-branch: type-check with its own copy of the environment
+                // Then-branch: type-check with its own copy of the environment.
+                // Loans are restored so this arm cannot release a loan the other arm still holds.
                 self.variables = before.clone();
+                self.restore_split_loans(&entry_loans);
                 self.push_borrow_scope();
                 let then_ignore = self.loans_unused_in_branch(&if_stmt.then_block);
                 self.branch_ignored_loans.push(then_ignore);
@@ -2867,10 +2873,13 @@ impl TypeChecker {
                 then_result?;
                 self.pop_borrow_scope();
                 let then_env = self.variables.clone();
+                let then_loans =
+                    block_falls_through(&if_stmt.then_block).then(|| self.snapshot_loans());
 
                 // Else-branch: same starting environment; if no else, treat as no-op.
-                let else_env = if let Some(ref else_blk) = if_stmt.else_block {
+                let (else_env, else_loans) = if let Some(ref else_blk) = if_stmt.else_block {
                     self.variables = before.clone();
+                    self.restore_split_loans(&entry_loans);
                     self.push_borrow_scope();
                     let else_ignore = self.loans_unused_in_branch(else_blk);
                     self.branch_ignored_loans.push(else_ignore);
@@ -2878,9 +2887,10 @@ impl TypeChecker {
                     self.branch_ignored_loans.pop();
                     else_result?;
                     self.pop_borrow_scope();
-                    self.variables.clone()
+                    let loans = block_falls_through(else_blk).then(|| self.snapshot_loans());
+                    (self.variables.clone(), loans)
                 } else {
-                    before.clone()
+                    (before.clone(), None)
                 };
 
                 // Merge environments: only branches that can fall through to code
@@ -2923,6 +2933,18 @@ impl TypeChecker {
                 }
 
                 self.variables = merged;
+                let mut loan_paths = Vec::new();
+                if if_stmt.else_block.is_none() {
+                    loan_paths.push(entry_loans.clone());
+                }
+                if let Some(loans) = then_loans {
+                    loan_paths.push(loans);
+                }
+                if let Some(loans) = else_loans {
+                    loan_paths.push(loans);
+                }
+                let joined = self.union_loan_state(&entry_loans, &loan_paths);
+                self.restore_loans(&joined);
             }
             Stmt::Spawn(spawn_stmt) => {
                 let _ = self.check_spawn_block(&spawn_stmt.body, spawn_stmt.span)?;
@@ -2932,6 +2954,7 @@ impl TypeChecker {
             }
             Stmt::While(while_stmt) => {
                 let before = self.variables.clone();
+                let entry_loans = self.snapshot_loans();
                 let cond_ty = self.check_expr(&while_stmt.cond)?;
                 if !types_equal(&cond_ty, &Type::Bool) {
                     return Err(TypeCheckError::TypeMismatch {
@@ -2941,48 +2964,24 @@ impl TypeChecker {
                     });
                 }
                 self.variables = before.clone();
-                self.push_loop_ownership_frame();
-                self.loop_depth += 1;
-                self.push_borrow_scope();
-                self.check_stmt_seq(&while_stmt.body.statements)?;
-                self.pop_borrow_scope();
-                self.loop_depth -= 1;
-                let body_env = self.variables.clone();
-                let Some(frame) = self.pop_loop_ownership_frame() else {
-                    return Err(TypeCheckError::Message(
-                        "internal error: missing loop ownership frame for while".to_string(),
-                    ));
-                };
-
-                self.variables = self.finish_loop_ownership(
+                self.restore_loans(&entry_loans);
+                self.check_loop_body(
                     &before,
+                    &entry_loans,
+                    Some(&while_stmt.cond),
                     &while_stmt.body,
-                    &body_env,
-                    &frame,
                     true,
                     while_stmt.span,
                 )?;
             }
             Stmt::Loop(loop_stmt) => {
                 let before = self.variables.clone();
-                self.push_loop_ownership_frame();
-                self.loop_depth += 1;
-                self.push_borrow_scope();
-                self.check_stmt_seq(&loop_stmt.body.statements)?;
-                self.pop_borrow_scope();
-                self.loop_depth -= 1;
-                let body_env = self.variables.clone();
-                let Some(frame) = self.pop_loop_ownership_frame() else {
-                    return Err(TypeCheckError::Message(
-                        "internal error: missing loop ownership frame for loop".to_string(),
-                    ));
-                };
-
-                self.variables = self.finish_loop_ownership(
+                let entry_loans = self.snapshot_loans();
+                self.check_loop_body(
                     &before,
+                    &entry_loans,
+                    None,
                     &loop_stmt.body,
-                    &body_env,
-                    &frame,
                     false,
                     loop_stmt.span,
                 )?;
@@ -3722,9 +3721,12 @@ impl TypeChecker {
             ));
         }
         let before = self.variables.clone();
+        let entry_loans = self.snapshot_loans();
         let mut fallthrough = Vec::new();
+        let mut loan_paths = Vec::new();
         for arm in &select_stmt.recv_arms {
             self.variables = before.clone();
+            self.restore_split_loans(&entry_loans);
             let recv_ty = self.check_expr(&Expr::Recv(arm.recv.clone()))?;
             if let Some(name) = &arm.binding {
                 self.insert_variable(name.clone(), recv_ty, arm.span);
@@ -3734,19 +3736,23 @@ impl TypeChecker {
             self.pop_borrow_scope();
             if block_falls_through(&arm.body) {
                 fallthrough.push(self.variables.clone());
+                loan_paths.push(self.snapshot_loans());
             }
         }
         if let Some(body) = &select_stmt.default_body {
             self.variables = before.clone();
+            self.restore_split_loans(&entry_loans);
             self.push_borrow_scope();
             self.track_stmt_uses(&body.statements, false, false)?;
             self.pop_borrow_scope();
             if block_falls_through(body) {
                 fallthrough.push(self.variables.clone());
+                loan_paths.push(self.snapshot_loans());
             }
         }
         if let Some(ms) = &select_stmt.timeout_ms {
             self.variables = before.clone();
+            self.restore_split_loans(&entry_loans);
             let ms_ty = self.check_expr(ms)?;
             if !self.is_integer_type(&ms_ty) {
                 return Err(TypeCheckError::TypeMismatch {
@@ -3768,6 +3774,7 @@ impl TypeChecker {
                 self.pop_borrow_scope();
                 if block_falls_through(body) {
                     fallthrough.push(self.variables.clone());
+                    loan_paths.push(self.snapshot_loans());
                 }
             }
         }
@@ -3791,6 +3798,8 @@ impl TypeChecker {
             }
         }
         self.variables = merged;
+        let joined = self.union_loan_state(&entry_loans, &loan_paths);
+        self.restore_loans(&joined);
         Ok(())
     }
 
@@ -4843,11 +4852,14 @@ impl TypeChecker {
                 let get_ref_place = self.get_ref_place(match_expr.expr.as_ref());
 
                 let before_match = self.variables.clone();
+                let entry_loans = self.snapshot_loans();
                 let mut fallthrough_envs: Vec<HashMap<String, VariableInfo>> = Vec::new();
+                let mut loan_paths = Vec::new();
                 let _match_siblings = self.enter_match_siblings();
 
                 for arm in &match_expr.arms {
                     self.variables = before_match.clone();
+                    self.restore_split_loans(&entry_loans);
 
                     let borrows_vec_for_arm = get_ref_place.is_some()
                         && matches!(
@@ -4983,6 +4995,7 @@ impl TypeChecker {
                     }
                     if block_falls_through(&arm.body) {
                         fallthrough_envs.push(self.variables.clone());
+                        loan_paths.push(self.snapshot_loans());
                     }
                 }
 
@@ -5007,6 +5020,8 @@ impl TypeChecker {
                     }
                 }
                 self.variables = merged;
+                let joined = self.union_loan_state(&entry_loans, &loan_paths);
+                self.restore_loans(&joined);
 
                 // Check exhaustiveness
                 for variant in &enum_decl.variants {
@@ -6030,7 +6045,9 @@ impl TypeChecker {
         ref_mutability: bool,
     ) -> Result<Type, TypeCheckError> {
         let before_match = self.variables.clone();
+        let entry_loans = self.snapshot_loans();
         let mut fallthrough_envs: Vec<HashMap<String, VariableInfo>> = Vec::new();
+        let mut loan_paths = Vec::new();
         let mut match_value_type: Option<Type> = None;
         let _match_siblings = self.enter_match_siblings();
         let mut saw_true = false;
@@ -6039,6 +6056,7 @@ impl TypeChecker {
 
         for arm in &match_expr.arms {
             self.variables = before_match.clone();
+            self.restore_split_loans(&entry_loans);
             self.check_and_bind_value_pattern(
                 &arm.pattern,
                 scrutinee_ty,
@@ -6080,6 +6098,7 @@ impl TypeChecker {
             }
             if block_falls_through(&arm.body) {
                 fallthrough_envs.push(self.variables.clone());
+                loan_paths.push(self.snapshot_loans());
             }
         }
 
@@ -6103,6 +6122,8 @@ impl TypeChecker {
             }
         }
         self.variables = merged;
+        let joined = self.union_loan_state(&entry_loans, &loan_paths);
+        self.restore_loans(&joined);
         self.mark_match_scrutinee_moved(&match_expr.expr);
 
         let exhaustive = irrefutable || matches!(scrutinee_ty, Type::Bool if saw_true && saw_false);

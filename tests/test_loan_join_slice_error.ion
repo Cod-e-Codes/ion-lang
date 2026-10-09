@@ -1,0 +1,34 @@
+// Slice::get_ref loan survives an if that reassigns the carrier on one path.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn touch(p: &int) -> int {
+    return 1;
+}
+
+fn main() -> int {
+    let mut items: [int; 1] = [1];
+    let other: [int; 1] = [2];
+    let mut r: &int = match Slice::get_ref(&items, 0) {
+        Option::Some(p) => {
+            p;
+        }
+        Option::None => {
+            return 1;
+        }
+    };
+    if false {
+        r = match Slice::get_ref(&other, 0) {
+            Option::Some(p) => {
+                p;
+            }
+            Option::None => {
+                return 1;
+            }
+        };
+    }
+    items[0] = 9;
+    return touch(r);
+}

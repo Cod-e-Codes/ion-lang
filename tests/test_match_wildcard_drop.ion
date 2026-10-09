@@ -1,0 +1,98 @@
+// A wildcard or rest pattern leaves the payload for the scrutinee drop.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+enum Rec {
+    R { a: Box<int>, b: Box<int> };
+}
+
+struct Pair {
+    a: Box<int>;
+    b: Box<int>;
+}
+
+fn optb() -> Option<Box<int>> {
+    return Option::Some(Box::new(7));
+}
+
+fn early() -> int {
+    match optb() {
+        Option::Some(_) => {
+            return 3;
+        }
+        Option::None => {
+            return 1;
+        }
+    }
+}
+
+fn main() -> int {
+    match optb() {
+        Option::Some(_) => {}
+        Option::None => {
+            return 1;
+        }
+    }
+    let local: Option<Box<int>> = optb();
+    match local {
+        Option::Some(_) => {}
+        Option::None => {
+            return 2;
+        }
+    }
+    if early() != 3 {
+        return 4;
+    }
+    match optb() {
+        Option::Some(b) => {
+            if Box::unwrap(b) != 7 {
+                return 5;
+            }
+        }
+        Option::None => {
+            return 5;
+        }
+    }
+    let owned: Option<Box<int>> = optb();
+    let view: &Option<Box<int>> = &owned;
+    match view {
+        Option::Some(_) => {}
+        Option::None => {
+            return 6;
+        }
+    }
+    match owned {
+        Option::Some(b) => {
+            if Box::unwrap(b) != 7 {
+                return 7;
+            }
+        }
+        Option::None => {
+            return 7;
+        }
+    }
+    let pair: Pair = Pair {
+        a: Box::new(1),
+        b: Box::new(2),
+    };
+    match pair {
+        Pair { .. } => {}
+    }
+    let named: Pair = Pair {
+        a: Box::new(3),
+        b: Box::new(4),
+    };
+    match named {
+        Pair { a: _, b: _ } => {}
+    }
+    let rec: Rec = Rec::R {
+        a: Box::new(5),
+        b: Box::new(6),
+    };
+    match rec {
+        Rec::R { .. } => {}
+    }
+    return 0;
+}

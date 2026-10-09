@@ -1,3 +1,4 @@
+// The if may skip the reassignment, so r can still borrow keep.
 struct S {
     v: int;
 }

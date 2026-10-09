@@ -97,6 +97,9 @@ pub struct Codegen {
     addressing_index: bool,
     /// When true, enum literals emit nested designated initializers without a type cast.
     nested_designated_init: bool,
+    /// When true, an array-returning call emits the wrapper struct. Expression
+    /// context unwraps that wrapper into a C array lvalue.
+    keep_array_wrapper: bool,
     temp_var_counter: usize, // Counter for unique temporary variable names
     current_function_params: HashMap<String, Type>, // Track current function parameter types for field access
     spawn_counter: usize,
@@ -168,6 +171,7 @@ impl Codegen {
             in_unsafe_block: false,
             addressing_index: false,
             nested_designated_init: false,
+            keep_array_wrapper: false,
             temp_var_counter: 0,
             current_function_params: HashMap::new(),
             spawn_counter: 0,
@@ -535,6 +539,68 @@ impl Codegen {
             })
             .unwrap_or_default();
 
+        let mut slots: Vec<(String, Type, &IREexpr)> = Vec::new();
+        if let Some(named_fields) = named_fields {
+            for (field_name, field_expr) in named_fields {
+                let ty = named_field_tys
+                    .get(field_name)
+                    .cloned()
+                    .unwrap_or(Type::Int);
+                slots.push((field_name.clone(), ty, field_expr));
+            }
+        } else {
+            for (i, arg) in args.iter().enumerate() {
+                let ty = payload_tys.get(i).cloned().unwrap_or(Type::Int);
+                slots.push((format!("arg{i}"), ty, arg));
+            }
+        }
+        let has_array = slots.iter().any(|(_, ty, _)| self.type_is_array(ty));
+        if has_array {
+            let id = self.temp_var_counter;
+            self.temp_var_counter += 1;
+            let tmp = format!("_ion_e_{id}");
+            self.write(&format!(
+                "({{ {c_type_name} {tmp} = {{ .tag = {variant_idx}, .data = {{"
+            ));
+            if has_payloads {
+                self.write(&format!(" .variant_{variant_idx} = {{"));
+                let mut emitted = false;
+                for (field_name, ty, field_expr) in &slots {
+                    if self.type_is_array(ty) {
+                        continue;
+                    }
+                    if emitted {
+                        self.write(", ");
+                    }
+                    emitted = true;
+                    self.write(&format!(" .{field_name} = "));
+                    let prev = self.nested_designated_init;
+                    self.nested_designated_init = true;
+                    self.generate_expr_with_type(field_expr, Some(ty));
+                    self.nested_designated_init = prev;
+                }
+                if !emitted {
+                    self.write("0");
+                }
+                self.write(" }");
+            }
+            self.write(" } }; ");
+            for (field_name, ty, field_expr) in &slots {
+                if !self.type_is_array(ty) {
+                    continue;
+                }
+                let copy_ty = self
+                    .array_expr_type(field_expr)
+                    .unwrap_or_else(|| ty.clone());
+                self.write_array_materialize(
+                    &format!("{tmp}.data.variant_{variant_idx}.{field_name}"),
+                    field_expr,
+                    &copy_ty,
+                );
+            }
+            self.write(&format!("{tmp}; }})"));
+            return;
+        }
         if self.nested_designated_init {
             self.write(&format!("{{ .tag = {variant_idx}, .data = {{"));
         } else {
@@ -1473,6 +1539,38 @@ impl Codegen {
         Self::is_ref_to_enum_scrutinee(scrutinee_type, is_enum)
     }
 
+    /// Owned enum type of a match scrutinee. A reference is not owned by the copy.
+    fn owned_enum_scrutinee_type(
+        &self,
+        enum_type: &str,
+        type_params: &[Type],
+        scrutinee_type: Option<&Type>,
+    ) -> Option<Type> {
+        if let Some(ty) = scrutinee_type {
+            let resolved = resolve_type_alias(ty, &self.type_aliases);
+            if matches!(resolved, Type::Ref { .. }) {
+                return None;
+            }
+            if self.enum_decl_for_type(&resolved).is_some() {
+                return Some(resolved);
+            }
+        }
+        if !type_params.is_empty() {
+            let ty = Type::Generic {
+                name: enum_type.to_string(),
+                params: type_params.to_vec(),
+            };
+            if self.enum_decl_for_type(&ty).is_some() {
+                return Some(ty);
+            }
+        }
+        let ty = Type::Enum(enum_type.to_string());
+        if self.enum_decl_for_type(&ty).is_some() {
+            return Some(ty);
+        }
+        None
+    }
+
     /// C expression for `ion_vec_t*` from a `&Vec<T>`, `&mut Vec<T>`, or owned `Vec<T>` IR arg.
     pub(crate) fn vec_ion_ptr_expr(&self, arg: &IREexpr, vec_code: &str) -> String {
         let stripped = vec_code.strip_prefix('&').unwrap_or(vec_code);
@@ -1653,19 +1751,24 @@ impl Codegen {
         if !self.needs_drop(&ty) {
             return;
         }
-        let zero = self.zero_value_for_scrutinee_payload(&ty);
         let key = Self::place_key(expr);
-        self.queue_moved_null(key, path, &zero);
+        self.queue_moved_null(key, path, &ty);
     }
 
-    fn queue_moved_null(&mut self, key: Option<String>, path: String, zero: &str) {
+    fn queue_moved_null(&mut self, key: Option<String>, path: String, ty: &Type) {
         if !self.pending_field_null_set.insert(path.clone()) {
             return;
         }
+        let line = if self.type_is_array(ty) {
+            format!("memset(&({path}), 0, sizeof({path}));")
+        } else {
+            let zero = self.zero_value_for_scrutinee_payload(ty);
+            format!("{path} = {zero};")
+        };
         self.pending_field_nulls.push(PendingNull {
             key,
             path: path.clone(),
-            line: format!("{path} = {zero};"),
+            line,
         });
     }
 
@@ -1805,9 +1908,8 @@ impl Codegen {
             return;
         }
         let path = self.index_element_lvalue(target, index, &resolved);
-        let zero = self.zero_value_for_scrutinee_payload(&elem);
         let key = Self::index_place_key(target, index);
-        self.queue_moved_null(key, path, &zero);
+        self.queue_moved_null(key, path, &elem);
     }
 
     fn is_string_compare_operand(&self, expr: &IREexpr) -> bool {
@@ -2652,18 +2754,10 @@ impl Codegen {
         let c_ty = self.type_to_c(ty);
         self.begin_temp_hoist(value, true);
         self.write_indent();
-        if let Some(src) = self.field_access_c_path(value) {
-            self.writeln(&format!("{c_ty} {tmp};"));
-            self.write_indent();
-            self.writeln(&format!("memcpy({tmp}, {src}, sizeof({tmp}));"));
-        } else if self.expr_returns_array(value) {
-            self.writeln(&format!("{c_ty} {tmp};"));
-            self.copy_array_expr_into(&tmp, value, ty);
-        } else {
-            self.write(&format!("{c_ty} {tmp} = "));
-            self.generate_expr_with_type(value, Some(ty));
-            self.writeln(";");
-        }
+        self.writeln(&format!("{c_ty} {tmp};"));
+        self.write_indent();
+        self.write_array_materialize(&tmp, value, ty);
+        self.writeln("");
         self.end_temp_hoist();
         if drop_old && self.type_needs_drop(ty) {
             let consumed = self.consume_dest_before_drop(dest_key, local_ion);
@@ -2694,25 +2788,8 @@ impl Codegen {
         let c_ty = self.type_to_c(ty);
         self.write("({ ");
         self.begin_temp_hoist_inline(value, true);
-        if let Some(src) = self.field_access_c_path(value) {
-            self.write(&format!(
-                "{c_ty} {tmp}; memcpy({tmp}, {src}, sizeof({tmp})); "
-            ));
-        } else if self.expr_returns_array(value) {
-            let resolved = resolve_type_alias(ty, &self.type_aliases);
-            let wrapper = array_return_wrapper_name(&resolved);
-            let ret_tmp = format!("_ion_arr_ret_{}", self.temp_var_counter);
-            self.temp_var_counter += 1;
-            self.write(&format!("{c_ty} {tmp}; {wrapper} {ret_tmp} = "));
-            self.generate_expr_with_type(value, Some(ty));
-            self.write(&format!(
-                "; memcpy({tmp}, {ret_tmp}._data, sizeof({tmp})); "
-            ));
-        } else {
-            self.write(&format!("{c_ty} {tmp} = "));
-            self.generate_expr_with_type(value, Some(ty));
-            self.write("; ");
-        }
+        self.write(&format!("{c_ty} {tmp}; "));
+        self.write_array_materialize(&tmp, value, ty);
         self.end_temp_hoist_inline();
         if drop_old && self.type_needs_drop(ty) {
             let consumed = self.consume_dest_before_drop(dest_key, local_ion);
@@ -2956,42 +3033,12 @@ impl Codegen {
                     }
                 } else {
                     self.write("ret_val = ");
-
-                    let mut needs_memcpy = false;
-                    let mut array_field_name = String::new();
-                    let mut array_var_name = String::new();
-
-                    if let IREexpr::StructLit { type_name, fields } = value
-                        && let Some(struct_decl) = self.struct_map.get(type_name)
-                    {
-                        for field in fields.iter() {
-                            if let IREexpr::Var(ref var_name) = field.value
-                                && let Some(field_decl) =
-                                    struct_decl.fields.iter().find(|f| f.name == field.name)
-                                && let Type::Array { .. } = field_decl.ty
-                            {
-                                needs_memcpy = true;
-                                array_field_name = field.name.clone();
-                                array_var_name = var_name.clone();
-                                break;
-                            }
-                        }
-                    }
-
                     if let Some(ref ty) = return_ty {
                         self.write_temp_expr_typed(value, true, ty);
                     } else {
                         self.write_temp_expr(value, true);
                     }
                     self.writeln(";");
-
-                    if needs_memcpy {
-                        self.write_indent();
-                        self.writeln(&format!(
-                            "memcpy(&ret_val.{}, &{}, sizeof(ret_val.{}));",
-                            array_field_name, array_var_name, array_field_name
-                        ));
-                    }
                 }
             }
         }
@@ -3282,21 +3329,53 @@ impl Codegen {
             .map(|ty| resolve_type_alias(&ty, &self.type_aliases))
     }
 
-    /// Copy `value` into the array `dest`. A call result is the wrapper struct's
-    /// `_data` field. The wrapper temporary is not dropped: the destination owns
-    /// the bits. A source binding is marked moved by the caller.
-    fn copy_array_expr_into(&mut self, dest: &str, value: &IREexpr, ty: &Type) {
+    /// Expression context sees a C array lvalue. The callee still returns the wrapper.
+    fn emit_unwrapped_array_call(
+        &mut self,
+        callee: &str,
+        args: &[IREexpr],
+        return_type: &Option<Type>,
+        ty: &Type,
+    ) {
+        let wrapper = array_return_wrapper_name(ty);
+        let c_ty = self.type_to_c(ty);
+        let id = self.temp_var_counter;
+        self.temp_var_counter += 1;
+        self.write(&format!("({{ {wrapper} _ion_w_{id} = "));
+        let saved = self.keep_array_wrapper;
+        self.keep_array_wrapper = true;
+        let call = IREexpr::Call {
+            callee: callee.to_string(),
+            args: args.to_vec(),
+            return_type: return_type.clone(),
+            tuple_destructure_index: None,
+        };
+        self.generate_expr_with_type(&call, Some(ty));
+        self.keep_array_wrapper = saved;
+        self.write(&format!(
+            "; {c_ty} _ion_a_{id}; memcpy(_ion_a_{id}, _ion_w_{id}._data, sizeof(_ion_a_{id})); _ion_a_{id}; }})"
+        ));
+    }
+
+    /// Emit `expr` as the wrapper struct an array-returning function uses.
+    fn generate_kept_array_wrapper(&mut self, expr: &IREexpr, ty: &Type) {
+        let saved = self.keep_array_wrapper;
+        self.keep_array_wrapper = true;
+        self.generate_expr_with_type(expr, Some(ty));
+        self.keep_array_wrapper = saved;
+    }
+
+    /// Copy `value` into the C array lvalue `dest`. A call is read from the
+    /// wrapper's `_data` field. The wrapper is not dropped: `dest` owns the bits.
+    fn write_array_materialize(&mut self, dest: &str, value: &IREexpr, ty: &Type) {
         let ty = resolve_type_alias(ty, &self.type_aliases);
         if self.expr_returns_array(value) {
             let wrapper = array_return_wrapper_name(&ty);
             let tmp = format!("_ion_arr_ret_{}", self.temp_var_counter);
             self.temp_var_counter += 1;
-            self.write_indent();
             self.write(&format!("{wrapper} {tmp} = "));
-            self.generate_expr_with_type(value, Some(&ty));
-            self.writeln(";");
-            self.write_indent();
-            self.writeln(&format!("memcpy({dest}, {tmp}._data, sizeof({dest}));"));
+            self.generate_kept_array_wrapper(value, &ty);
+            self.write(&format!("; memcpy({dest}, {tmp}._data, sizeof({dest})); "));
             return;
         }
         let src = match value {
@@ -3304,19 +3383,28 @@ impl Codegen {
             _ => self.field_access_c_path(value),
         };
         if let Some(src) = src {
-            self.write_indent();
-            self.writeln(&format!("memcpy({dest}, {src}, sizeof({dest}));"));
+            self.write(&format!("memcpy({dest}, {src}, sizeof({dest})); "));
             return;
         }
-        let c_ty = self.type_to_c(&ty);
-        let tmp = format!("_ion_arr_src_{}", self.temp_var_counter);
-        self.temp_var_counter += 1;
-        self.write_indent();
-        self.write(&format!("{c_ty} {tmp} = "));
+        if matches!(value, IREexpr::ArrayLiteral { .. }) {
+            let c_ty = self.type_to_c(&ty);
+            let tmp = format!("_ion_arr_src_{}", self.temp_var_counter);
+            self.temp_var_counter += 1;
+            self.write(&format!("{c_ty} {tmp} = "));
+            self.generate_expr_with_type(value, Some(&ty));
+            self.write(&format!("; memcpy({dest}, {tmp}, sizeof({tmp})); "));
+            return;
+        }
+        self.write(&format!("memcpy({dest}, &("));
         self.generate_expr_with_type(value, Some(&ty));
-        self.writeln(";");
+        self.write(&format!("), sizeof({dest})); "));
+    }
+
+    /// Copy `value` into the array `dest` as its own statements.
+    fn copy_array_expr_into(&mut self, dest: &str, value: &IREexpr, ty: &Type) {
         self.write_indent();
-        self.writeln(&format!("memcpy({dest}, {tmp}, sizeof({tmp}));"));
+        self.write_array_materialize(dest, value, ty);
+        self.writeln("");
     }
 
     /// Pass an array-returning call as an array argument. The callee receives a
@@ -3331,8 +3419,73 @@ impl Codegen {
         let c_ty = self.type_to_c(&ty);
         let elem = self.type_to_c(inner);
         self.write(&format!("({elem}*)memcpy(&({c_ty}){{0}}, "));
-        self.generate_expr_with_type(arg, Some(&ty));
+        self.generate_kept_array_wrapper(arg, &ty);
         self.write(&format!("._data, sizeof({c_ty}))"));
+    }
+
+    /// Statement expression that copies `value` into an array element.
+    fn emit_array_element_store(
+        &mut self,
+        target: &IREexpr,
+        index: &IREexpr,
+        value: &IREexpr,
+        elem_ty: &Type,
+        target_type: &Type,
+        drop_old: bool,
+    ) {
+        let bounds = self.bounds_check_for_target_type(Some(target_type));
+        let idx = format!("__ion_idx_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let target_c = self.capture_expr_code(target);
+        let place = match &bounds {
+            Some(BoundsCheck::SliceLen { by_ref: true }) => format!("({target_c})->data[{idx}]"),
+            Some(BoundsCheck::SliceLen { by_ref: false }) => format!("({target_c}).data[{idx}]"),
+            Some(BoundsCheck::StringLen) => format!("({target_c})->data[{idx}]"),
+            _ => format!("({target_c})[{idx}]"),
+        };
+        self.write("({ int ");
+        self.write(&idx);
+        self.write(" = ");
+        self.generate_expr(index);
+        self.write("; ");
+        if !self.in_unsafe_block {
+            match &bounds {
+                Some(BoundsCheck::Fixed(len)) => {
+                    self.write(&format!(
+                        "if (!({idx} >= 0 && {idx} < {len})) ion_panic(\"Array index out of bounds\"); "
+                    ));
+                }
+                Some(BoundsCheck::StringLen) => {
+                    self.write(&format!(
+                        "if (!({idx} >= 0 && {idx} < (int)(({target_c})->len))) ion_panic(\"String index out of bounds\"); "
+                    ));
+                }
+                Some(BoundsCheck::SliceLen { by_ref }) => {
+                    let len = if *by_ref {
+                        format!("({target_c})->len")
+                    } else {
+                        format!("({target_c}).len")
+                    };
+                    self.write(&format!(
+                        "if (!({idx} >= 0 && {idx} < {len})) ion_panic(\"Slice index out of bounds\"); "
+                    ));
+                }
+                None => {}
+            }
+        }
+        let tmp = format!("_ion_set_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let c_ty = self.type_to_c(elem_ty);
+        self.write(&format!("{c_ty} {tmp}; "));
+        self.write_array_materialize(&tmp, value, elem_ty);
+        if drop_old {
+            let consumed = self
+                .consume_dest_before_drop(Self::index_place_key(target, index).as_deref(), None);
+            if !consumed {
+                self.emit_drop_at_path(&place, elem_ty);
+            }
+        }
+        self.write(&format!("memcpy(&({place}), &{tmp}, sizeof({tmp})); }})"));
     }
 
     fn value_is_copy(&self, ty: &Type) -> bool {
@@ -3343,6 +3496,15 @@ impl Codegen {
             &self.enum_map,
             &self.drop_impls,
         )
+    }
+
+    /// Statement that clears a moved place. Arrays cannot be assigned.
+    fn moved_clear_line(&self, path: &str, ty: &Type) -> String {
+        if self.type_is_array(ty) {
+            self.moved_place_clear(path, ty)
+        } else {
+            format!("{path} = {}", self.zero_value_for_scrutinee_payload(ty))
+        }
     }
 
     /// Clear a place after its owned value was copied into a closure or thread.
@@ -3897,7 +4059,7 @@ impl Codegen {
                         return;
                     }
 
-                    if self.type_is_array(&let_stmt.ty) && self.expr_returns_array(init) {
+                    if self.type_is_array(&let_stmt.ty) {
                         self.writeln(";");
                         self.copy_array_expr_into(&c_name, init, &let_stmt.ty);
                         self.end_temp_hoist_to(hoist_mark);
@@ -4114,7 +4276,14 @@ impl Codegen {
                         let drop_old = elem_ty.as_ref().is_some_and(|ty| {
                             self.type_needs_drop(ty) && !Self::same_index_slot(target, index, value)
                         });
-                        if drop_old {
+                        if elem_ty.as_ref().is_some_and(|ty| self.type_is_array(ty)) {
+                            let elem = elem_ty.clone().unwrap();
+                            self.write_indent();
+                            self.emit_array_element_store(
+                                target, index, value, &elem, &resolved, drop_old,
+                            );
+                            self.writeln(";");
+                        } else if drop_old {
                             let elem = elem_ty.clone().unwrap();
                             self.write_indent();
                             self.emit_dropping_index_assign(target, index, value, &elem, &resolved);
@@ -4176,7 +4345,7 @@ impl Codegen {
                             self.temp_var_counter += 1;
                             self.write_indent();
                             self.write(&format!("{wrapper} {tmp} = "));
-                            self.generate_expr(expr);
+                            self.generate_kept_array_wrapper(expr, &ty);
                             self.writeln(";");
                             self.emit_drop_at_path(&format!("{tmp}._data"), &ty);
                         } else {
@@ -4197,11 +4366,20 @@ impl Codegen {
                 self.generate_select(sel);
             }
             IRStmt::If(ir_if) => {
-                // Generate: if (cond) { ... } else { ... }
+                // A move in the condition must clear its place before either branch.
+                let cond_tmp = format!("_ion_if_{}", self.temp_var_counter);
+                self.temp_var_counter += 1;
                 self.write_indent();
-                self.write("if (");
+                self.writeln("{");
+                self.indent_level += 1;
+                self.write_indent();
+                self.write(&format!("int {cond_tmp} = "));
                 self.write_temp_conditional(&ir_if.cond);
-                self.writeln(") {");
+                self.writeln(";");
+                self.flush_pending_field_nulls();
+                self.write_indent();
+                self.write(&format!("if ({cond_tmp}) {{"));
+                self.writeln("");
                 self.indent_level += 1;
                 self.generate_block(&ir_if.then_block);
                 self.indent_level -= 1;
@@ -4216,6 +4394,9 @@ impl Codegen {
                 } else {
                     self.writeln("}");
                 }
+                self.indent_level -= 1;
+                self.write_indent();
+                self.writeln("}");
             }
             IRStmt::While(ir_while) => {
                 let break_label = format!("loop_break_{}", self.temp_var_counter);
@@ -4228,10 +4409,21 @@ impl Codegen {
                 self.loop_break_label = Some(break_label.clone());
                 self.loop_continue_label = ir_while.continue_label.clone();
                 self.loop_unwind_depth = self.scope_stack.len();
+                let cond_tmp = format!("_ion_while_{}", self.temp_var_counter);
+                self.temp_var_counter += 1;
                 self.write_indent();
-                self.write("while (");
+                self.writeln("for (;;) {");
+                self.indent_level += 1;
+                self.write_indent();
+                self.write(&format!("int {cond_tmp} = "));
                 self.write_temp_conditional(&ir_while.cond);
-                self.writeln(") {");
+                self.writeln(";");
+                self.flush_pending_field_nulls();
+                self.write_indent();
+                self.writeln(&format!("if (!{cond_tmp}) break;"));
+                self.indent_level -= 1;
+                self.write_indent();
+                self.writeln("{");
                 self.indent_level += 1;
                 self.generate_block(&ir_while.body);
                 if let Some(ref step) = ir_while.step {
@@ -4245,6 +4437,8 @@ impl Codegen {
                     self.generate_block(step);
                 }
                 self.indent_level -= 1;
+                self.write_indent();
+                self.writeln("}");
                 self.write_indent();
                 self.writeln("}");
                 if self.loop_break_label_used {
@@ -4454,64 +4648,80 @@ impl Codegen {
                     type_name.clone()
                 };
 
-                // Check if any field is an array that needs special handling
-                let mut needs_memcpy = false;
-                let mut array_field_name = String::new();
-                let mut array_var_name = String::new();
-
-                // Try to get struct definition from type_context or type_name
                 let struct_name_to_check = if let Some(context_ty) = type_context {
                     if let Type::Struct(struct_name) = context_ty {
-                        Some(struct_name)
+                        Some(struct_name.as_str())
                     } else {
                         None
                     }
                 } else {
-                    Some(type_name)
+                    Some(type_name.as_str())
                 };
-
-                if let Some(struct_name) = struct_name_to_check
-                    && let Some(struct_decl) = self.struct_map.get(struct_name)
-                {
-                    for field in fields.iter() {
-                        if let IREexpr::Var(ref var_name) = field.value {
-                            // Check if this field is an array type
-                            if let Some(field_decl) =
-                                struct_decl.fields.iter().find(|f| f.name == field.name)
-                                && let Type::Array { .. } = field_decl.ty
-                            {
-                                needs_memcpy = true;
-                                array_field_name = field.name.clone();
-                                array_var_name = var_name.clone();
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if needs_memcpy {
-                    // When assigning an array variable to an array field, we can't do it directly in C
-                    // Generate struct with zero initialization - memcpy will be handled separately
-                    // We'll generate a comment marker that the caller can detect
-                    self.write(&format!(
-                        "({}){{{{0}}}} /* ARRAY_FIELD:{}:{} */",
-                        struct_type_name, array_field_name, array_var_name
-                    ));
-                } else {
-                    self.write(&format!("({}){{", struct_type_name));
-                    for (i, field) in fields.iter().enumerate() {
-                        if i > 0 {
-                            self.write(", ");
-                        }
-                        self.write(&format!(".{} = ", field.name));
-                        let field_ty = struct_name_to_check
+                let field_types: Vec<Option<Type>> = fields
+                    .iter()
+                    .map(|field| {
+                        struct_name_to_check
                             .and_then(|sn| self.struct_map.get(sn))
                             .and_then(|decl| {
                                 decl.fields
                                     .iter()
                                     .find(|f| f.name == field.name)
                                     .map(|f| f.ty.clone())
-                            });
+                            })
+                    })
+                    .collect();
+                let has_array = field_types
+                    .iter()
+                    .any(|ty| ty.as_ref().is_some_and(|ty| self.type_is_array(ty)));
+                if has_array {
+                    let id = self.temp_var_counter;
+                    self.temp_var_counter += 1;
+                    let tmp = format!("_ion_s_{id}");
+                    self.write(&format!("({{ {struct_type_name} {tmp} = {{"));
+                    let mut emitted = false;
+                    for (field, field_ty) in fields.iter().zip(field_types.iter()) {
+                        if field_ty.as_ref().is_some_and(|ty| self.type_is_array(ty)) {
+                            continue;
+                        }
+                        if emitted {
+                            self.write(", ");
+                        }
+                        emitted = true;
+                        self.write(&format!(".{} = ", field.name));
+                        let prev = self.nested_designated_init;
+                        self.nested_designated_init = true;
+                        self.generate_expr_with_type(&field.value, field_ty.as_ref());
+                        self.nested_designated_init = prev;
+                    }
+                    if !emitted {
+                        self.write("0");
+                    }
+                    self.write("}; ");
+                    for (field, field_ty) in fields.iter().zip(field_types.iter()) {
+                        let Some(field_ty) = field_ty else {
+                            continue;
+                        };
+                        if !self.type_is_array(field_ty) {
+                            continue;
+                        }
+                        let copy_ty = self
+                            .array_expr_type(&field.value)
+                            .unwrap_or_else(|| field_ty.clone());
+                        self.write_array_materialize(
+                            &format!("{tmp}.{}", field.name),
+                            &field.value,
+                            &copy_ty,
+                        );
+                    }
+                    self.write(&format!("{tmp}; }})"));
+                } else {
+                    self.write(&format!("({}){{", struct_type_name));
+                    for (i, (field, field_ty)) in fields.iter().zip(field_types.iter()).enumerate()
+                    {
+                        if i > 0 {
+                            self.write(", ");
+                        }
+                        self.write(&format!(".{} = ", field.name));
                         let prev = self.nested_designated_init;
                         self.nested_designated_init = true;
                         self.generate_expr_with_type(&field.value, field_ty.as_ref());
@@ -4681,6 +4891,18 @@ impl Codegen {
                 return_type,
                 tuple_destructure_index: _,
             } => {
+                if !self.keep_array_wrapper {
+                    let probe = IREexpr::Call {
+                        callee: callee.clone(),
+                        args: Vec::new(),
+                        return_type: return_type.clone(),
+                        tuple_destructure_index: None,
+                    };
+                    if let Some(ty) = self.array_expr_type(&probe) {
+                        self.emit_unwrapped_array_call(callee, args, return_type, &ty);
+                        return;
+                    }
+                }
                 let resolved_callee = callee.clone();
 
                 // Handle special built-in functions
@@ -4826,18 +5048,58 @@ impl Codegen {
                 elem_types,
             } => {
                 let name = tuple_type_name(elem_types);
-                self.write(&format!("({}){{", name));
-                for (i, elem) in elements.iter().enumerate() {
-                    if i > 0 {
-                        self.write(", ");
+                let has_array = elem_types.iter().any(|ty| self.type_is_array(ty));
+                if has_array {
+                    let id = self.temp_var_counter;
+                    self.temp_var_counter += 1;
+                    let tmp = format!("_ion_t_{id}");
+                    self.write(&format!("({{ {name} {tmp} = {{"));
+                    let mut emitted = false;
+                    for (i, elem) in elements.iter().enumerate() {
+                        if elem_types.get(i).is_some_and(|ty| self.type_is_array(ty)) {
+                            continue;
+                        }
+                        if emitted {
+                            self.write(", ");
+                        }
+                        emitted = true;
+                        self.write(&format!(".f{i} = "));
+                        let prev = self.nested_designated_init;
+                        self.nested_designated_init = true;
+                        self.generate_expr_with_type(elem, elem_types.get(i));
+                        self.nested_designated_init = prev;
                     }
-                    self.write(&format!(".f{} = ", i));
-                    let prev = self.nested_designated_init;
-                    self.nested_designated_init = true;
-                    self.generate_expr_with_type(elem, elem_types.get(i));
-                    self.nested_designated_init = prev;
+                    if !emitted {
+                        self.write("0");
+                    }
+                    self.write("}; ");
+                    for (i, elem) in elements.iter().enumerate() {
+                        let Some(elem_ty) = elem_types.get(i) else {
+                            continue;
+                        };
+                        if !self.type_is_array(elem_ty) {
+                            continue;
+                        }
+                        let copy_ty = self
+                            .array_expr_type(elem)
+                            .unwrap_or_else(|| elem_ty.clone());
+                        self.write_array_materialize(&format!("{tmp}.f{i}"), elem, &copy_ty);
+                    }
+                    self.write(&format!("{tmp}; }})"));
+                } else {
+                    self.write(&format!("({}){{", name));
+                    for (i, elem) in elements.iter().enumerate() {
+                        if i > 0 {
+                            self.write(", ");
+                        }
+                        self.write(&format!(".f{} = ", i));
+                        let prev = self.nested_designated_init;
+                        self.nested_designated_init = true;
+                        self.generate_expr_with_type(elem, elem_types.get(i));
+                        self.nested_designated_init = prev;
+                    }
+                    self.write("}");
                 }
-                self.write("}");
             }
             IREexpr::ArrayLiteral { elements, repeat } => {
                 let elem_ty = match type_context {
@@ -5041,7 +5303,17 @@ impl Codegen {
                 let drop_old = elem_ty.as_ref().is_some_and(|ty| {
                     self.type_needs_drop(ty) && !Self::same_index_slot(target, index, value)
                 });
-                if drop_old {
+                if elem_ty.as_ref().is_some_and(|ty| self.type_is_array(ty)) {
+                    let elem = elem_ty.clone().unwrap();
+                    self.emit_array_element_store(
+                        target,
+                        index,
+                        value,
+                        &elem,
+                        &resolved_target,
+                        drop_old,
+                    );
+                } else if drop_old {
                     let elem = elem_ty.clone().unwrap();
                     self.emit_dropping_index_assign(target, index, value, &elem, &resolved_target);
                 } else {
@@ -5306,14 +5578,9 @@ impl Codegen {
         if !self.needs_drop(ty) {
             return;
         }
+        let path = format!("{match_var_name}.data.variant_{variant_idx}.{field_name}");
         self.write_indent();
-        self.writeln(&format!(
-            "{}.data.variant_{}.{} = {};",
-            match_var_name,
-            variant_idx,
-            field_name,
-            self.zero_value_for_scrutinee_payload(ty)
-        ));
+        self.writeln(&format!("{};", self.moved_clear_line(&path, ty)));
     }
 
     fn emit_match_scrutinee_whole_enum_moved_out(
@@ -5963,7 +6230,8 @@ impl Codegen {
         self.match_counter += 1;
 
         self.write_indent();
-        if self.match_scrutinee_needs_deref(expr, scrutinee_type) {
+        let deref_copy = self.match_scrutinee_needs_deref(expr, scrutinee_type);
+        if deref_copy {
             self.write(&format!(
                 "{} {} = *",
                 monomorphized_enum_name, match_var_name
@@ -5978,6 +6246,12 @@ impl Codegen {
             self.write_temp_expr(expr, true);
             self.writeln(";");
             self.mark_moves_in_expr(expr);
+            if let Some(ty) =
+                self.owned_enum_scrutinee_type(enum_type, &type_params, scrutinee_type)
+                && self.needs_drop(&ty)
+            {
+                self.scope_register_c(&match_var_name, match_var_name.clone(), &ty);
+            }
         }
         self.match_in_switch += 1;
         self.match_scrutinee_stack.push(match_var_name.clone());
@@ -8197,10 +8471,15 @@ fn main() -> int {
                 && binding_arm.contains("match_val_0.data.variant_0.arg0 = NULL"),
             "expected Ok string payload nulled in scrutinee switch in:\n{c}"
         );
-        assert!(
-            !binding_arm.contains("ion_string_free(match_val_0"),
-            "expected no direct scrutinee string drop in:\n{c}"
-        );
+        let null_at = binding_arm
+            .find("match_val_0.data.variant_0.arg0 = NULL")
+            .expect("moved payload null");
+        if let Some(free_at) = binding_arm.find("ion_string_free(match_val_0") {
+            assert!(
+                null_at < free_at && binding_arm.contains("if (match_val_0.data.variant_0.arg0)"),
+                "scrutinee drop must run after the moved payload is nulled in:\n{c}"
+            );
+        }
     }
 
     #[test]

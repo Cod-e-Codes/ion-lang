@@ -305,8 +305,8 @@ impl Codegen {
                 {
                     let sep = self.field_c_separator(base);
                     let path = format!("{name}{sep}{field}");
-                    let zero = self.zero_value_for_scrutinee_payload(ty);
-                    plan.drops.push(format!("{path} = {zero}; "));
+                    plan.drops
+                        .push(format!("{}; ", self.moved_clear_line(&path, ty)));
                 }
             }
             IREexpr::Index {
@@ -327,8 +327,8 @@ impl Codegen {
                     && self.already_bound(target)
                 {
                     let path = self.index_element_lvalue(target, index, target_ty);
-                    let zero = self.zero_value_for_scrutinee_payload(&elem);
-                    plan.drops.push(format!("{path} = {zero}; "));
+                    plan.drops
+                        .push(format!("{}; ", self.moved_clear_line(&path, &elem)));
                 }
             }
             IREexpr::Call { callee, args, .. } => {

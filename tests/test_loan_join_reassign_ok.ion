@@ -1,0 +1,20 @@
+// Reassignment on every reachable path releases that binding's loan.
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 1);
+    let mut o: Vec<int> = Vec::new();
+    Vec::push(&mut o, 4);
+    let mut x: &Vec<int> = &v;
+    x = &o;
+    Vec::push(&mut v, 2);
+    if Vec::len(x) != 1 {
+        return 1;
+    }
+    if true {
+        x = &o;
+    } else {
+        x = &o;
+    }
+    Vec::push(&mut v, 3);
+    return Vec::len(x);
+}

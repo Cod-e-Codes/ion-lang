@@ -29,7 +29,7 @@ test_borrow_match_alias_error.ion	error		BorrowConflict
 test_borrow_assign_error.ion	error		BorrowConflict
 test_ref_reassign.ion	run	12
 test_ref_reassign_mut.ion	run	12
-test_ref_reassign_outer.ion	run	13
+test_ref_reassign_outer.ion	error		BorrowConflict
 test_ref_reassign_inside.ion	run	5
 test_ref_assign_shorter_error.ion	error		ReferenceEscape
 test_ref_assign_nested_error.ion	error		ReferenceEscape
@@ -640,3 +640,18 @@ test_shadow_borrow_same_error.ion	error		BorrowConflict
 test_array_return.ion	run	7
 test_array_return.ion	cgen			ion_ret_arr_int_3	_ret_array
 test_array_return_string.ion	run	0
+test_loan_join_if_else_error.ion	error		BorrowConflict
+test_loan_join_if_no_else_error.ion	error		BorrowConflict
+test_loan_join_while_error.ion	error		BorrowConflict
+test_loan_join_match_error.ion	error		BorrowConflict
+test_loan_join_select_error.ion	error		BorrowConflict
+test_loan_join_copy_error.ion	error		BorrowConflict
+test_loan_join_slice_error.ion	error		BorrowConflict
+test_loan_join_arena_error.ion	error		BorrowConflict
+test_loan_join_both_error.ion	error		BorrowConflict
+test_loan_join_reassign_ok.ion	run	1
+test_array_field_move.ion	run	0
+test_array_field_move.ion	cgen			memset(&(w.arr), 0, sizeof(w.arr))
+test_array_return_use.ion	run	0
+test_array_return_use.ion	cgen			._data, sizeof
+test_match_wildcard_drop.ion	run	0

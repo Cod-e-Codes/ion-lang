@@ -1481,7 +1481,12 @@ impl IRBuilder {
                         ),
                     };
 
-                    let use_container_copy = !matches!(container_ty, Type::Array { .. });
+                    let array_place = matches!(container_ty, Type::Array { .. })
+                        && matches!(
+                            for_stmt.iterable,
+                            Expr::Var(_) | Expr::FieldAccess(_) | Expr::Index(_)
+                        );
+                    let use_container_copy = !array_place;
                     if use_container_copy {
                         ctx.record_binding(&container_var, &container_ty);
                         out.push(IRStmt::Let(IRLetStmt {
