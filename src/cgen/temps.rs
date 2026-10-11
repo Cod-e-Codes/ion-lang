@@ -298,7 +298,12 @@ impl Codegen {
             IREexpr::FieldAccess {
                 base, field, ty, ..
             } => {
-                self.plan_rec(base, false, false, false, plan);
+                // A field of a call is not a place. Name the owner so a later
+                // index or move reads that temporary instead of calling again.
+                let force_base = force
+                    || (!self.is_place_expr(base)
+                        && (self.type_is_array(ty) || self.type_needs_drop(ty)));
+                self.plan_rec(base, false, false, force_base, plan);
                 if moved
                     && self.type_needs_drop(ty)
                     && let Some(name) = self.bound_operand_name(base).map(str::to_string)
@@ -320,15 +325,12 @@ impl Codegen {
                         Self::index_element_type(target_ty)
                             .is_some_and(|elem| self.type_needs_drop(&elem))
                     });
-                self.plan_rec(index, true, false, null_moved, plan);
-                if null_moved
-                    && let Some(target_ty) = target_type.as_ref()
-                    && let Some(elem) = Self::index_element_type(target_ty)
-                    && self.already_bound(target)
-                {
-                    let path = self.index_element_lvalue(target, index, target_ty);
-                    plan.drops
-                        .push(format!("{}; ", self.moved_clear_line(&path, &elem)));
+                // A side-effecting index must be named before the subscript and
+                // before the move-clear, or both would evaluate it.
+                let index_force = null_moved || !Self::is_pure_index_atom(index);
+                self.plan_rec(index, true, false, index_force, plan);
+                if null_moved && !self.is_place_expr(target) {
+                    self.schedule_rvalue_index_clear(target, index, target_type.as_ref(), plan);
                 }
             }
             IREexpr::Call { callee, args, .. } => {
@@ -336,6 +338,7 @@ impl Codegen {
                     let arg_moved = self.call_arg_moved(callee, i, arg);
                     let arg_force = self.call_arg_force_once(callee, i);
                     self.plan_rec(arg, arg_moved, false, arg_force, plan);
+                    self.bind_nested_array_literal_arg(callee, i, arg, arg_moved, plan);
                 }
             }
             IREexpr::StructLit { fields, .. } => {
@@ -397,7 +400,18 @@ impl Codegen {
         }
         // The owner temp is dropped. Binding the projection as well would free it twice.
         // A moved field or element is copied out by the parent, then the slot is cleared.
-        if matches!(expr, IREexpr::FieldAccess { .. } | IREexpr::Index { .. }) {
+        // An index whose element is itself an array is the exception: C cannot
+        // subscript a call, so that element is copied into its own named array.
+        if matches!(expr, IREexpr::FieldAccess { .. }) {
+            return false;
+        }
+        if let IREexpr::Index { .. } = expr {
+            if let Some(ty) = self.stored_expr_type(expr)
+                && self.type_is_array(&ty)
+                && (moved || !self.type_needs_drop(&ty))
+            {
+                return true;
+            }
             return false;
         }
         if matches!(
@@ -453,6 +467,13 @@ impl Codegen {
             self.materialize_array_call(expr, &ty, moved, plan);
             return;
         }
+        if let IREexpr::Index { .. } = expr
+            && let Some(ty) = self.stored_expr_type(expr)
+            && self.type_is_array(&ty)
+        {
+            self.materialize_indexed_array(expr, &ty, moved, plan);
+            return;
+        }
         let Some(ty) = self.expr_owned_type(expr) else {
             return;
         };
@@ -506,6 +527,134 @@ impl Codegen {
         }
     }
 
+    /// Copy one array element of a non-place into a named array. The source
+    /// call stays in its own temporary. This binding is the element.
+    fn materialize_indexed_array(
+        &mut self,
+        expr: &IREexpr,
+        ty: &Type,
+        moved: bool,
+        plan: &mut TempPlan,
+    ) {
+        let IREexpr::Index {
+            target,
+            index,
+            target_type,
+        } = expr
+        else {
+            return;
+        };
+        let c_ty = self.type_to_c(ty);
+        let n = self.temp_var_counter;
+        self.temp_var_counter += 1;
+        let name = format!("_ion_op{n}");
+        let body = self.capture_statements(|cg| {
+            cg.write(&format!("{c_ty} {name}; "));
+            cg.write_indexed_array_copy(&name, target, index, target_type.as_ref());
+        });
+        plan.decls.push(body);
+        self.bound_operands.push((expr_ptr(expr), name.clone()));
+        let drop_owned = !moved && self.type_needs_drop(ty);
+        if drop_owned {
+            let drop_stmt = self.capture_drop_at_path(&name, ty);
+            plan.drops.push(drop_stmt);
+            plan.owned.push((name, ty.clone()));
+        }
+    }
+
+    /// An array literal whose elements are arrays cannot be a brace initializer.
+    /// Copy it into a named array before it is passed as an argument.
+    fn bind_nested_array_literal_arg(
+        &mut self,
+        callee: &str,
+        index: usize,
+        arg: &IREexpr,
+        moved: bool,
+        plan: &mut TempPlan,
+    ) {
+        if self.already_bound(arg) || self.is_place_expr(arg) {
+            return;
+        }
+        let IREexpr::ArrayLiteral { .. } = arg else {
+            return;
+        };
+        let c_name = self.resolve_c_function_name(callee);
+        let Some(params) = self.lookup_call_param_types(callee, &c_name) else {
+            return;
+        };
+        let Some(ty) = params.get(index).cloned() else {
+            return;
+        };
+        let ty = resolve_type_alias(&ty, &self.type_aliases);
+        let Type::Array { inner, .. } = &ty else {
+            return;
+        };
+        if !self.type_is_array(inner) {
+            return;
+        }
+        self.materialize_named_array(arg, &ty, moved, plan);
+    }
+
+    fn materialize_named_array(
+        &mut self,
+        expr: &IREexpr,
+        ty: &Type,
+        moved: bool,
+        plan: &mut TempPlan,
+    ) {
+        let c_ty = self.type_to_c(ty);
+        let n = self.temp_var_counter;
+        self.temp_var_counter += 1;
+        let name = format!("_ion_op{n}");
+        let body = self.capture_statements(|cg| {
+            cg.write(&format!("{c_ty} {name}; "));
+            cg.write_array_materialize(&name, expr, ty);
+        });
+        plan.decls.push(body);
+        self.bound_operands.push((expr_ptr(expr), name.clone()));
+        let drop_owned = !moved && self.type_needs_drop(ty);
+        if drop_owned {
+            let drop_stmt = self.capture_drop_at_path(&name, ty);
+            plan.drops.push(drop_stmt);
+            plan.owned.push((name, ty.clone()));
+        }
+    }
+
+    fn capture_statements(&mut self, emit: impl FnOnce(&mut Self)) -> String {
+        let captured = String::new();
+        let old = std::mem::replace(&mut self.output, captured);
+        emit(self);
+        std::mem::replace(&mut self.output, old)
+    }
+
+    fn schedule_rvalue_index_clear(
+        &mut self,
+        target: &IREexpr,
+        index: &IREexpr,
+        target_type: Option<&Type>,
+        plan: &mut TempPlan,
+    ) {
+        let Some(target_type) = target_type else {
+            return;
+        };
+        let resolved = resolve_type_alias(target_type, &self.type_aliases);
+        let Some(elem) = Self::index_element_type(&resolved) else {
+            return;
+        };
+        if !self.type_needs_drop(&elem) {
+            return;
+        }
+        let Some(base) = self.rvalue_array_path(target) else {
+            return;
+        };
+        let Some(index_c) = self.stable_index_text(index) else {
+            return;
+        };
+        let path = format!("({base})[{index_c}]");
+        plan.drops
+            .push(format!("{}; ", self.moved_clear_line(&path, &elem)));
+    }
+
     fn capture_temp_init(&mut self, expr: &IREexpr, string_value: bool) -> String {
         if string_value && let IREexpr::StringLit(value) = expr {
             let captured = String::new();
@@ -528,7 +677,7 @@ impl Codegen {
         !self.is_place_expr(expr) && !self.already_bound(expr)
     }
 
-    fn is_place_expr(&self, expr: &IREexpr) -> bool {
+    pub(super) fn is_place_expr(&self, expr: &IREexpr) -> bool {
         match expr {
             IREexpr::Var(_) => true,
             IREexpr::FieldAccess { base, .. } => self.is_place_expr(base),
@@ -639,4 +788,14 @@ fn is_pure_literal(expr: &IREexpr) -> bool {
             | IREexpr::FloatLiteral(_)
             | IREexpr::IntLimit { .. }
     )
+}
+
+impl Codegen {
+    /// An index atom that does not call or allocate: a local or a literal.
+    fn is_pure_index_atom(expr: &IREexpr) -> bool {
+        matches!(
+            expr,
+            IREexpr::Var(_) | IREexpr::Lit(_) | IREexpr::BoolLiteral(_) | IREexpr::IntLimit { .. }
+        )
+    }
 }

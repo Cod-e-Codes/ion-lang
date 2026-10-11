@@ -1909,9 +1909,10 @@ impl Codegen {
         if !self.needs_drop(&elem) {
             return;
         }
-        // The expression plan nulls this slot before it drops the temporary array.
-        // Flushing that null after the expression would name a local that has ended.
-        if self.bound_operand_name(target).is_some() {
+        // A non-place array is cleared inside its temporary's drop plan, while
+        // the named copy is still alive. Emitting that clear here evaluates
+        // the call and the index a second time.
+        if !self.is_place_expr(target) {
             return;
         }
         let path = self.index_element_lvalue(target, index, &resolved);
@@ -3369,10 +3370,138 @@ impl Codegen {
         self.keep_array_wrapper = saved;
     }
 
+    /// C lvalue of an array rvalue that has already been copied into a named
+    /// temporary, or of a place. Does not emit a call.
+    fn rvalue_array_path(&self, expr: &IREexpr) -> Option<String> {
+        if let Some(name) = self.bound_operand_name(expr) {
+            return Some(name.to_string());
+        }
+        match expr {
+            IREexpr::Var(name) => Some(self.binding_c_name(name)),
+            IREexpr::FieldAccess {
+                base,
+                field,
+                is_pointer,
+                ..
+            } => {
+                let base_c = self.rvalue_array_path(base)?;
+                let sep = if self.bound_operand_name(base).is_some() {
+                    "."
+                } else if *is_pointer {
+                    "->"
+                } else {
+                    "."
+                };
+                Some(format!("({base_c}){sep}{field}"))
+            }
+            IREexpr::Index { target, index, .. } => {
+                let base_c = self.rvalue_array_path(target)?;
+                let index_c = self.stable_index_text(index)?;
+                Some(format!("({base_c})[{index_c}]"))
+            }
+            _ => None,
+        }
+    }
+
+    /// Index text that does not evaluate a call: a bound temporary, a local, or a literal.
+    fn stable_index_text(&self, expr: &IREexpr) -> Option<String> {
+        if let Some(name) = self.bound_operand_name(expr) {
+            return Some(name.to_string());
+        }
+        self.pure_place_atom(expr)
+    }
+
+    /// Bounds-check, then copy the array element `target[index]` into `dest`.
+    /// `target` must already be a named array. The subscript is that name, not
+    /// a ternary, so the element is an lvalue.
+    fn write_indexed_array_copy(
+        &mut self,
+        dest: &str,
+        target: &IREexpr,
+        index: &IREexpr,
+        target_type: Option<&Type>,
+    ) {
+        let target_c = if let Some(path) = self.rvalue_array_path(target) {
+            path
+        } else {
+            self.capture_expr_code(target)
+        };
+        let idx = format!("__ion_idx_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let index_c = if let Some(text) = self.stable_index_text(index) {
+            text
+        } else {
+            self.capture_expr_code(index)
+        };
+        self.write(&format!("int {idx} = {index_c}; "));
+        if !self.in_unsafe_block {
+            match self.bounds_check_for_target_type(target_type) {
+                Some(BoundsCheck::Fixed(len)) => {
+                    self.write(&format!(
+                        "if (!({idx} >= 0 && {idx} < {len})) ion_panic(\"Array index out of bounds\"); "
+                    ));
+                }
+                Some(BoundsCheck::StringLen) => {
+                    self.write(&format!(
+                        "if (!({idx} >= 0 && {idx} < (int)(({target_c})->len))) ion_panic(\"String index out of bounds\"); "
+                    ));
+                }
+                Some(BoundsCheck::SliceLen { by_ref }) => {
+                    let len = if by_ref {
+                        format!("({target_c})->len")
+                    } else {
+                        format!("({target_c}).len")
+                    };
+                    self.write(&format!(
+                        "if (!({idx} >= 0 && {idx} < {len})) ion_panic(\"Slice index out of bounds\"); "
+                    ));
+                }
+                None => {}
+            }
+        }
+        self.write(&format!(
+            "memcpy({dest}, ({target_c})[{idx}], sizeof({dest})); "
+        ));
+    }
+
+    /// Copy each element of an array literal whose elements are arrays.
+    /// A brace list would decay those array expressions to pointers.
+    fn write_nested_array_literal(
+        &mut self,
+        dest: &str,
+        elements: &[IREexpr],
+        repeat: &Option<(Box<IREexpr>, usize)>,
+        elem_ty: &Type,
+        size: usize,
+    ) {
+        let count = if let Some((_, n)) = repeat {
+            *n
+        } else {
+            elements.len()
+        };
+        if count < size {
+            self.write(&format!("memset({dest}, 0, sizeof({dest})); "));
+        }
+        if let Some((value, n)) = repeat {
+            for i in 0..*n {
+                self.write_array_materialize(&format!("({dest})[{i}]"), value, elem_ty);
+            }
+        } else {
+            for (i, elem) in elements.iter().enumerate() {
+                self.write_array_materialize(&format!("({dest})[{i}]"), elem, elem_ty);
+            }
+        }
+    }
+
     /// Copy `value` into the C array lvalue `dest`. A call is read from the
     /// wrapper's `_data` field. The wrapper is not dropped: `dest` owns the bits.
     fn write_array_materialize(&mut self, dest: &str, value: &IREexpr, ty: &Type) {
         let ty = resolve_type_alias(ty, &self.type_aliases);
+        if let Some(name) = self.bound_operand_name(value) {
+            let name = name.to_string();
+            self.write(&format!("memcpy({dest}, {name}, sizeof({dest})); "));
+            return;
+        }
         if self.expr_returns_array(value) {
             let wrapper = array_return_wrapper_name(&ty);
             let tmp = format!("_ion_arr_ret_{}", self.temp_var_counter);
@@ -3382,21 +3511,36 @@ impl Codegen {
             self.write(&format!("; memcpy({dest}, {tmp}._data, sizeof({dest})); "));
             return;
         }
-        let src = match value {
-            IREexpr::Var(name) => Some(self.binding_c_name(name)),
-            _ => self.field_access_c_path(value),
-        };
-        if let Some(src) = src {
-            self.write(&format!("memcpy({dest}, {src}, sizeof({dest})); "));
+        if let IREexpr::Index {
+            target,
+            index,
+            target_type,
+        } = value
+        {
+            self.write_indexed_array_copy(dest, target, index, target_type.as_ref());
             return;
         }
-        if matches!(value, IREexpr::ArrayLiteral { .. }) {
+        if let IREexpr::ArrayLiteral { elements, repeat } = value {
+            if let Type::Array { inner, size, .. } = &ty
+                && self.type_is_array(inner)
+            {
+                self.write_nested_array_literal(dest, elements, repeat, inner, *size);
+                return;
+            }
             let c_ty = self.type_to_c(&ty);
             let tmp = format!("_ion_arr_src_{}", self.temp_var_counter);
             self.temp_var_counter += 1;
             self.write(&format!("{c_ty} {tmp} = "));
             self.generate_expr_with_type(value, Some(&ty));
             self.write(&format!("; memcpy({dest}, {tmp}, sizeof({tmp})); "));
+            return;
+        }
+        let src = match value {
+            IREexpr::Var(name) => Some(self.binding_c_name(name)),
+            _ => self.field_access_c_path(value),
+        };
+        if let Some(src) = src {
+            self.write(&format!("memcpy({dest}, {src}, sizeof({dest})); "));
             return;
         }
         self.write(&format!("memcpy({dest}, &("));
@@ -3425,6 +3569,34 @@ impl Codegen {
         self.write(&format!("({elem}*)memcpy(&({c_ty}){{0}}, "));
         self.generate_kept_array_wrapper(arg, &ty);
         self.write(&format!("._data, sizeof({c_ty}))"));
+    }
+
+    /// Pass an array value. A named temporary or a place decays to a pointer.
+    /// A direct call is copied into a compound literal of the enclosing block.
+    /// A scalar array literal stays a compound literal. A nested array literal
+    /// must already have been copied into a named array.
+    fn emit_owned_array_arg(&mut self, arg: &IREexpr, ty: &Type) {
+        let ty = resolve_type_alias(ty, &self.type_aliases);
+        if self.bound_operand_name(arg).is_some() || self.is_place_expr(arg) {
+            self.generate_expr(arg);
+            return;
+        }
+        if self.expr_returns_array(arg) {
+            self.emit_array_call_arg(arg, &ty);
+            return;
+        }
+        if let IREexpr::ArrayLiteral { .. } = arg {
+            let Type::Array { inner, .. } = &ty else {
+                panic!("compiler bug: array call argument is not an array");
+            };
+            if self.type_is_array(inner) {
+                panic!("compiler bug: nested array literal was not copied to a named array");
+            }
+            self.write(&format!("({})", self.type_to_c(&ty)));
+            self.generate_expr_with_type(arg, Some(&ty));
+            return;
+        }
+        panic!("compiler bug: array argument was not copied to a named array");
     }
 
     /// Statement expression that copies `value` into an array element.
@@ -4937,10 +5109,14 @@ impl Codegen {
                         self.write(", ");
                         if self.expr_returns_array(arg) {
                             if let Some(ty) = self.array_expr_type(arg) {
-                                self.emit_array_call_arg(arg, &ty);
+                                self.emit_owned_array_arg(arg, &ty);
                             } else {
                                 self.generate_expr(arg);
                             }
+                        } else if let Some(ty) =
+                            sig.params.get(index).filter(|ty| self.type_is_array(ty))
+                        {
+                            self.emit_owned_array_arg(arg, ty);
                         } else {
                             self.generate_expr(arg);
                         }
@@ -5019,16 +5195,15 @@ impl Codegen {
                             continue;
                         }
                         if let Some(ref pty) = param_ty {
-                            if self.expr_returns_array(arg) && self.type_is_array(pty) {
-                                self.emit_array_call_arg(arg, pty);
+                            if self.type_is_array(pty) {
+                                self.emit_owned_array_arg(arg, pty);
                                 continue;
                             }
-                            if matches!(arg, IREexpr::ArrayLiteral { .. })
-                                && let Type::Array { .. } = pty
-                            {
-                                self.write(&format!("({})", self.type_to_c(pty)));
-                            }
                             self.generate_expr_with_type(arg, Some(pty));
+                        } else if self.expr_returns_array(arg)
+                            && let Some(ty) = self.array_expr_type(arg)
+                        {
+                            self.emit_owned_array_arg(arg, &ty);
                         } else {
                             self.generate_expr(arg);
                         }
@@ -5110,6 +5285,9 @@ impl Codegen {
                     Some(Type::Array { inner, .. }) => Some(inner.as_ref().clone()),
                     _ => None,
                 };
+                if elem_ty.as_ref().is_some_and(|ty| self.type_is_array(ty)) {
+                    panic!("compiler bug: nested array literal emitted as a C brace initializer");
+                }
                 if let Some((value_expr, count)) = repeat {
                     // Array repeat: [value; count]
                     // For zero initialization, use {0} syntax
@@ -5158,6 +5336,16 @@ impl Codegen {
                 target_type,
             } => {
                 let bounds_check = self.bounds_check_for_target_type(target_type.as_ref());
+                // A named array element is an lvalue. The bounds-check ternary is
+                // not, so a further subscript or a move of an inner array cannot
+                // use it. Statement form keeps the element addressable.
+                if target_type.as_ref().is_some_and(|ty| {
+                    Self::target_is_fixed_array(&resolve_type_alias(ty, &self.type_aliases))
+                }) && let Some(base) = self.rvalue_array_path(target)
+                {
+                    self.emit_named_array_index(&base, index, target_type.as_ref());
+                    return;
+                }
 
                 if self.in_unsafe_block {
                     self.emit_index_access(target, index, bounds_check.as_ref());
@@ -5495,6 +5683,41 @@ impl Codegen {
         }
         self.write(index);
         self.write("]");
+    }
+
+    fn target_is_fixed_array(ty: &Type) -> bool {
+        match ty {
+            Type::Array { .. } => true,
+            Type::Ref { inner, .. } => matches!(inner.as_ref(), Type::Array { .. }),
+            _ => false,
+        }
+    }
+
+    /// Bounds-checked subscript of a named array. The result is an lvalue.
+    fn emit_named_array_index(&mut self, base: &str, index: &IREexpr, target_type: Option<&Type>) {
+        let idx = format!("__ion_idx_{}", self.temp_var_counter);
+        self.temp_var_counter += 1;
+        let index_c = if let Some(text) = self.stable_index_text(index) {
+            text
+        } else {
+            self.capture_expr_code(index)
+        };
+        self.write("({ int ");
+        self.write(&idx);
+        self.write(" = ");
+        self.write(&index_c);
+        self.write("; ");
+        if !self.in_unsafe_block
+            && let Some(BoundsCheck::Fixed(len)) = self.bounds_check_for_target_type(target_type)
+        {
+            self.write(&format!(
+                "if (!({idx} >= 0 && {idx} < {len})) ion_panic(\"Array index out of bounds\"); "
+            ));
+        }
+        if self.addressing_index {
+            self.write("&");
+        }
+        self.write(&format!("({base})[{idx}]; }})"));
     }
 
     fn emit_index_access(
@@ -9171,5 +9394,95 @@ fn main() -> int {
                 .all(|line| !line.trim_start().starts_with("(_ion_op")),
             "the array temporary must not be cleared after its statement expression in:\n{c}"
         );
+    }
+
+    #[test]
+    fn indexed_box_array_call_runs_once() {
+        let src = r#"struct S { v: int; }
+fn make() -> Box<S> { return Box::new(S { v: 1 }); }
+fn mk2() -> [Box<S>; 2] { return [make(), make()]; }
+fn tick() -> int { return 0; }
+fn main() -> int {
+    let e0: Box<S> = mk2()[tick()];
+    return 0;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let calls = c.matches("mk2()").count();
+        assert_eq!(calls, 1, "mk2 must run once in:\n{c}");
+        let ticks = c.matches("tick()").count();
+        assert_eq!(ticks, 1, "the index must run once in:\n{c}");
+        assert!(
+            c.contains("_ion_op"),
+            "the clear must name the copied array in:\n{c}"
+        );
+        assert!(
+            !c.contains("memcpy(&("),
+            "the move-clear must not copy the call again in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn nested_array_literal_of_calls_copies_slots() {
+        let src = r#"fn id2() -> [int; 2] { return [1, 2]; }
+fn main() -> int {
+    let a: [[int; 2]; 2] = [id2(), id2()];
+    return a[1][0];
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let calls = c.matches("id2()").count();
+        assert_eq!(calls, 2, "each element call runs once in:\n{c}");
+        assert!(
+            c.contains("memcpy("),
+            "each inner array is copied into a slot in:\n{c}"
+        );
+        assert!(
+            !c.contains("= {(*("),
+            "an array expression must not be a brace element in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn inner_array_of_returned_nested_array_is_named() {
+        let src = r#"fn nbi() -> [[int; 2]; 2] { return [[1, 2], [3, 4]]; }
+fn main() -> int {
+    let inner: [int; 2] = nbi()[1];
+    return inner[0];
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let calls = c.matches("nbi()").count();
+        assert_eq!(calls, 1, "nbi must run once in:\n{c}");
+        assert!(
+            c.contains("_ion_op"),
+            "the returned array must be a named temporary in:\n{c}"
+        );
+        assert!(
+            !c.contains("&(({"),
+            "the inner array must not take the address of a ternary in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn indexed_field_of_returned_struct_runs_once() {
+        let src = r#"struct W { items: [Box<int>; 2]; }
+fn wrap() -> W { return W { items: [Box::new(4), Box::new(5)] }; }
+fn main() -> int {
+    let e: Box<int> = wrap().items[0];
+    return 0;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let calls = c.matches("wrap()").count();
+        assert_eq!(calls, 1, "wrap must run once in:\n{c}");
     }
 }

@@ -655,3 +655,8 @@ test_array_field_move.ion	cgen			memset(&(w.arr), 0, sizeof(w.arr))
 test_array_return_use.ion	run	0
 test_array_return_use.ion	cgen			._data, sizeof
 test_match_wildcard_drop.ion	run	0
+test_array_index_once.ion	run	0
+test_array_literal_nested.ion	run	0
+test_array_literal_nested.ion	cgen			memcpy(		= {(\*
+test_array_inner_move.ion	run	0
+test_array_field_index.ion	run	0

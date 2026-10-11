@@ -325,6 +325,10 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_shadow_borrow_same_error.ion` - mutating the borrowed binding is `BorrowConflict`
 - `test_array_return.ion` - `[int; 3]` returned by value, including a nested call and a fn literal (exit 7)
 - `test_array_return_string.ion` - `[String; 1]` returned and discarded drops the element once (exit 0)
+- `test_array_index_once.ion` - index a returned `[Box]`, `[Vec]`, or `[String]` in a let, a call, a return, and a side-effecting index (exit 0)
+- `test_array_literal_nested.ion` - array literal whose elements are arrays, including repeat, return, and drop (exit 0)
+- `test_array_inner_move.ion` - move an inner array out of a returned nested array into a let, call, field, `Vec::push`, `Box::new`, `for`, or element store (exit 0)
+- `test_array_field_index.ion` - index an array field of a returned struct (exit 0)
 - `test_get_ref_qualified_disjoint.ion` - `Vec::get_ref(&vm.code, 0)` then `Vec::push` on `vm.stack` (exit 7)
 - `test_get_ref_qualified_same_field_error.ion` - `Vec::get_ref(&vm.code, 0)` then `Vec::push` on `vm.code` is `BorrowConflict`
 - `test_replace_consume_cgen.ion` - a consuming local update stores the temp and does not free that local

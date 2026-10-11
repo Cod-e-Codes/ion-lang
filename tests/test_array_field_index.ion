@@ -1,0 +1,28 @@
+// Indexing an array field of a returned struct uses the named struct once.
+struct W {
+    items: [Box<int>; 2];
+    n: int;
+}
+
+fn wrap() -> W {
+    return W { items: [Box::new(4), Box::new(5)], n: 1 };
+}
+
+fn tick(n: int) -> int {
+    return n;
+}
+
+fn main() -> int {
+    let first: Box<int> = wrap().items[0];
+    if Box::unwrap(first) != 4 {
+        return 1;
+    }
+    let second: Box<int> = wrap().items[tick(1)];
+    if Box::unwrap(second) != 5 {
+        return 2;
+    }
+    if wrap().n != 1 {
+        return 3;
+    }
+    return 0;
+}

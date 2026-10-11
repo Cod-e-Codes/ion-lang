@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fix**: An array expression that is not a durable place is copied into a named array before a subscript, an address, a brace element, or a move-clear. A nested array literal copies each element into its slot. An inner array moved out of a nested array is copied from that named array. The source expression runs once, and the clear of a moved element names that array. This impacts generated C for a program that indexes a returned array of a dropping element, builds an array literal whose elements are arrays, or moves an inner array out of a nested array: regenerate that C. The runtime is unchanged, so relink is not required.
+
 ## 0.4.13 - 2026-10-09
 
 - **Fix**: After `if`, `match`, `select`, or a loop, a binding holds every loan a reachable path still held. A path that returns, breaks, or continues does not contribute. A `while` or `for` that may not run keeps the loan from before the loop. Reassignment on every reachable path releases that loan. A partial reassignment is `BorrowConflict`, including an `if` with no `else`, one `match` arm, `select`, a copied carrier, `Slice::get_ref`, and `Arena::get_ref`. This rejects programs that previously compiled and then used an owner a skipped path still loaned. This is not an ABI change. Relink is not required. Generated C for programs that still compile is unchanged by this check.

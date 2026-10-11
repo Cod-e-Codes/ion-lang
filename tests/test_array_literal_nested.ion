@@ -1,0 +1,52 @@
+// An array literal whose elements are arrays copies each element into a slot.
+fn id2() -> [int; 2] {
+    return [1, 2];
+}
+
+fn mk2() -> [Box<int>; 2] {
+    return [Box::new(1), Box::new(2)];
+}
+
+fn nested_int() -> [[int; 2]; 2] {
+    let a: [[int; 2]; 2] = [id2(), id2()];
+    return a;
+}
+
+fn nested_box() -> [[Box<int>; 2]; 2] {
+    let a: [[Box<int>; 2]; 2] = [mk2(), mk2()];
+    return a;
+}
+
+fn main() -> int {
+    let a: [[int; 2]; 2] = [id2(), id2()];
+    if a[1][0] != 1 {
+        return 1;
+    }
+    if a[0][1] != 2 {
+        return 2;
+    }
+    let back: [[int; 2]; 2] = nested_int();
+    if back[1][0] != 1 {
+        return 3;
+    }
+    let repeated: [[int; 2]; 2] = [id2(); 2];
+    if repeated[1][1] != 2 {
+        return 4;
+    }
+    let dropped: [[Box<int>; 2]; 2] = [mk2(), mk2()];
+    let b: [[Box<int>; 2]; 2] = [mk2(), mk2()];
+    if Box::unwrap(b[1][0]) != 1 {
+        return 5;
+    }
+    if Box::unwrap(b[0][1]) != 2 {
+        return 6;
+    }
+    if Box::unwrap(dropped[0][0]) != 1 {
+        return 8;
+    }
+    let nb: [[Box<int>; 2]; 2] = nested_box();
+    if Box::unwrap(nb[1][1]) != 2 {
+        return 7;
+    }
+    return 0;
+}

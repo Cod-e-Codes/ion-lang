@@ -115,10 +115,16 @@ array type (`arr_int_2*`). `Vec<[T; N]>` uses the typedef as the element type
 `ion_ret_arr_{elem}_{N}` whose `_data` field is that array. The caller copies
 `_data` into a local array with `memcpy`, including when that return is indexed,
 stored in a struct or tuple field, passed to `Vec::push` or `Box::new` /
-`Box::new_in`, or used as a `for` iterable. A moved array place is cleared with
-`memset`. Locals, fields, and parameters stay the array
-typedef. Programs that move an array or consume a returned array must be
-regenerated. Relink is not required. Slices `[]T` are fat views carrying a data pointer
+`Box::new_in`, or used as a `for` iterable. An array expression that is not a
+durable place is copied into a named array before a subscript, an address, a
+brace element, or a move-clear. A nested array literal copies each element into
+its slot with `memcpy`. An inner array moved out of a nested array is copied
+from that named array, not from the address of a bounds-check expression. The
+source expression runs once, and the clear of a moved element names that array.
+A moved array place is cleared with `memset`. Locals, fields, and parameters stay
+the array typedef. Programs that index a returned array of a dropping element,
+build an array literal whose elements are arrays, or move an inner array out of
+a nested array must be regenerated. Relink is not required. Slices `[]T` are fat views carrying a data pointer
 and length. Safe indexing emits runtime bounds checks; indexing inside `unsafe`
 blocks may omit those checks.
 

@@ -1,0 +1,118 @@
+// Moving an inner array out of a returned nested array copies that element from a named array.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+struct Hold {
+    a: [int; 2];
+}
+
+struct HoldB {
+    a: [Box<int>; 2];
+}
+
+fn nbi() -> [[int; 2]; 2] {
+    return [[1, 2], [3, 4]];
+}
+
+fn second() -> [int; 2] {
+    return nbi()[1];
+}
+
+fn mk2() -> [Box<int>; 2] {
+    return [Box::new(8), Box::new(9)];
+}
+
+fn nb() -> [[Box<int>; 2]; 2] {
+    let a: [[Box<int>; 2]; 2] = [mk2(), mk2()];
+    return a;
+}
+
+fn take_int(a: [int; 2]) -> int {
+    return a[0] + a[1];
+}
+
+fn take_box(a: [Box<int>; 2]) -> int {
+    return Box::unwrap(a[0]) + Box::unwrap(a[1]);
+}
+
+fn main() -> int {
+    let inner: [int; 2] = nbi()[1];
+    if inner[0] != 3 {
+        return 1;
+    }
+    if take_int(nbi()[0]) != 3 {
+        return 2;
+    }
+    if second()[1] != 4 {
+        return 3;
+    }
+    let w: Hold = Hold { a: nbi()[1] };
+    if w.a[1] != 4 {
+        return 4;
+    }
+    let mut v: Vec<[int; 2]> = Vec::new();
+    Vec::push(&mut v, nbi()[1]);
+    match Vec::get(&mut v, 0) {
+        Option::Some(item) => {
+            if item[0] != 3 {
+                return 5;
+            }
+        }
+        Option::None => {
+            return 5;
+        }
+    }
+    let boxed: Box<[int; 2]> = Box::new(nbi()[1]);
+    let got: [int; 2] = Box::unwrap(boxed);
+    if got[0] != 3 {
+        return 6;
+    }
+    let boxed_in: Box<[int; 2]> = Box::new_in(nbi()[0], heap());
+    let got_in: [int; 2] = Box::unwrap(boxed_in);
+    if got_in[1] != 2 {
+        return 7;
+    }
+    let mut sum: int = 0;
+    for x in nbi()[1] {
+        sum = sum + x;
+    }
+    if sum != 7 {
+        return 8;
+    }
+    let mut grid: [[int; 2]; 2] = [[0, 0], [0, 0]];
+    grid[0] = nbi()[1];
+    if grid[0][0] != 3 {
+        return 9;
+    }
+    let ib: [Box<int>; 2] = nb()[1];
+    if Box::unwrap(ib[0]) + Box::unwrap(ib[1]) != 17 {
+        return 10;
+    }
+    if take_box(nb()[0]) != 17 {
+        return 11;
+    }
+    let wb: HoldB = HoldB { a: nb()[1] };
+    if Box::unwrap(wb.a[0]) != 8 {
+        return 12;
+    }
+    let mut vb: Vec<[Box<int>; 2]> = Vec::new();
+    Vec::push(&mut vb, nb()[0]);
+    match Vec::get(&mut vb, 0) {
+        Option::Some(item) => {
+            if Box::unwrap(item[1]) != 9 {
+                return 13;
+            }
+        }
+        Option::None => {
+            return 13;
+        }
+    }
+    let bb: Box<[Box<int>; 2]> = Box::new(nb()[1]);
+    let gb: [Box<int>; 2] = Box::unwrap(bb);
+    if Box::unwrap(gb[1]) != 9 {
+        return 14;
+    }
+    return 0;
+}

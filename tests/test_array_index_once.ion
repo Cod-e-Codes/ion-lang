@@ -1,0 +1,63 @@
+// Indexing a returned array of a dropping element evaluates the call and the index once.
+struct S {
+    v: int;
+}
+
+fn make(v: int) -> Box<S> {
+    return Box::new(S { v: v });
+}
+
+fn eat(x: Box<S>) -> int {
+    let s: S = Box::unwrap(x);
+    return s.v;
+}
+
+fn mk2() -> [Box<S>; 2] {
+    return [make(1), make(2)];
+}
+
+fn give() -> Box<S> {
+    return mk2()[0];
+}
+
+fn mkv() -> [Vec<S>; 2] {
+    let mut a: Vec<S> = Vec::new();
+    Vec::push(&mut a, S { v: 3 });
+    let mut b: Vec<S> = Vec::new();
+    Vec::push(&mut b, S { v: 4 });
+    return [a, b];
+}
+
+fn mks() -> [String; 2] {
+    return [String::from("ab"), String::from("cdef")];
+}
+
+fn tick(n: int) -> int {
+    return n;
+}
+
+fn main() -> int {
+    let second: Box<S> = mk2()[1];
+    if eat(second) != 2 {
+        return 1;
+    }
+    if eat(mk2()[0]) != 1 {
+        return 2;
+    }
+    if eat(give()) != 1 {
+        return 3;
+    }
+    let row: Vec<S> = mkv()[1];
+    if Vec::len(&row) != 1 {
+        return 4;
+    }
+    let text: String = mks()[0];
+    if String::len(&text) != 2 {
+        return 5;
+    }
+    let picked: Box<S> = mk2()[tick(0)];
+    if eat(picked) != 1 {
+        return 6;
+    }
+    return 0;
+}
