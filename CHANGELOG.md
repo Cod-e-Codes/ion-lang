@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.14 - 2026-10-11
+
 - **Fix**: An array expression that is not a durable place is copied into a named array before a subscript, an address, a brace element, or a move-clear. A nested array literal copies each element into its slot. An inner array moved out of a nested array is copied from that named array. The source expression runs once, and the clear of a moved element names that array. This impacts generated C for a program that indexes a returned array of a dropping element, builds an array literal whose elements are arrays, or moves an inner array out of a nested array: regenerate that C. The runtime is unchanged, so relink is not required.
 
 ## 0.4.13 - 2026-10-09
