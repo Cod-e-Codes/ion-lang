@@ -116,15 +116,20 @@ array type (`arr_int_2*`). `Vec<[T; N]>` uses the typedef as the element type
 `_data` into a local array with `memcpy`, including when that return is indexed,
 stored in a struct or tuple field, passed to `Vec::push` or `Box::new` /
 `Box::new_in`, or used as a `for` iterable. An array expression that is not a
-durable place is copied into a named array before a subscript, an address, a
-brace element, or a move-clear. A nested array literal copies each element into
-its slot with `memcpy`. An inner array moved out of a nested array is copied
-from that named array, not from the address of a bounds-check expression. The
-source expression runs once, and the clear of a moved element names that array.
+durable place is copied into a named array before a subscript, an address, an
+owning argument, a brace element, a `for` iterable, or a move-clear. A durable
+place is a binding, or a field or index of a binding whose index is a local or
+a literal. An array literal, a call, a field of a call, and an index whose
+index expression calls are not durable places. A nested array literal copies
+each element into its slot with `memcpy`. An inner array moved out of a nested
+array is copied from that named array, not from the address of a bounds-check
+expression. The source expression, including that index, runs once, and the
+clear of a moved element names that array.
 A moved array place is cleared with `memset`. Locals, fields, and parameters stay
 the array typedef. Programs that index a returned array of a dropping element,
-build an array literal whose elements are arrays, or move an inner array out of
-a nested array must be regenerated. Relink is not required. Slices `[]T` are fat views carrying a data pointer
+build an array literal whose elements are arrays, move an inner array out of
+a nested array, index an array literal, pass an array field of a call, or
+iterate a field or subscript of a call must be regenerated. Relink is not required. Slices `[]T` are fat views carrying a data pointer
 and length. Safe indexing emits runtime bounds checks; indexing inside `unsafe`
 blocks may omit those checks.
 

@@ -1,0 +1,55 @@
+// Indexing an array literal copies it into a named array. Element calls run once.
+struct Tick {
+    n: int;
+}
+
+fn bump(t: &mut Tick) -> int {
+    let n: int = t.n;
+    t.n = n + 1;
+    return n;
+}
+
+fn make(t: &mut Tick) -> int {
+    bump(t);
+    return 4;
+}
+
+fn mk2(t: &mut Tick) -> [int; 2] {
+    let n: int = bump(t);
+    return [n + 1, n + 2];
+}
+
+fn pass(a: [int; 2]) -> int {
+    return a[0] + a[1];
+}
+
+fn main() -> int {
+    if [4, 5, 6][2] != 6 {
+        return 1;
+    }
+    if [[1, 2], [5, 6]][1][0] != 5 {
+        return 2;
+    }
+    let mut calls: Tick = Tick { n: 0 };
+    let picked: int = [make(&mut calls), make(&mut calls)][1];
+    if picked != 4 {
+        return 3;
+    }
+    if calls.n != 2 {
+        return 4;
+    }
+    let mut rows: Tick = Tick { n: 0 };
+    let k: int = 1;
+    let sum: int = pass([mk2(&mut rows), mk2(&mut rows)][k]);
+    if rows.n != 2 {
+        return 5;
+    }
+    if sum != 5 {
+        return 6;
+    }
+    let boxed: Box<int> = [Box::new(1), Box::new(2)][0];
+    if Box::unwrap(boxed) != 1 {
+        return 7;
+    }
+    return 0;
+}

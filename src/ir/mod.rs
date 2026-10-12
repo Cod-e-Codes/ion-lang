@@ -1110,6 +1110,23 @@ pub struct IRStructLitField {
 
 pub struct IRBuilder;
 
+/// A binding, or a field or index of a binding. The index is a local or a
+/// literal, so a later read of the place does not run a call.
+fn is_durable_array_place(expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(_) => true,
+        Expr::FieldAccess(field) => is_durable_array_place(&field.base),
+        Expr::Index(index) => {
+            is_durable_array_place(&index.target) && is_pure_array_index(&index.index)
+        }
+        _ => false,
+    }
+}
+
+fn is_pure_array_index(expr: &Expr) -> bool {
+    matches!(expr, Expr::Var(_) | Expr::Lit(_) | Expr::BoolLiteral(_))
+}
+
 impl IRBuilder {
     pub fn build(ast: &Program, types: &TypeInfo) -> IRProgram {
         let builder = IRBuilder;
@@ -1481,11 +1498,11 @@ impl IRBuilder {
                         ),
                     };
 
+                    // A field or index of a call is not a durable place. Copy it
+                    // once into the container. A local array, `local.arr`, and
+                    // `local[1]` stay in place so element moves hit that place.
                     let array_place = matches!(container_ty, Type::Array { .. })
-                        && matches!(
-                            for_stmt.iterable,
-                            Expr::Var(_) | Expr::FieldAccess(_) | Expr::Index(_)
-                        );
+                        && is_durable_array_place(&for_stmt.iterable);
                     let use_container_copy = !array_place;
                     if use_container_copy {
                         ctx.record_binding(&container_var, &container_ty);

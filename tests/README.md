@@ -329,6 +329,9 @@ The test runner prints pass/fail counts when it finishes. Do not rely on hardcod
 - `test_array_literal_nested.ion` - array literal whose elements are arrays, including repeat, return, and drop (exit 0)
 - `test_array_inner_move.ion` - move an inner array out of a returned nested array into a let, call, field, `Vec::push`, `Box::new`, `for`, or element store (exit 0)
 - `test_array_field_index.ion` - index an array field of a returned struct (exit 0)
+- `test_array_literal_index.ion` - index an array literal, including a nested literal and a literal of calls (exit 0)
+- `test_array_for_once.ion` - `for` over a subscript or field of a call, and over a side-effecting index, runs that source once (exit 0)
+- `test_array_field_arg.ion` - pass, store, return, push, or box an array field of a call (exit 0)
 - `test_get_ref_qualified_disjoint.ion` - `Vec::get_ref(&vm.code, 0)` then `Vec::push` on `vm.stack` (exit 7)
 - `test_get_ref_qualified_same_field_error.ion` - `Vec::get_ref(&vm.code, 0)` then `Vec::push` on `vm.code` is `BorrowConflict`
 - `test_replace_consume_cgen.ion` - a consuming local update stores the temp and does not free that local

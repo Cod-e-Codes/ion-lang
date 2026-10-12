@@ -3535,11 +3535,9 @@ impl Codegen {
             self.write(&format!("; memcpy({dest}, {tmp}, sizeof({tmp})); "));
             return;
         }
-        let src = match value {
-            IREexpr::Var(name) => Some(self.binding_c_name(name)),
-            _ => self.field_access_c_path(value),
-        };
-        if let Some(src) = src {
+        // A field of a bound owner is `(temp).field`. `field_access_c_path`
+        // does not see that temporary, so the copy would call the owner again.
+        if let Some(src) = self.rvalue_array_path(value) {
             self.write(&format!("memcpy({dest}, {src}, sizeof({dest})); "));
             return;
         }
@@ -3571,13 +3569,14 @@ impl Codegen {
         self.write(&format!("._data, sizeof({c_ty}))"));
     }
 
-    /// Pass an array value. A named temporary or a place decays to a pointer.
-    /// A direct call is copied into a compound literal of the enclosing block.
-    /// A scalar array literal stays a compound literal. A nested array literal
-    /// must already have been copied into a named array.
+    /// Pass an array value. A named temporary or a durable place decays to a
+    /// pointer. A direct call is copied into a compound literal of the enclosing
+    /// block. A scalar array literal stays a compound literal. Any other
+    /// non-place, including a field of a call and a nested array literal, must
+    /// already have been copied into a named array.
     fn emit_owned_array_arg(&mut self, arg: &IREexpr, ty: &Type) {
         let ty = resolve_type_alias(ty, &self.type_aliases);
-        if self.bound_operand_name(arg).is_some() || self.is_place_expr(arg) {
+        if self.bound_operand_name(arg).is_some() || self.is_durable_array_place(arg) {
             self.generate_expr(arg);
             return;
         }
@@ -9484,5 +9483,135 @@ fn main() -> int {
         let c = cg.generate(&ir, "test.ion");
         let calls = c.matches("wrap()").count();
         assert_eq!(calls, 1, "wrap must run once in:\n{c}");
+    }
+
+    #[test]
+    fn indexed_array_literal_is_a_named_array() {
+        let src = r#"fn make() -> int { return 4; }
+fn main() -> int {
+    let a: int = [4, 5, 6][2];
+    let b: int = [[1, 2], [5, 6]][1][0];
+    let c: int = [make(), make()][1];
+    return a + b + c;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        let calls = c.matches("make()").count();
+        assert_eq!(calls, 2, "each literal element runs once in:\n{c}");
+        assert!(
+            c.contains("_ion_op"),
+            "an indexed array literal must be a named array in:\n{c}"
+        );
+        assert!(
+            !c.contains("}["),
+            "a brace list must not be a subscript base in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn for_over_nonplace_array_runs_once() {
+        let src = r#"struct W { arr: [int; 2]; }
+fn nb() -> [[int; 2]; 2] { return [[1, 2], [3, 4]]; }
+fn mk() -> W { return W { arr: [8, 9] }; }
+fn idx(n: int) -> int { return n; }
+fn main() -> int {
+    let mut t: int = 0;
+    for x in nb()[1] { t = t + x; }
+    for y in mk().arr { t = t + y; }
+    let local: [[int; 2]; 2] = [[1, 2], [3, 4]];
+    for z in local[idx(1)] { t = t + z; }
+    let plain: [int; 2] = [1, 2];
+    for q in plain { t = t + q; }
+    return t;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert_eq!(
+            c.matches("nb()").count(),
+            1,
+            "for over a subscript must run the call once in:\n{c}"
+        );
+        assert_eq!(
+            c.matches("mk()").count(),
+            1,
+            "for over a field must run the call once in:\n{c}"
+        );
+        assert_eq!(
+            c.matches("idx(1)").count(),
+            1,
+            "for over a side-effecting index must run the index once in:\n{c}"
+        );
+        assert_eq!(
+            c.matches("memcpy(__for_container_").count(),
+            3,
+            "a local array stays in place; the three non-places are copied in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn array_field_of_call_argument_is_named() {
+        let src = r#"struct W { arr: [int; 2]; n: int; }
+fn pass(a: [int; 2]) -> [int; 2] { return a; }
+fn mk() -> W { return W { arr: [4, 5], n: 7 }; }
+fn main() -> int {
+    let a: [int; 2] = pass(mk().arr);
+    let b: W = W { arr: pass(mk().arr), n: 1 };
+    let c: [int; 2] = mk().arr;
+    let d: W = W { arr: mk().arr, n: 2 };
+    return a[0] + b.n + c[1] + d.n;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert_eq!(
+            c.matches("mk()").count(),
+            4,
+            "each field use runs the call once in:\n{c}"
+        );
+        assert!(
+            c.contains("memcpy("),
+            "the field must be copied into a named array in:\n{c}"
+        );
+    }
+
+    #[test]
+    fn box_array_field_of_call_clears_before_owner_drop() {
+        let src = r#"struct S { v: int; }
+struct W { arr: [Box<S>; 2]; n: int; }
+fn make() -> Box<S> { return Box::new(S { v: 1 }); }
+fn pass(a: [Box<S>; 2]) -> [Box<S>; 2] { return a; }
+fn mk() -> W { return W { arr: [make(), make()], n: 7 }; }
+fn main() -> int {
+    let a: [Box<S>; 2] = pass(mk().arr);
+    let direct: [Box<S>; 2] = mk().arr;
+    let lit: Box<S> = [make(), make()][1];
+    if Box::unwrap(a[0]).v != 1 { return 1; }
+    if Box::unwrap(direct[1]).v != 1 { return 2; }
+    if Box::unwrap(lit).v != 1 { return 3; }
+    return 0;
+}
+"#;
+        let ir = crate::ir::lower_checked(src);
+        let mut cg = Codegen::new();
+        let c = cg.generate(&ir, "test.ion");
+        assert_eq!(
+            c.matches("mk()").count(),
+            2,
+            "each field use runs mk once in:\n{c}"
+        );
+        let make_calls = c.matches("make()").count();
+        assert_eq!(
+            make_calls, 4,
+            "literal elements and mk's elements each run once, got {make_calls} in:\n{c}"
+        );
+        assert!(
+            !c.contains("}["),
+            "a brace list must not be a subscript base in:\n{c}"
+        );
     }
 }

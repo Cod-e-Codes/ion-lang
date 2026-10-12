@@ -1,0 +1,149 @@
+// An array field of a call is copied once into a named array before an owning use.
+struct Tick {
+    n: int;
+}
+
+struct S {
+    v: int;
+}
+
+struct W {
+    arr: [Box<S>; 2];
+    n: int;
+}
+
+struct WI {
+    a: [int; 2];
+    n: int;
+}
+
+fn bump(t: &mut Tick) {
+    let n: int = t.n;
+    t.n = n + 1;
+}
+
+fn make(v: int) -> Box<S> {
+    return Box::new(S { v: v });
+}
+
+fn eat(x: Box<S>) -> int {
+    let s: S = Box::unwrap(x);
+    return s.v;
+}
+
+fn mk(t: &mut Tick) -> W {
+    bump(t);
+    return W {
+        arr: [make(1), make(2)],
+        n: 7,
+    };
+}
+
+fn mki(t: &mut Tick) -> WI {
+    bump(t);
+    return WI { a: [4, 5], n: 3 };
+}
+
+fn pass(a: [Box<S>; 2]) -> [Box<S>; 2] {
+    return a;
+}
+
+fn passi(a: [int; 2]) -> [int; 2] {
+    return a;
+}
+
+fn take(a: [Box<S>; 2]) -> int {
+    return eat(a[0]) + eat(a[1]);
+}
+
+fn give(t: &mut Tick) -> [Box<S>; 2] {
+    return mk(t).arr;
+}
+
+fn main() -> int {
+    let mut t: Tick = Tick { n: 0 };
+    let a: [Box<S>; 2] = pass(mk(&mut t).arr);
+    if t.n != 1 {
+        return 1;
+    }
+    if eat(a[0]) + eat(a[1]) != 3 {
+        return 2;
+    }
+    if take(mk(&mut t).arr) != 3 {
+        return 3;
+    }
+    if t.n != 2 {
+        return 4;
+    }
+    let built: W = W {
+        arr: pass(mk(&mut t).arr),
+        n: 1,
+    };
+    if t.n != 3 {
+        return 5;
+    }
+    if built.n != 1 {
+        return 6;
+    }
+    if eat(built.arr[0]) + eat(built.arr[1]) != 3 {
+        return 7;
+    }
+    let nested: [Box<S>; 2] = pass(pass(mk(&mut t).arr));
+    if t.n != 4 {
+        return 8;
+    }
+    if eat(nested[1]) != 2 {
+        return 9;
+    }
+    let ints: [int; 2] = passi(mki(&mut t).a);
+    if t.n != 5 {
+        return 10;
+    }
+    if ints[0] + ints[1] != 9 {
+        return 11;
+    }
+    let direct: [Box<S>; 2] = mk(&mut t).arr;
+    if t.n != 6 {
+        return 12;
+    }
+    if eat(direct[0]) != 1 {
+        return 13;
+    }
+    let returned: [Box<S>; 2] = give(&mut t);
+    if t.n != 7 {
+        return 14;
+    }
+    if eat(returned[1]) != 2 {
+        return 15;
+    }
+    let held: W = W {
+        arr: mk(&mut t).arr,
+        n: 9,
+    };
+    if t.n != 8 {
+        return 16;
+    }
+    if held.n != 9 {
+        return 17;
+    }
+    if eat(held.arr[1]) != 2 {
+        return 18;
+    }
+    let mut pushed: Vec<[int; 2]> = Vec::new();
+    Vec::push(&mut pushed, mki(&mut t).a);
+    if t.n != 9 {
+        return 19;
+    }
+    if Vec::len(&pushed) != 1 {
+        return 20;
+    }
+    let boxed: Box<[int; 2]> = Box::new(mki(&mut t).a);
+    if t.n != 10 {
+        return 21;
+    }
+    let got: [int; 2] = Box::unwrap(boxed);
+    if got[0] != 4 {
+        return 22;
+    }
+    return 0;
+}

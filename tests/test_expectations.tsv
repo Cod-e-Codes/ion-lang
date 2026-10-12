@@ -660,3 +660,9 @@ test_array_literal_nested.ion	run	0
 test_array_literal_nested.ion	cgen			memcpy(		= {(\*
 test_array_inner_move.ion	run	0
 test_array_field_index.ion	run	0
+test_array_literal_index.ion	run	0
+test_array_literal_index.ion	cgen			memcpy(		}\[
+test_array_for_once.ion	run	0
+test_array_for_once.ion	cgen			memcpy(__for_container_
+test_array_field_arg.ion	run	0
+test_array_field_arg.ion	cgen			memcpy(

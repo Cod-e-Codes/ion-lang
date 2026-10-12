@@ -1,0 +1,84 @@
+// for over a field or subscript of a call evaluates that source once.
+struct Tick {
+    n: int;
+}
+
+struct W {
+    arr: [int; 2];
+}
+
+struct Grid {
+    grid: [[int; 2]; 2];
+}
+
+fn bump(t: &mut Tick) {
+    let n: int = t.n;
+    t.n = n + 1;
+}
+
+fn nb(t: &mut Tick) -> [[int; 2]; 2] {
+    bump(t);
+    return [[1, 2], [3, 4]];
+}
+
+fn mk(t: &mut Tick) -> W {
+    bump(t);
+    return W { arr: [8, 9] };
+}
+
+fn grid(t: &mut Tick) -> Grid {
+    bump(t);
+    return Grid {
+        grid: [[1, 1], [2, 3]],
+    };
+}
+
+fn idx(t: &mut Tick, n: int) -> int {
+    bump(t);
+    return n;
+}
+
+fn main() -> int {
+    let mut t: Tick = Tick { n: 0 };
+    let mut sum: int = 0;
+    for x in nb(&mut t)[1] {
+        sum = sum + x;
+    }
+    if t.n != 1 {
+        return 1;
+    }
+    if sum != 7 {
+        return 2;
+    }
+    for y in mk(&mut t).arr {
+        sum = sum + y;
+    }
+    if t.n != 2 {
+        return 3;
+    }
+    for g in grid(&mut t).grid[1] {
+        sum = sum + g;
+    }
+    if t.n != 3 {
+        return 4;
+    }
+    let local: [[int; 2]; 2] = [[4, 5], [6, 7]];
+    for z in local[idx(&mut t, 1)] {
+        sum = sum + z;
+    }
+    if t.n != 4 {
+        return 5;
+    }
+    if sum != 42 {
+        return 6;
+    }
+    let boxes: [Box<int>; 2] = [Box::new(1), Box::new(2)];
+    let mut box_sum: int = 0;
+    for b in boxes {
+        box_sum = box_sum + Box::unwrap(b);
+    }
+    if box_sum != 3 {
+        return 7;
+    }
+    return 0;
+}

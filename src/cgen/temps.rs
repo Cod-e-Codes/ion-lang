@@ -292,14 +292,20 @@ impl Codegen {
             IREexpr::Cast { expr, .. } => {
                 self.plan_rec(expr, moved, string_value, force, plan);
             }
-            IREexpr::AddressOf { inner, .. } => {
+            IREexpr::AddressOf { inner, ty, .. } => {
                 self.plan_rec(inner, false, false, force, plan);
+                if let Type::Ref { inner: elem, .. } = resolve_type_alias(ty, &self.type_aliases) {
+                    self.bind_array_rvalue(inner, Some(elem.as_ref()), false, plan);
+                }
             }
             IREexpr::FieldAccess {
                 base, field, ty, ..
             } => {
                 // A field of a call is not a place. Name the owner so a later
-                // index or move reads that temporary instead of calling again.
+                // index, copy, or move reads that temporary instead of calling
+                // again. The field stays unbound here: the owner drop would
+                // free a second copy. An owning use copies the field out and
+                // clears this slot.
                 let force_base = force
                     || (!self.is_place_expr(base)
                         && (self.type_is_array(ty) || self.type_needs_drop(ty)));
@@ -320,6 +326,9 @@ impl Codegen {
                 target_type,
             } => {
                 self.plan_rec(target, false, false, true, plan);
+                // An array literal is not a C lvalue. Name it before the subscript.
+                // A field or index keeps the owner temporary and is not copied again.
+                self.bind_array_rvalue(target, target_type.as_ref(), false, plan);
                 let null_moved = moved
                     && target_type.as_ref().is_some_and(|target_ty| {
                         Self::index_element_type(target_ty)
@@ -338,7 +347,7 @@ impl Codegen {
                     let arg_moved = self.call_arg_moved(callee, i, arg);
                     let arg_force = self.call_arg_force_once(callee, i);
                     self.plan_rec(arg, arg_moved, false, arg_force, plan);
-                    self.bind_nested_array_literal_arg(callee, i, arg, arg_moved, plan);
+                    self.bind_owning_array_arg(callee, i, arg, arg_moved, plan);
                 }
             }
             IREexpr::StructLit { fields, .. } => {
@@ -434,6 +443,8 @@ impl Codegen {
         }
         // An indexed call must be a real array lvalue. Yielding the array from a
         // statement expression ends that object before the subscript reads it.
+        // A literal or other non-call array is named by `bind_array_rvalue` or
+        // `bind_owning_array_arg`, which have the array type this node lacks.
         if self.type_is_array(&ty) {
             return force && self.expr_returns_array(expr);
         }
@@ -477,7 +488,11 @@ impl Codegen {
         let Some(ty) = self.expr_owned_type(expr) else {
             return;
         };
-        if self.type_is_array(&ty) || matches!(ty, Type::Void) {
+        if self.type_is_array(&ty) {
+            self.materialize_named_array(expr, &ty, moved, plan);
+            return;
+        }
+        if matches!(ty, Type::Void) {
             return;
         }
         let c_ty = self.type_to_c(&ty);
@@ -562,9 +577,37 @@ impl Codegen {
         }
     }
 
-    /// An array literal whose elements are arrays cannot be a brace initializer.
-    /// Copy it into a named array before it is passed as an argument.
-    fn bind_nested_array_literal_arg(
+    /// Name an array that is not a durable place and not a field or index.
+    /// Those projections already have an lvalue once their owner is named.
+    /// An array literal has no stored type, so the caller passes the array type.
+    fn bind_array_rvalue(
+        &mut self,
+        expr: &IREexpr,
+        ty: Option<&Type>,
+        moved: bool,
+        plan: &mut TempPlan,
+    ) {
+        if self.already_bound(expr)
+            || self.is_durable_array_place(expr)
+            || self.expr_returns_array(expr)
+            || matches!(expr, IREexpr::FieldAccess { .. } | IREexpr::Index { .. })
+        {
+            return;
+        }
+        let Some(ty) = ty else {
+            return;
+        };
+        let ty = resolve_type_alias(ty, &self.type_aliases);
+        if !self.type_is_array(&ty) {
+            return;
+        }
+        self.materialize_named_array(expr, &ty, moved, plan);
+    }
+
+    /// Copy an owning array argument that is not already a named place or a
+    /// direct array-returning call. A field of a call is the case that used
+    /// to panic: the owner is already a temporary, and this copy is the field.
+    fn bind_owning_array_arg(
         &mut self,
         callee: &str,
         index: usize,
@@ -572,27 +615,35 @@ impl Codegen {
         moved: bool,
         plan: &mut TempPlan,
     ) {
-        if self.already_bound(arg) || self.is_place_expr(arg) {
+        if self.already_bound(arg)
+            || self.is_durable_array_place(arg)
+            || self.expr_returns_array(arg)
+        {
             return;
         }
-        let IREexpr::ArrayLiteral { .. } = arg else {
+        let Some(ty) = self.owning_array_arg_type(callee, index, arg) else {
             return;
         };
-        let c_name = self.resolve_c_function_name(callee);
-        let Some(params) = self.lookup_call_param_types(callee, &c_name) else {
-            return;
-        };
-        let Some(ty) = params.get(index).cloned() else {
-            return;
-        };
-        let ty = resolve_type_alias(&ty, &self.type_aliases);
-        let Type::Array { inner, .. } = &ty else {
-            return;
-        };
-        if !self.type_is_array(inner) {
-            return;
-        }
         self.materialize_named_array(arg, &ty, moved, plan);
+    }
+
+    fn owning_array_arg_type(&self, callee: &str, index: usize, arg: &IREexpr) -> Option<Type> {
+        let c_name = self.resolve_c_function_name(callee);
+        if let Some(params) = self.lookup_call_param_types(callee, &c_name) {
+            let ty = params.get(index)?;
+            let ty = resolve_type_alias(ty, &self.type_aliases);
+            if self.type_is_array(&ty) {
+                return Some(ty);
+            }
+            return None;
+        }
+        let ty = self.stored_expr_type(arg)?;
+        let ty = resolve_type_alias(&ty, &self.type_aliases);
+        if self.type_is_array(&ty) {
+            Some(ty)
+        } else {
+            None
+        }
     }
 
     fn materialize_named_array(
@@ -682,6 +733,20 @@ impl Codegen {
             IREexpr::Var(_) => true,
             IREexpr::FieldAccess { base, .. } => self.is_place_expr(base),
             IREexpr::Index { target, .. } => self.is_place_expr(target),
+            _ => false,
+        }
+    }
+
+    /// A binding, or a field or index of a binding whose index is a local or a
+    /// literal. A call, a literal, a field of a call, and a side-effecting
+    /// index are not durable: each is copied once into a named array.
+    pub(super) fn is_durable_array_place(&self, expr: &IREexpr) -> bool {
+        match expr {
+            IREexpr::Var(_) => true,
+            IREexpr::FieldAccess { base, .. } => self.is_durable_array_place(base),
+            IREexpr::Index { target, index, .. } => {
+                self.is_durable_array_place(target) && Self::is_pure_index_atom(index)
+            }
             _ => false,
         }
     }
