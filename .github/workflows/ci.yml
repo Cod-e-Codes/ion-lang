@@ -138,6 +138,9 @@ jobs:
           test_array_literal_nested 0
           test_array_inner_move 0
           test_array_field_index 0
+          test_array_literal_index 0
+          test_array_for_once 0
+          test_array_field_arg 0
           test_match_wildcard_drop 0
           test_fmt_int_to_string 0
           test_handle_arena_copy_struct 42

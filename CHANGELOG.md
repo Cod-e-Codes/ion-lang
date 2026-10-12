@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.15 - 2026-10-12
 
 - **Fix**: An array literal is copied into a named array before a subscript or an address. An owning argument that is not a durable place, including an array field of a call, is copied the same way. `for` copies a field or subscript of a call, and a subscript whose index calls, once before the loop. A local array, a field of a local, and a literal index of a local stay in place. This impacts generated C for a program that indexes an array literal, passes an array field of a call, or iterates a field or subscript of a call: regenerate that C. The runtime is unchanged, so relink is not required.
 
