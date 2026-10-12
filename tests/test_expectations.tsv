@@ -216,6 +216,26 @@ test_get_ref_method_if_push_error.ion	error		BorrowConflict
 test_get_ref_while_if_push_error.ion	error		BorrowConflict		
 test_get_ref_loop_if_push_error.ion	error		BorrowConflict		
 test_get_ref_if_after_use.ion	run	0			
+test_get_ref_same_arm.ion	run	0			
+test_get_ref_same_arm_loop.ion	run	0			
+test_get_ref_match_then_push.ion	run	0			
+test_get_ref_loop_match_then_push.ion	run	0			
+test_get_ref_reassign_push.ion	run	0			
+test_get_ref_loop_reassign_push.ion	run	0			
+test_get_ref_loop_push_before_read_error.ion	error		BorrowConflict
+test_slice_get_ref_same_arm.ion	run	8
+test_slice_get_ref_loop_reassign.ion	run	8
+test_slice_get_ref_loop_write_before_read_error.ion	error		BorrowConflict
+test_arena_get_ref_same_arm.ion	run	0
+test_arena_get_ref_loop_reassign.ion	run	0
+test_arena_get_ref_loop_insert_before_read_error.ion	error		BorrowConflict
+test_vec_method_get_ref_same_arm.ion	run	0
+test_vec_method_get_ref_loop_reassign.ion	run	0
+test_vec_method_get_ref_loop_push_before_read_error.ion	error		BorrowConflict
+test_field_reborrow_ref.ion	run	0
+test_field_reborrow_ref.ion	cgen			take_string(&h->name)	take_string(&(&
+test_field_reborrow_ref.ion	cgen			take_vec(&h->items)	take_vec(&(&
+test_ref_of_ref_param_error.ion	error		TypeMismatch
 test_borrow_if_nested_else_error.ion	error		BorrowConflict		
 test_string_get.ion	run	0			
 test_string_get_method.ion	run	0			

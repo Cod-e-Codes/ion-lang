@@ -1,0 +1,32 @@
+// r still holds the previous iteration's Arena loan, so insert before the next read conflicts.
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let keep: int = 1;
+    let mut arena: Arena<int> = handle::new();
+    let h: Handle = handle::insert(&mut arena, 7);
+    let peek: Handle = handle::copy(&h);
+    let mut r: &int = &keep;
+    let mut i: int = 0;
+    while i < 2 {
+        let _extra: Handle = handle::insert(&mut arena, 8);
+        if r != 1 && r != 7 {
+            return 1;
+        }
+        match arena.get_ref(peek) {
+            Option::Some(x) => {
+                r = x;
+            }
+            Option::None => {
+                r = &keep;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}

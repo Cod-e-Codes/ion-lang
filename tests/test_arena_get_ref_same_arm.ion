@@ -1,0 +1,25 @@
+// Arena::get_ref ends at the binding's last read, so insert in the same arm is allowed.
+import "stdlib/handle.ion" as handle;
+
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut arena: Arena<int> = handle::new();
+    let h: Handle = handle::insert(&mut arena, 7);
+    let peek: Handle = handle::copy(&h);
+    match arena.get_ref(peek) {
+        Option::Some(x) => {
+            if x != 7 {
+                return 1;
+            }
+            let _extra: Handle = handle::insert(&mut arena, 8);
+        }
+        Option::None => {
+            return 2;
+        }
+    }
+    return 0;
+}

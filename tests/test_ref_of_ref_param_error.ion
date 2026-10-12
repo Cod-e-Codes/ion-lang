@@ -1,0 +1,7 @@
+fn push_more(s: &mut String) {
+    String::push_str(&mut s, "a");
+}
+
+fn main() -> int {
+    return 0;
+}

@@ -34,17 +34,41 @@ pub(crate) struct LoanSnapshot {
 }
 
 /// One statement sequence. `parent_index` is that sequence's statement in the
-/// enclosing sequence. `uses` is the last use of each name inside this sequence.
-/// `loop_depth` is the loop nest when the sequence was entered. `boundary` is a
-/// function, fn literal, or `spawn` body: a later use in the caller is not a
-/// use inside that region.
+/// enclosing sequence. `uses` is the last mention of each name inside this
+/// sequence. `open_at_exit` names a binding whose latest read in this sequence
+/// is not closed by a later assignment on every path. `loop_depth` is the loop
+/// nest when the sequence was entered. `boundary` is a function, fn literal, or
+/// `spawn` body: a later use in the caller is not a use inside that region.
 #[derive(Debug, Clone)]
 pub(crate) struct UseFrame {
     pub(crate) parent_index: Option<usize>,
     pub(crate) uses: HashMap<String, usize>,
+    pub(crate) open_at_exit: HashSet<String>,
     pub(crate) depth: usize,
     pub(crate) loop_depth: usize,
     pub(crate) boundary: bool,
+}
+
+/// Where each loan generation ends inside one statement sequence.
+/// A generation is one existing loan index. An assignment to that binding
+/// starts the next generation. The previous generation ends at its last read.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GenerationEnds {
+    /// Statement indexes that end a generation of this name.
+    pub ends: HashMap<String, Vec<usize>>,
+    /// Last read that is still open when the sequence ends, by name.
+    /// A binding that survives the loop back edge does not end at this read.
+    pub open_at_exit: HashMap<String, usize>,
+}
+
+enum GenerationStatus {
+    /// This sequence does not say when the generation ends, or the binding
+    /// still holds it across the back edge.
+    Unknown,
+    /// Every end recorded here is before the statement being checked.
+    Spent,
+    /// The current generation ends at this statement index.
+    Ends(usize),
 }
 
 /// Pops one match-sibling frame when the match check ends, including on error.
@@ -402,7 +426,10 @@ impl TypeChecker {
             self.push_loop_ownership_frame();
             self.loop_depth += 1;
             self.push_borrow_scope();
+            let saved_loop_borrow = self.loop_borrow_depth;
+            self.loop_borrow_depth = Some(self.borrow_scopes.len());
             let body_result = self.check_stmt_seq(&body.statements);
+            self.loop_borrow_depth = saved_loop_borrow;
             self.pop_borrow_scope();
             self.loop_depth -= 1;
             body_result?;
@@ -841,6 +868,19 @@ impl TypeChecker {
                 }
                 out
             }
+            Expr::ArrayLiteral(arr) => {
+                let mut out = Vec::new();
+                for element in &arr.elements {
+                    Self::push_unique_loans(
+                        &mut out,
+                        self.loans_in_expr_kind(element, stored_only),
+                    );
+                }
+                if let Some((value, _)) = &arr.repeat {
+                    Self::push_unique_loans(&mut out, self.loans_in_expr_kind(value, stored_only));
+                }
+                out
+            }
             Expr::FieldAccess(acc) => self.loans_in_expr_kind(&acc.base, stored_only),
             Expr::StructLit(lit) => {
                 let mut out = Vec::new();
@@ -893,6 +933,10 @@ impl TypeChecker {
         }
     }
 
+    /// Loans stored in the block's result value. A trailing assignment, call,
+    /// or arithmetic expression uses a reference and yields none of it.
+    /// `t = t + read(x)` does not promote `x`. A result that is the reference,
+    /// or a struct, enum, tuple, or array that stores it, does.
     pub(crate) fn loans_in_block(&self, block: &crate::ast::Block) -> Vec<usize> {
         self.loans_in_stmts_kind(&block.statements, false)
     }
@@ -1158,8 +1202,8 @@ impl TypeChecker {
 
     /// Loans whose carriers are not used in `branch` and are not used again
     /// after the current statement. The other arm of an `if` may borrow the
-    /// same place. A later use in an outer sequence, or any use in an
-    /// enclosing loop, keeps the loan.
+    /// same place. A later use in an outer sequence keeps the loan. So does a
+    /// generation still held by a binding that survives the loop back edge.
     pub(crate) fn loans_unused_in_branch(&self, branch: &Block) -> Vec<usize> {
         let mut names = Vec::new();
         for stmt in &branch.statements {
@@ -1188,18 +1232,20 @@ impl TypeChecker {
         ignore
     }
 
-    /// True when `name` is read or written after the statement now being
-    /// checked, or anywhere in a loop that encloses that statement. The walk
-    /// stops at a function, fn literal, or `spawn` boundary.
+    /// True when this generation of `name` is read after the statement now
+    /// being checked, or the binding still holds it across a loop back edge.
+    /// The walk stops at a function, fn literal, or `spawn` boundary.
+    /// A mention inside a loop does not by itself cover the whole loop.
     fn carrier_used_later(&self, name: &str) -> bool {
-        if self
-            .borrow_last_use
-            .get(name)
-            .is_some_and(|at| self.current_stmt_index.is_some_and(|current| *at > current))
+        if let Some(end) = self.current_generation_end(name)
+            && self.current_stmt_index.is_some_and(|current| end > current)
         {
             return true;
         }
-        if self.loop_depth > 0 && self.borrow_last_use.contains_key(name) {
+        if self.current_generation_end(name).is_none()
+            && self.survives_back_edge(name)
+            && self.borrow_last_use.open_at_exit.contains_key(name)
+        {
             return true;
         }
         let Some(current) = self.use_frames.last() else {
@@ -1213,12 +1259,20 @@ impl TypeChecker {
         while index > 0 {
             index -= 1;
             let frame = &self.use_frames[index];
+            if frame.loop_depth > 0
+                && frame.open_at_exit.contains(name)
+                && self.survives_back_edge(name)
+            {
+                return true;
+            }
             if let Some(&use_at) = frame.uses.get(name) {
                 let after = match container {
                     Some(at) => use_at > at,
                     None => true,
                 };
-                if after || frame.loop_depth > 0 {
+                // A later mention is the next generation when this sequence
+                // assigns the binding before it exits.
+                if after && !self.generation_closed_before_exit(name) {
                     return true;
                 }
             }
@@ -1228,6 +1282,43 @@ impl TypeChecker {
             container = frame.parent_index;
         }
         false
+    }
+
+    /// Smallest end of the current generation at or after the statement being
+    /// checked. An open read on a binding that survives the back edge is not
+    /// an end: that generation is live on the next iteration.
+    fn current_generation_end(&self, name: &str) -> Option<usize> {
+        let current = self.current_stmt_index?;
+        let ends = self.borrow_last_use.ends.get(name)?;
+        let open = self.borrow_last_use.open_at_exit.get(name).copied();
+        ends.iter()
+            .copied()
+            .filter(|end| *end >= current && !self.back_edge_suppresses(name, *end, open))
+            .min()
+    }
+
+    fn back_edge_suppresses(&self, name: &str, end: usize, open: Option<usize>) -> bool {
+        open == Some(end) && self.survives_back_edge(name)
+    }
+
+    /// True when an assignment in this sequence ends the current generation,
+    /// so a mention in an outer sequence is not a use of this loan.
+    fn generation_closed_before_exit(&self, name: &str) -> bool {
+        let Some(end) = self.current_generation_end(name) else {
+            return false;
+        };
+        self.borrow_last_use.open_at_exit.get(name).copied() != Some(end)
+    }
+
+    /// The binding was declared outside the loop body scope, so it is still
+    /// in scope on the next iteration.
+    fn survives_back_edge(&self, name: &str) -> bool {
+        let Some(loop_depth) = self.loop_borrow_depth else {
+            return false;
+        };
+        self.variables
+            .get(name)
+            .is_some_and(|info| info.decl_depth < loop_depth)
     }
 
     /// Keep loans the arm yields. A loan created on a local in the arm would
@@ -1886,19 +1977,20 @@ impl TypeChecker {
         self.check_borrow_allowed_except(&owner, fields.as_deref(), mutable, span, extra_ignore)
     }
 
-    pub(crate) fn release_borrows_ending_at(
-        &mut self,
-        stmt_index: usize,
-        last_uses: &HashMap<String, usize>,
-        depth: usize,
-    ) {
+    /// Release bare `&` / `&mut` carriers whose current generation ends at
+    /// `stmt_index`. The loan's scope may be an enclosing scope: a `get_ref`
+    /// payload is registered outside the arm, and a binding declared outside a
+    /// loop outlives the loop body. A struct, enum, or array carrier stays.
+    /// A loan the arm yields stays. A carrier with no end in this sequence,
+    /// or a generation still open across the back edge, stays.
+    pub(crate) fn release_borrows_ending_at(&mut self, stmt_index: usize) {
         let mut by_loan: HashMap<usize, Vec<String>> = HashMap::new();
         for (name, idxs) in &self.borrow_names {
             for idx in idxs {
                 let Some(borrow) = self.live_borrows.get(*idx) else {
                     continue;
                 };
-                if borrow.released || borrow.depth != depth {
+                if borrow.released {
                     continue;
                 }
                 by_loan.entry(*idx).or_default().push(name.clone());
@@ -1906,18 +1998,30 @@ impl TypeChecker {
         }
         let mut ending = Vec::new();
         for (idx, names) in by_loan {
-            if names
-                .iter()
-                .any(|name| !last_uses.contains_key(name) || self.carrier_outlives_uses(name))
-            {
+            if names.iter().any(|name| self.carrier_outlives_uses(name)) {
                 continue;
             }
-            let max_use = names
-                .iter()
-                .filter_map(|name| last_uses.get(name))
-                .copied()
-                .max();
-            if max_use == Some(stmt_index) {
+            if names.iter().any(|name| self.yield_carriers.contains(name)) {
+                continue;
+            }
+            if names.iter().any(|name| self.carrier_used_later(name)) {
+                continue;
+            }
+            let mut latest: Option<usize> = None;
+            let mut ended = true;
+            for name in &names {
+                match self.generation_status(name, stmt_index) {
+                    GenerationStatus::Unknown => {
+                        ended = false;
+                        break;
+                    }
+                    GenerationStatus::Spent => {}
+                    GenerationStatus::Ends(at) => {
+                        latest = Some(latest.map_or(at, |prev| prev.max(at)));
+                    }
+                }
+            }
+            if ended && latest == Some(stmt_index) {
                 ending.push((idx, names));
             }
         }
@@ -1935,6 +2039,30 @@ impl TypeChecker {
                 }
             }
             self.release_live(idx);
+        }
+    }
+
+    fn generation_status(&self, name: &str, stmt_index: usize) -> GenerationStatus {
+        let Some(ends) = self.borrow_last_use.ends.get(name) else {
+            return GenerationStatus::Unknown;
+        };
+        let open = self.borrow_last_use.open_at_exit.get(name).copied();
+        let mut best: Option<usize> = None;
+        let mut suppressed = false;
+        for end in ends {
+            if *end < stmt_index {
+                continue;
+            }
+            if self.back_edge_suppresses(name, *end, open) {
+                suppressed = true;
+                continue;
+            }
+            best = Some(best.map_or(*end, |prev| prev.min(*end)));
+        }
+        match best {
+            Some(at) => GenerationStatus::Ends(at),
+            None if suppressed => GenerationStatus::Unknown,
+            None => GenerationStatus::Spent,
         }
     }
 
@@ -2209,10 +2337,22 @@ impl TypeChecker {
             }
             Expr::Match(match_expr) => {
                 // Match scrutinee is consumed per-arm, not moved at entry (see ION_SPEC §5.2).
+                // A method receiver was already borrowed or moved while checking the
+                // scrutinee. Walking it again as an owner use conflicts with the loan
+                // the arm just kept (`v.get_ref`, `arena.get_ref`).
                 match match_expr.expr.as_ref() {
                     Expr::Call(call_expr) => {
                         for arg in &call_expr.args {
                             self.check_expr_for_moves(arg)?;
+                        }
+                    }
+                    Expr::MethodCall(method_call) => {
+                        for (index, arg) in method_call.args.iter().enumerate() {
+                            if self.method_arg_is_consumed(&method_call.method, index) {
+                                self.check_expr_for_moves(arg)?;
+                            } else {
+                                self.check_operand_for_nested_moves(arg)?;
+                            }
                         }
                     }
                     Expr::FieldAccess(acc) => {
@@ -2561,6 +2701,463 @@ fn generic_subst(params: &[TypeParam], args: &[Type]) -> HashMap<String, Type> {
         .filter(|param| param.const_ty.is_none())
         .zip(args.iter())
         .map(|(param, arg)| (param.name.clone(), arg.clone()))
+        .collect()
+}
+
+/// Names whose result value is that reference, or a struct, enum, tuple, or
+/// array that stores it. A read inside a call, binary operation, or the
+/// right-hand side of an assignment is not a yielded carrier.
+pub(crate) fn yielded_carrier_names(block: &Block) -> HashSet<String> {
+    let mut names = HashSet::new();
+    yield_names_stmts(&block.statements, &mut names);
+    names
+}
+
+fn yield_names_stmts(stmts: &[Stmt], names: &mut HashSet<String>) {
+    let Some(last) = stmts.last() else {
+        return;
+    };
+    match last {
+        Stmt::Expr(expr) => yield_names_expr(&expr.expr, names),
+        Stmt::If(if_stmt) => {
+            yield_names_stmts(&if_stmt.then_block.statements, names);
+            if let Some(else_block) = &if_stmt.else_block {
+                yield_names_stmts(&else_block.statements, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn yield_names_expr(expr: &Expr, names: &mut HashSet<String>) {
+    match expr {
+        Expr::Var(var) => {
+            names.insert(var.name.clone());
+        }
+        Expr::FieldAccess(acc) => yield_names_expr(&acc.base, names),
+        Expr::Index(index) => yield_names_expr(&index.target, names),
+        Expr::Ref(inner) => yield_names_place(&inner.inner, names),
+        Expr::TupleLit(tuple) => {
+            for element in &tuple.elements {
+                yield_names_expr(element, names);
+            }
+        }
+        Expr::ArrayLiteral(arr) => {
+            for element in &arr.elements {
+                yield_names_expr(element, names);
+            }
+            if let Some((value, _)) = &arr.repeat {
+                yield_names_expr(value, names);
+            }
+        }
+        Expr::StructLit(lit) => {
+            for field in &lit.fields {
+                yield_names_expr(&field.value, names);
+            }
+        }
+        Expr::EnumLit(lit) => {
+            for arg in &lit.args {
+                yield_names_expr(arg, names);
+            }
+            if let Some(fields) = &lit.named_fields {
+                for (_, value) in fields {
+                    yield_names_expr(value, names);
+                }
+            }
+        }
+        Expr::Match(match_expr) => {
+            for arm in &match_expr.arms {
+                yield_names_stmts(&arm.body.statements, names);
+            }
+        }
+        Expr::Assign(_) | Expr::BinOp(_) | Expr::UnOp(_) | Expr::Call(_) | Expr::MethodCall(_) => {}
+        _ => {}
+    }
+}
+
+fn yield_names_place(expr: &Expr, names: &mut HashSet<String>) {
+    match expr {
+        Expr::Var(var) => {
+            names.insert(var.name.clone());
+        }
+        Expr::FieldAccess(acc) => yield_names_place(&acc.base, names),
+        Expr::Index(index) => yield_names_place(&index.target, names),
+        Expr::Ref(inner) => yield_names_place(&inner.inner, names),
+        _ => {}
+    }
+}
+
+/// Last read of each generation. A read updates the open generation. An
+/// assignment on every fall-through path closes it. `break` or `continue`
+/// before that assignment leaves the generation open. The assignment itself
+/// is not a read of the old loan.
+pub(crate) fn generation_ends(stmts: &[Stmt]) -> GenerationEnds {
+    let mut ends: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut open: HashMap<String, usize> = HashMap::new();
+    let mut can_skip_later = false;
+    for (index, stmt) in stmts.iter().enumerate() {
+        let uses = generation_uses(stmt);
+        let flow = stmt_flow(stmt);
+        let closes = if !can_skip_later && !flow.skips && flow.falls_through {
+            flow.fall_assigns
+        } else {
+            HashSet::new()
+        };
+        for name in &closes {
+            if uses.contains(name) {
+                ends.entry(name.clone()).or_default().push(index);
+                open.remove(name);
+            } else if let Some(at) = open.remove(name) {
+                ends.entry(name.clone()).or_default().push(at);
+            }
+        }
+        for name in &uses {
+            if closes.contains(name) {
+                continue;
+            }
+            open.insert(name.clone(), index);
+        }
+        if flow.skips || !flow.falls_through {
+            can_skip_later = true;
+        }
+    }
+    let open_at_exit = open.clone();
+    for (name, at) in open {
+        ends.entry(name).or_default().push(at);
+    }
+    GenerationEnds { ends, open_at_exit }
+}
+
+fn generation_uses(stmt: &Stmt) -> HashSet<String> {
+    let mut names = Vec::new();
+    collect_generation_uses(stmt, &mut names);
+    names.into_iter().collect()
+}
+
+fn collect_generation_uses(stmt: &Stmt, names: &mut Vec<String>) {
+    match stmt {
+        Stmt::Let(let_stmt) => {
+            names.push(let_stmt.name.clone());
+            if let Some(init) = &let_stmt.init {
+                collect_expr_reads(init, names);
+            }
+        }
+        Stmt::Return(ret) => {
+            if let Some(value) = &ret.value {
+                collect_expr_reads(value, names);
+            }
+        }
+        Stmt::Expr(expr) => collect_expr_reads(&expr.expr, names),
+        Stmt::If(if_stmt) => {
+            collect_expr_reads(&if_stmt.cond, names);
+            for inner in &if_stmt.then_block.statements {
+                collect_generation_uses(inner, names);
+            }
+            if let Some(else_block) = &if_stmt.else_block {
+                for inner in &else_block.statements {
+                    collect_generation_uses(inner, names);
+                }
+            }
+        }
+        Stmt::While(while_stmt) => {
+            collect_expr_reads(&while_stmt.cond, names);
+            for inner in &while_stmt.body.statements {
+                collect_generation_uses(inner, names);
+            }
+        }
+        Stmt::Loop(loop_stmt) => {
+            for inner in &loop_stmt.body.statements {
+                collect_generation_uses(inner, names);
+            }
+        }
+        Stmt::UnsafeBlock(block) => {
+            for inner in &block.body.statements {
+                collect_generation_uses(inner, names);
+            }
+        }
+        Stmt::Scope(block) => {
+            for inner in &block.body.statements {
+                collect_generation_uses(inner, names);
+            }
+        }
+        Stmt::For(for_stmt) => {
+            collect_expr_reads(&for_stmt.iterable, names);
+            for inner in &for_stmt.body.statements {
+                collect_generation_uses(inner, names);
+            }
+        }
+        Stmt::Defer(defer_stmt) => collect_expr_reads(&defer_stmt.expr, names),
+        Stmt::Spawn(spawn) => {
+            for inner in &spawn.body.statements {
+                collect_generation_uses(inner, names);
+            }
+        }
+        Stmt::Select(select) => {
+            for arm in &select.recv_arms {
+                collect_expr_reads(&arm.recv.channel, names);
+                for inner in &arm.body.statements {
+                    collect_generation_uses(inner, names);
+                }
+            }
+            if let Some(body) = &select.default_body {
+                for inner in &body.statements {
+                    collect_generation_uses(inner, names);
+                }
+            }
+            if let Some(ms) = &select.timeout_ms {
+                collect_expr_reads(ms, names);
+            }
+            if let Some(body) = &select.timeout_body {
+                for inner in &body.statements {
+                    collect_generation_uses(inner, names);
+                }
+            }
+        }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
+    }
+}
+
+/// Reads, plus the name introduced by `let`. The target of an assignment is
+/// not a read of the loan that binding already holds, including an assignment
+/// nested in a match arm or another expression.
+fn collect_expr_reads(expr: &Expr, names: &mut Vec<String>) {
+    match expr {
+        Expr::Assign(assign) => {
+            if !matches!(assign.target.as_ref(), Expr::Var(_)) {
+                collect_expr_reads(&assign.target, names);
+            }
+            collect_expr_reads(&assign.value, names);
+        }
+        Expr::Var(var) => names.push(var.name.clone()),
+        Expr::BinOp(op) => {
+            collect_expr_reads(&op.left, names);
+            collect_expr_reads(&op.right, names);
+        }
+        Expr::UnOp(op) => collect_expr_reads(&op.operand, names),
+        Expr::Ref(inner) => collect_expr_reads(&inner.inner, names),
+        Expr::Call(call) => {
+            for arg in &call.args {
+                collect_expr_reads(arg, names);
+            }
+        }
+        Expr::MethodCall(call) => {
+            collect_expr_reads(&call.receiver, names);
+            for arg in &call.args {
+                collect_expr_reads(arg, names);
+            }
+        }
+        Expr::FieldAccess(acc) => collect_expr_reads(&acc.base, names),
+        Expr::Index(index) => {
+            collect_expr_reads(&index.target, names);
+            collect_expr_reads(&index.index, names);
+        }
+        Expr::StructLit(lit) => {
+            for field in &lit.fields {
+                collect_expr_reads(&field.value, names);
+            }
+        }
+        Expr::EnumLit(lit) => {
+            for arg in &lit.args {
+                collect_expr_reads(arg, names);
+            }
+            if let Some(fields) = &lit.named_fields {
+                for (_, value) in fields {
+                    collect_expr_reads(value, names);
+                }
+            }
+        }
+        Expr::Match(match_expr) => {
+            collect_expr_reads(&match_expr.expr, names);
+            for arm in &match_expr.arms {
+                if let Some(guard) = &arm.guard {
+                    collect_expr_reads(guard, names);
+                }
+                for stmt in &arm.body.statements {
+                    collect_generation_uses(stmt, names);
+                }
+            }
+        }
+        Expr::Try(try_expr) => collect_expr_reads(&try_expr.operand, names),
+        Expr::Send(send) => {
+            collect_expr_reads(&send.channel, names);
+            collect_expr_reads(&send.value, names);
+        }
+        Expr::Recv(recv) => collect_expr_reads(&recv.channel, names),
+        Expr::Spawn(spawn) => {
+            for stmt in &spawn.body.statements {
+                collect_generation_uses(stmt, names);
+            }
+        }
+        Expr::ArrayLiteral(arr) => {
+            for elem in &arr.elements {
+                collect_expr_reads(elem, names);
+            }
+            if let Some((value, _)) = &arr.repeat {
+                collect_expr_reads(value, names);
+            }
+        }
+        Expr::TupleLit(tuple) => {
+            for elem in &tuple.elements {
+                collect_expr_reads(elem, names);
+            }
+        }
+        Expr::Cast(cast) => collect_expr_reads(&cast.expr, names),
+        Expr::FnLiteral(_)
+        | Expr::Lit(_)
+        | Expr::BoolLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::StringLit(_)
+        | Expr::TypeConst(_) => {}
+    }
+}
+
+struct StmtFlow {
+    fall_assigns: HashSet<String>,
+    falls_through: bool,
+    /// Some path `break`s or `continue`s, so a later assignment is not on
+    /// every path that still holds the loan.
+    skips: bool,
+}
+
+fn stmt_flow(stmt: &Stmt) -> StmtFlow {
+    match stmt {
+        Stmt::Expr(expr) => expr_flow(&expr.expr),
+        Stmt::If(if_stmt) => {
+            let then_flow = block_flow(&if_stmt.then_block.statements);
+            let Some(else_block) = &if_stmt.else_block else {
+                return StmtFlow {
+                    fall_assigns: HashSet::new(),
+                    falls_through: true,
+                    skips: then_flow.skips,
+                };
+            };
+            let else_flow = block_flow(&else_block.statements);
+            let skips = then_flow.skips || else_flow.skips;
+            let falls_through = then_flow.falls_through || else_flow.falls_through;
+            let fall_assigns = if skips {
+                HashSet::new()
+            } else {
+                match (then_flow.falls_through, else_flow.falls_through) {
+                    (true, true) => {
+                        intersect_names(then_flow.fall_assigns, &else_flow.fall_assigns)
+                    }
+                    (true, false) => then_flow.fall_assigns,
+                    (false, true) => else_flow.fall_assigns,
+                    (false, false) => HashSet::new(),
+                }
+            };
+            StmtFlow {
+                fall_assigns,
+                falls_through,
+                skips,
+            }
+        }
+        Stmt::Scope(block) => block_flow(&block.body.statements),
+        Stmt::UnsafeBlock(block) => block_flow(&block.body.statements),
+        Stmt::Break(_) | Stmt::Continue(_) => StmtFlow {
+            fall_assigns: HashSet::new(),
+            falls_through: false,
+            skips: true,
+        },
+        Stmt::Return(_) => StmtFlow {
+            fall_assigns: HashSet::new(),
+            falls_through: false,
+            skips: false,
+        },
+        Stmt::While(_) | Stmt::Loop(_) | Stmt::For(_) | Stmt::Select(_) => StmtFlow {
+            fall_assigns: HashSet::new(),
+            falls_through: true,
+            skips: false,
+        },
+        Stmt::Let(_) | Stmt::Defer(_) | Stmt::Spawn(_) => StmtFlow {
+            fall_assigns: HashSet::new(),
+            falls_through: true,
+            skips: false,
+        },
+    }
+}
+
+fn block_flow(stmts: &[Stmt]) -> StmtFlow {
+    let mut assigned = HashSet::new();
+    let mut skips = false;
+    for stmt in stmts {
+        let flow = stmt_flow(stmt);
+        skips |= flow.skips;
+        if !flow.falls_through {
+            return StmtFlow {
+                fall_assigns: HashSet::new(),
+                falls_through: false,
+                skips,
+            };
+        }
+        if !skips {
+            assigned.extend(flow.fall_assigns);
+        }
+    }
+    StmtFlow {
+        fall_assigns: if skips { HashSet::new() } else { assigned },
+        falls_through: true,
+        skips,
+    }
+}
+
+fn expr_flow(expr: &Expr) -> StmtFlow {
+    match expr {
+        Expr::Assign(assign) => {
+            let mut fall_assigns = HashSet::new();
+            if let Expr::Var(var) = assign.target.as_ref() {
+                fall_assigns.insert(var.name.clone());
+            }
+            StmtFlow {
+                fall_assigns,
+                falls_through: true,
+                skips: false,
+            }
+        }
+        Expr::Match(match_expr) => {
+            if match_expr.arms.is_empty() {
+                return StmtFlow {
+                    fall_assigns: HashSet::new(),
+                    falls_through: true,
+                    skips: false,
+                };
+            }
+            let mut skips = false;
+            let mut falls_through = false;
+            let mut acc: Option<HashSet<String>> = None;
+            for arm in &match_expr.arms {
+                let flow = block_flow(&arm.body.statements);
+                skips |= flow.skips;
+                if !flow.falls_through {
+                    continue;
+                }
+                falls_through = true;
+                acc = Some(match acc {
+                    None => flow.fall_assigns,
+                    Some(prev) => intersect_names(prev, &flow.fall_assigns),
+                });
+            }
+            StmtFlow {
+                fall_assigns: if skips {
+                    HashSet::new()
+                } else {
+                    acc.unwrap_or_default()
+                },
+                falls_through,
+                skips,
+            }
+        }
+        _ => StmtFlow {
+            fall_assigns: HashSet::new(),
+            falls_through: true,
+            skips: false,
+        },
+    }
+}
+
+fn intersect_names(left: HashSet<String>, right: &HashSet<String>) -> HashSet<String> {
+    left.into_iter()
+        .filter(|name| right.contains(name))
         .collect()
 }
 

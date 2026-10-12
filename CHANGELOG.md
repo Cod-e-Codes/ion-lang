@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fix**: A loan generation ends at its last read. Assigning the binding starts the next generation. A read inside a loop covers that generation through the back edge, and an assignment on every fall-through path does not. A `match` arm promotes a loan only when the result holds the pointer. `Vec::get_ref`, `Slice::get_ref`, `Arena::get_ref`, and the method forms use the same rule. `&` or `&mut` on a field that is already a reborrow keeps that pointer. This is not an ABI change. Relink is not required. Generated C for programs that still compiled is unchanged.
+
 ## 0.4.15 - 2026-10-12
 
 - **Fix**: An array literal is copied into a named array before a subscript or an address. An owning argument that is not a durable place, including an array field of a call, is copied the same way. `for` copies a field or subscript of a call, and a subscript whose index calls, once before the loop. A local array, a field of a local, and a literal index of a local stay in place. This impacts generated C for a program that indexes an array literal, passes an array field of a call, or iterates a field or subscript of a call: regenerate that C. The runtime is unchanged, so relink is not required.

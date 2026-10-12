@@ -1,0 +1,22 @@
+// v.get_ref ends at the binding's last read, so v.push in the same arm is allowed.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    v.push(7);
+    match v.get_ref(0) {
+        Option::Some(x) => {
+            if x != 7 {
+                return 1;
+            }
+            v.push(8);
+        }
+        Option::None => {
+            return 2;
+        }
+    }
+    return 0;
+}

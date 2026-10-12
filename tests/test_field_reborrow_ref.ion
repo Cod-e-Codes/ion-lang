@@ -1,0 +1,35 @@
+struct Holder {
+    name: String;
+    items: Vec<int>;
+}
+
+fn take_string(s: &mut String) {
+    String::push_str(s, "y");
+}
+
+fn take_vec(items: &mut Vec<int>) {
+    Vec::push(items, 3);
+}
+
+fn bump(h: &mut Holder) {
+    String::push_str(&mut h.name, "x");
+    take_string(&mut h.name);
+    Vec::push(&mut h.items, 1);
+    take_vec(&mut h.items);
+}
+
+fn name_len(h: &Holder) -> int {
+    return String::len(&h.name);
+}
+
+fn main() -> int {
+    let mut h: Holder = Holder { name: "n", items: Vec::new() };
+    bump(&mut h);
+    if name_len(&h) != 3 {
+        return 1;
+    }
+    if Vec::len(&h.items) != 2 {
+        return 2;
+    }
+    return 0;
+}

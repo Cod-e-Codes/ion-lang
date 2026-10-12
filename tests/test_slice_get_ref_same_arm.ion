@@ -1,0 +1,21 @@
+// Slice::get_ref ends at the binding's last read, so a later write in the arm is allowed.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut items: [int; 2] = [7, 0];
+    match Slice::get_ref(&items, 0) {
+        Option::Some(x) => {
+            if x != 7 {
+                return 1;
+            }
+            items[1] = 8;
+        }
+        Option::None => {
+            return 2;
+        }
+    }
+    return items[1];
+}

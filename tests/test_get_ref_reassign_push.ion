@@ -1,0 +1,40 @@
+// Reassignment on every path ends the previous generation at its last read.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let keep: int = 1;
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 7);
+    let mut r: &int = &keep;
+    if r != 1 {
+        return 1;
+    }
+    Vec::push(&mut v, 8);
+    match Vec::get_ref(&v, 0) {
+        Option::Some(x) => {
+            r = x;
+        }
+        Option::None => {
+            r = &keep;
+        }
+    }
+    if r != 7 && r != 1 {
+        return 2;
+    }
+    Vec::push(&mut v, 9);
+    match Vec::get_ref(&v, 0) {
+        Option::Some(x) => {
+            r = x;
+        }
+        Option::None => {
+            r = &keep;
+        }
+    }
+    if r != 7 && r != 1 {
+        return 3;
+    }
+    return 0;
+}

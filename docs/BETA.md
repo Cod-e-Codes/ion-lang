@@ -76,6 +76,8 @@ library may rely on without an unstable marker:
 
 0.4.15 copies an array literal into a named array before a subscript or an address. An owning argument that is not a durable place, including an array field of a call, is copied the same way. `for` copies a field or subscript of a call, and a subscript whose index calls, once before the loop. A local array, a field of a local, and a literal index of a local stay in place. Programs that index an array literal, pass an array field of a call, or iterate a field or subscript of a call must be regenerated. The runtime is unchanged, so relink is not required. See CHANGELOG 0.4.15.
 
+0.4.16 ends a loan generation at its last read. Assigning the binding starts the next generation, including on every fall-through path before a loop back edge. A `match` arm promotes a loan only when the arm result holds that pointer. `Vec::get_ref`, `Slice::get_ref`, `Arena::get_ref`, and the method forms share that rule. `&` or `&mut` on a field that is already a reborrow keeps that pointer. This is not an ABI change. Relink is not required. See CHANGELOG 0.4.16.
+
 ## Unstable or constrained in beta
 
 The following features may change shape before 1.0:

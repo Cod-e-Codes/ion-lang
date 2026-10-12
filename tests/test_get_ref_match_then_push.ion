@@ -1,0 +1,22 @@
+// The get_ref loan ends when the arm ends, before a later push.
+enum Option<T> {
+    Some(T);
+    None;
+}
+
+fn main() -> int {
+    let mut v: Vec<int> = Vec::new();
+    Vec::push(&mut v, 7);
+    match Vec::get_ref(&v, 0) {
+        Option::Some(x) => {
+            if x != 7 {
+                return 1;
+            }
+        }
+        Option::None => {
+            return 2;
+        }
+    }
+    Vec::push(&mut v, 8);
+    return 0;
+}

@@ -146,6 +146,17 @@ jobs:
           test_handle_arena_copy_struct 42
           test_stdlib_path 5
           test_string_push_str_owned 0
+          test_get_ref_same_arm 0
+          test_get_ref_same_arm_loop 0
+          test_get_ref_match_then_push 0
+          test_get_ref_loop_match_then_push 0
+          test_get_ref_reassign_push 0
+          test_get_ref_loop_reassign_push 0
+          test_arena_get_ref_same_arm 0
+          test_arena_get_ref_loop_reassign 0
+          test_vec_method_get_ref_same_arm 0
+          test_vec_method_get_ref_loop_reassign 0
+          test_field_reborrow_ref 0
           EOF
 
       - name: Generated C thread sanitizer (Linux)

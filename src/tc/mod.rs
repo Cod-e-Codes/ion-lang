@@ -426,9 +426,15 @@ pub struct TypeChecker {
     /// Enclosing statement sequences, outermost first. Used to see whether a
     /// reference binding is used again after a narrower owner's block.
     use_frames: Vec<ownership::UseFrame>,
-    /// Last statement index of each carrier in the statement sequence being checked.
-    borrow_last_use: HashMap<String, usize>,
+    /// Generation ends for the statement sequence being checked.
+    borrow_last_use: ownership::GenerationEnds,
     current_stmt_index: Option<usize>,
+    /// `borrow_scopes.len()` of the loop body being checked. A binding declared
+    /// at a shallower depth is still held on the back edge.
+    loop_borrow_depth: Option<usize>,
+    /// Carriers whose reference is the match arm result. Their loan stays live
+    /// until `keep_arm_result_loans` promotes it.
+    yield_carriers: HashSet<String>,
     // When false, skip recording expression-level LSP data (avoids span collisions from merged imports).
     lsp_recording: bool,
 }
@@ -645,8 +651,10 @@ impl TypeChecker {
             branch_ignored_loans: Vec::new(),
             rebind_ignored_loans: Vec::new(),
             use_frames: Vec::new(),
-            borrow_last_use: HashMap::new(),
+            borrow_last_use: ownership::GenerationEnds::default(),
             current_stmt_index: None,
+            loop_borrow_depth: None,
+            yield_carriers: HashSet::new(),
             lsp_recording: true,
         }
     }
@@ -2271,11 +2279,11 @@ impl TypeChecker {
         self.track_stmt_uses(stmts, false, true)
     }
 
-    /// Record last-use indexes for `stmts`, then check each statement.
+    /// Record generation ends for `stmts`, then check each statement.
     /// `boundary` is a function, fn literal, or `spawn` body. `release` drops
-    /// loans registered at this sequence's depth after each statement. Match
-    /// arms and the other blocks that previously walked statements directly
-    /// pass `release: false`, so a loan the arm yields is still live for
+    /// a bare `&` / `&mut` carrier after the last read of its current
+    /// generation, including a loan registered in an enclosing scope. A name in
+    /// `yield_carriers` is the arm result, so that loan stays for
     /// `keep_arm_result_loans`.
     fn track_stmt_uses(
         &mut self,
@@ -2283,14 +2291,15 @@ impl TypeChecker {
         boundary: bool,
         release: bool,
     ) -> Result<(), TypeCheckError> {
-        let last = ownership::lasting_borrow_uses(stmts);
-        let saved_last = std::mem::replace(&mut self.borrow_last_use, last.clone());
+        let ends = ownership::generation_ends(stmts);
+        let mentions = ownership::lasting_borrow_uses(stmts);
+        let saved_last = std::mem::replace(&mut self.borrow_last_use, ends.clone());
         let saved_index = self.current_stmt_index;
-        let depth = self.borrow_scopes.len();
         self.use_frames.push(ownership::UseFrame {
             parent_index: saved_index,
-            uses: last,
-            depth,
+            uses: mentions,
+            open_at_exit: ends.open_at_exit.keys().cloned().collect(),
+            depth: self.borrow_scopes.len(),
             loop_depth: self.loop_depth,
             boundary,
         });
@@ -2302,7 +2311,7 @@ impl TypeChecker {
                 break;
             }
             if release {
-                self.release_borrows_ending_at(index, &self.borrow_last_use.clone(), depth);
+                self.release_borrows_ending_at(index);
             }
         }
         self.use_frames.pop();
@@ -3732,7 +3741,7 @@ impl TypeChecker {
                 self.insert_variable(name.clone(), recv_ty, arm.span);
             }
             self.push_borrow_scope();
-            self.track_stmt_uses(&arm.body.statements, false, false)?;
+            self.track_stmt_uses(&arm.body.statements, false, true)?;
             self.pop_borrow_scope();
             if block_falls_through(&arm.body) {
                 fallthrough.push(self.variables.clone());
@@ -3743,7 +3752,7 @@ impl TypeChecker {
             self.variables = before.clone();
             self.restore_split_loans(&entry_loans);
             self.push_borrow_scope();
-            self.track_stmt_uses(&body.statements, false, false)?;
+            self.track_stmt_uses(&body.statements, false, true)?;
             self.pop_borrow_scope();
             if block_falls_through(body) {
                 fallthrough.push(self.variables.clone());
@@ -3770,7 +3779,7 @@ impl TypeChecker {
             }
             if let Some(body) = &select_stmt.timeout_body {
                 self.push_borrow_scope();
-                self.track_stmt_uses(&body.statements, false, false)?;
+                self.track_stmt_uses(&body.statements, false, true)?;
                 self.pop_borrow_scope();
                 if block_falls_through(body) {
                     fallthrough.push(self.variables.clone());
@@ -3913,6 +3922,27 @@ impl TypeChecker {
             Expr::Ref(ref_expr) => {
                 self.check_ref_place(ref_expr.mutable, &ref_expr.inner)?;
                 let inner_type = self.check_expr_borrow_operand(&ref_expr.inner)?;
+                // A non-copy field reached through `&` / `&mut` is already that
+                // reborrow. So is a field whose type is a reference. `&h.name`
+                // and `&mut h.name` are that pointer, not `& &T`.
+                if matches!(
+                    ref_expr.inner.as_ref(),
+                    Expr::FieldAccess(_) | Expr::Index(_)
+                ) && let Type::Ref {
+                    inner,
+                    mutable: already,
+                } = &inner_type
+                {
+                    if ref_expr.mutable && !already {
+                        return Err(TypeCheckError::Message(
+                            "cannot borrow a shared reference as mutable".to_string(),
+                        ));
+                    }
+                    return Ok(Type::Ref {
+                        inner: inner.clone(),
+                        mutable: ref_expr.mutable,
+                    });
+                }
 
                 Ok(Type::Ref {
                     inner: Box::new(inner_type),
@@ -4957,15 +4987,21 @@ impl TypeChecker {
 
                     // Type-check the arm body once, then read recorded types for
                     // value unification (no second ownership walk).
-                    // Reference payloads carry the scrutinee loan. That loan is
-                    // read before this scope pops, because the binding does not
-                    // outlive the arm.
+                    // Reference payloads carry the scrutinee loan. Release ends
+                    // that generation at its last read. A result that holds the
+                    // pointer stays in `yield_carriers` for promotion.
                     self.push_borrow_scope();
                     self.attach_ref_pattern_loans(&arm.pattern, &match_expr.expr);
                     if borrows_vec_for_arm {
                         self.attach_latest_loan_to_ref_patterns(&arm.pattern);
                     }
-                    self.track_stmt_uses(&arm.body.statements, false, false)?;
+                    let saved_yield = std::mem::replace(
+                        &mut self.yield_carriers,
+                        ownership::yielded_carrier_names(&arm.body),
+                    );
+                    let arm_result = self.track_stmt_uses(&arm.body.statements, false, true);
+                    self.yield_carriers = saved_yield;
+                    arm_result?;
                     let escaping = self.loans_in_block(&arm.body);
                     let parent_depth = self.borrow_scopes.len().saturating_sub(1);
                     self.ensure_block_owners_enclose(&arm.body, parent_depth, arm.span)?;
@@ -6079,7 +6115,13 @@ impl TypeChecker {
                 }
             }
             self.push_borrow_scope();
-            self.track_stmt_uses(&arm.body.statements, false, false)?;
+            let saved_yield = std::mem::replace(
+                &mut self.yield_carriers,
+                ownership::yielded_carrier_names(&arm.body),
+            );
+            let arm_result = self.track_stmt_uses(&arm.body.statements, false, true);
+            self.yield_carriers = saved_yield;
+            arm_result?;
             let escaping = self.loans_in_block(&arm.body);
             let parent_depth = self.borrow_scopes.len().saturating_sub(1);
             self.ensure_block_owners_enclose(&arm.body, parent_depth, arm.span)?;
