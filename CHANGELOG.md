@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.16 - 2026-10-12
 
 - **Fix**: A loan generation ends at its last read. Assigning the binding starts the next generation. A read inside a loop covers that generation through the back edge, and an assignment on every fall-through path does not. A `match` arm promotes a loan only when the result holds the pointer. `Vec::get_ref`, `Slice::get_ref`, `Arena::get_ref`, and the method forms use the same rule. `&` or `&mut` on a field that is already a reborrow keeps that pointer. This is not an ABI change. Relink is not required. Generated C for programs that still compiled is unchanged.
+- **Docs**: BETA release notes run from 0.4.0 through 0.4.16, oldest first. The 0.4.16 note points at this section.
 
 ## 0.4.15 - 2026-10-12
 
